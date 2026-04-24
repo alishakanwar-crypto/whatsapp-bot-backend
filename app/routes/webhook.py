@@ -2002,6 +2002,7 @@ def _extract_location_from_message(message_text: str) -> str | None:
         "GATE": "ENTRY GATE- 2",
         "MUSIC": "MUSICE ROOM",
         "GERMAN": "GERMAN ROOM",
+        "GALLERY": "SECOND FLOOR GALLERY",
     }
     for keyword, location in short_map.items():
         if re.search(r'\b' + re.escape(keyword) + r'\b', msg_upper):
@@ -2043,6 +2044,42 @@ _SNAPSHOT_INTENT_RE = re.compile(
 _CHILD_PHOTO_RE = re.compile(
     r"(?:show|send|get|see|want|share)\s+(?:me\s+)?(?:my\s+)?(?:child|ward|kid|son|daughter)'?s?\s+"
     r"(?:photo|picture|image|pic|snapshot|media)",
+    re.IGNORECASE,
+)
+
+# Pattern: "show/share/send + class/grade/location" WITHOUT requiring photo/picture keyword
+# E.g. "show class 10 a", "show reception", "show gallery", "show nursery 1",
+# "show 12 b", "show 10 a" (bare grade numbers)
+_SHOW_LOCATION_RE = re.compile(
+    r"(?:show|share|send)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?"
+    r"(?:"
+    r"(?:class|grade|कक्षा|क्लास)\s*\d{1,2}\s*[a-cA-C]?"
+    r"|\d{1,2}\s*[a-cA-C]"           # bare grade: "show 12 b", "show 10 a"
+    r"|(?:nursery|nur)\s*\d?"
+    r"|(?:prep)\s*\d?"
+    r"|popsicle[s]?"
+    r"|reception"
+    r"|gallery"
+    r"|library"
+    r"|principal\s*(?:room)?"
+    r"|admin\s*(?:room)?"
+    r"|admission\s*(?:room)?"
+    r"|accounts\s*(?:room)?"
+    r"|assembly\s*(?:ground)?"
+    r"|art\s*(?:room)?"
+    r"|computer\s*(?:lab)?"
+    r"|science\s*(?:lab)?"
+    r"|math(?:s)?\s*(?:lab)?"
+    r"|music\s*(?:room)?"
+    r"|sports\s*(?:room)?"
+    r"|dress\s*(?:room)?"
+    r"|activity\s*(?:room)?"
+    r"|german\s*(?:room)?"
+    r"|park"
+    r"|gate"
+    r"|bus\s*parking"
+    r"|educomp"
+    r")",
     re.IGNORECASE,
 )
 
@@ -2089,6 +2126,28 @@ def _extract_classroom_from_message(message_text: str) -> str | None:
             return f"Prep {m.group(4)}" if m.group(4) else "Prep"
         elif "popsicle" in message_text.lower():
             return "POPSICLES"
+
+    # Fallback: bare grade number with optional section after "of/for/show/share/send"
+    # e.g. "show photo of 12 b", "send picture of 3 c", "show 10 a", "show 12 b"
+    bare_grade = re.search(
+        r"(?:of|for|show|share|send)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?(?:photo\s+of\s+)?(?:picture\s+of\s+)?(?:image\s+of\s+)?(\d{1,2})\s*([a-cA-C])\b",
+        message_text, re.IGNORECASE,
+    )
+    if bare_grade:
+        grade_num = bare_grade.group(1)
+        section = bare_grade.group(2).upper()
+        return f"Grade {grade_num}{section}"
+
+    # Fallback 2: bare grade number WITHOUT section after "of/for/show/share/send"
+    # e.g. "show photo of 10", "show 12"
+    bare_grade_no_section = re.search(
+        r"(?:of|for|show|share|send)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?(?:photo\s+of\s+)?(?:picture\s+of\s+)?(?:image\s+of\s+)?(\d{1,2})\b(?!\s*[a-zA-Z])",
+        message_text, re.IGNORECASE,
+    )
+    if bare_grade_no_section:
+        grade_num = bare_grade_no_section.group(1)
+        return f"Grade {grade_num}"
+
     return None
 
 
@@ -2104,6 +2163,11 @@ def _is_snapshot_request(message_text: str, is_admin: bool = False) -> bool:
     if _SNAPSHOT_INTENT_RE.search(message_text):
         return True
     if _CHILD_PHOTO_RE.search(message_text):
+        return True
+
+    # "show class 10 a", "show reception", "show gallery" etc.
+    # (show/share/send + location without photo/picture keyword)
+    if _SHOW_LOCATION_RE.search(message_text):
         return True
 
     # Check for snapshot keyword + context
@@ -2721,6 +2785,14 @@ async def receive_cloud_api_message(request: Request):
         if relayed:
             return {"status": "ok"}
 
+        # Check for classroom snapshot request (live photo from DVR camera)
+        # NOTE: This MUST run BEFORE try_direct_message / GPT so that
+        # "show reception", "show class 10 a", "show 12 b" etc. from admins
+        # are routed to the camera system, not to GPT or the DM handler.
+        snapshot_handled = await detect_and_handle_snapshot_request(sender, message_text, reply_to)
+        if snapshot_handled:
+            return {"status": "ok"}
+
         # Check if this is a direct-message request
         dm_handled = await try_direct_message(sender, message_text, reply_to, media_info)
         if dm_handled:
@@ -2739,11 +2811,6 @@ async def receive_cloud_api_message(request: Request):
         # Check for leave application — forward to class teacher
         leave_handled = await detect_and_handle_leave_application(sender, message_text, reply_to)
         if leave_handled:
-            return {"status": "ok"}
-
-        # Check for classroom snapshot request (live photo from DVR camera)
-        snapshot_handled = await detect_and_handle_snapshot_request(sender, message_text, reply_to)
-        if snapshot_handled:
             return {"status": "ok"}
 
         # Class list query

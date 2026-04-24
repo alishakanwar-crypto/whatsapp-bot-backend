@@ -303,6 +303,143 @@ def _send_birthday_wishes_sync() -> None:
         loop.close()
 
 
+def _send_daily_message_report_sync() -> None:
+    """Generate and email a daily message history report to alisha.kanwar@ppischool.in.
+
+    The report includes counts and samples of messages sent, received, and failed
+    over the past 24 hours.
+    """
+    import aiosqlite
+    from app.database import DB_PATH
+    from app.services.email_service import send_email
+
+    utc_now = datetime.utcnow()
+    ist_now = utc_now + timedelta(hours=5, minutes=30)
+    yesterday_ist = ist_now - timedelta(days=1)
+    report_date = yesterday_ist.strftime("%Y-%m-%d")
+    # Query window: from yesterday 00:00 IST to today 00:00 IST (in UTC)
+    start_utc = (yesterday_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+                 - timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+    end_utc = (ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+               - timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+    logger.info(f"Generating daily message report for {report_date} (UTC window: {start_utc} to {end_utc})")
+
+    loop = asyncio.new_event_loop()
+    try:
+        async def _generate_report():
+            db = await aiosqlite.connect(DB_PATH)
+            db.row_factory = aiosqlite.Row
+            try:
+                # Total messages
+                cur = await db.execute(
+                    "SELECT COUNT(*) as cnt FROM messages WHERE timestamp >= ? AND timestamp < ?",
+                    (start_utc, end_utc),
+                )
+                total = (await cur.fetchone())["cnt"]
+
+                # Incoming (received from parents/teachers)
+                cur = await db.execute(
+                    "SELECT COUNT(*) as cnt FROM messages "
+                    "WHERE timestamp >= ? AND timestamp < ? AND direction = 'incoming'",
+                    (start_utc, end_utc),
+                )
+                incoming = (await cur.fetchone())["cnt"]
+
+                # Outgoing (sent by bot)
+                cur = await db.execute(
+                    "SELECT COUNT(*) as cnt FROM messages "
+                    "WHERE timestamp >= ? AND timestamp < ? AND direction = 'outgoing'",
+                    (start_utc, end_utc),
+                )
+                outgoing = (await cur.fetchone())["cnt"]
+
+                # Unique senders (parents who messaged)
+                cur = await db.execute(
+                    "SELECT COUNT(DISTINCT sender) as cnt FROM messages "
+                    "WHERE timestamp >= ? AND timestamp < ? AND direction = 'incoming'",
+                    (start_utc, end_utc),
+                )
+                unique_parents = (await cur.fetchone())["cnt"]
+
+                # Forwarded to teachers
+                cur = await db.execute(
+                    "SELECT COUNT(*) as cnt FROM forwarded_conversations "
+                    "WHERE created_at >= ? AND created_at < ?",
+                    (start_utc, end_utc),
+                )
+                forwarded = (await cur.fetchone())["cnt"]
+
+                # Leave applications
+                cur = await db.execute(
+                    "SELECT COUNT(*) as cnt FROM leave_applications "
+                    "WHERE created_at >= ? AND created_at < ?",
+                    (start_utc, end_utc),
+                )
+                leaves = (await cur.fetchone())["cnt"]
+
+                # Sample recent messages (last 20 incoming)
+                cur = await db.execute(
+                    "SELECT sender, content, timestamp FROM messages "
+                    "WHERE timestamp >= ? AND timestamp < ? AND direction = 'incoming' "
+                    "ORDER BY timestamp DESC LIMIT 20",
+                    (start_utc, end_utc),
+                )
+                recent_msgs = await cur.fetchall()
+
+                # Build report
+                report = (
+                    f"PPIS WhatsApp Bot - Daily Message Report\n"
+                    f"========================================\n"
+                    f"Date: {report_date} (IST)\n\n"
+                    f"Summary:\n"
+                    f"  Total messages:           {total}\n"
+                    f"  Messages received:        {incoming}\n"
+                    f"  Messages sent (by bot):   {outgoing}\n"
+                    f"  Unique parents:           {unique_parents}\n"
+                    f"  Queries forwarded:        {forwarded}\n"
+                    f"  Leave applications:       {leaves}\n\n"
+                )
+
+                if recent_msgs:
+                    report += "Recent Parent Messages (last 20):\n"
+                    report += "-" * 50 + "\n"
+                    for m in recent_msgs:
+                        ts = m["timestamp"] or ""
+                        sender_phone = m["sender"] or ""
+                        content = (m["content"] or "")[:120]
+                        report += f"  [{ts}] {sender_phone}: {content}\n"
+                else:
+                    report += "No messages received in this period.\n"
+
+                return report
+
+            finally:
+                await db.close()
+
+        report_text = loop.run_until_complete(_generate_report())
+
+        if report_text:
+            subject = f"PPIS Bot Daily Report - {report_date}"
+            success = send_email(
+                "alisha.kanwar@ppischool.in",
+                subject,
+                report_text,
+                "PP International School Bot",
+            )
+            if success:
+                logger.info(f"Daily message report sent to alisha.kanwar@ppischool.in for {report_date}")
+            else:
+                logger.error(f"Failed to send daily message report for {report_date}")
+        else:
+            logger.warning("Daily report generation returned empty")
+
+    except Exception as e:
+        logger.error(f"Error generating/sending daily message report: {e}", exc_info=True)
+    finally:
+        loop.close()
+
+
 def start_scheduler() -> None:
     """Start the scheduler with default reminders."""
     for reminder in DEFAULT_REMINDERS:
@@ -408,6 +545,16 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled initial email homework poll in 60 seconds")
+
+    # --- Daily Message History Report ---
+    # Send daily report to alisha.kanwar@ppischool.in at 11:30 PM IST (18:00 UTC)
+    scheduler.add_job(
+        _send_daily_message_report_sync,
+        trigger=CronTrigger(hour=18, minute=0, second=0),
+        id="daily_message_report",
+        replace_existing=True,
+    )
+    logger.info("Scheduled daily message report at 11:30 PM IST (18:00 UTC) to alisha.kanwar@ppischool.in")
 
     scheduler.start()
     logger.info("Scheduler started successfully")
