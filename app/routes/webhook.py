@@ -1279,7 +1279,7 @@ async def detect_and_handle_homework_query(
             f"- {c['student_name']} ({c['grade']})" for c in children
         )
         ask_msg = (
-            "Dear Parent,\n\n"
+            f"{_greeting(sender)},\n\n"
             "We have found multiple wards linked to your number:\n"
             f"{child_list}\n\n"
             "Kindly specify which ward's homework you are inquiring about "
@@ -1295,7 +1295,7 @@ async def detect_and_handle_homework_query(
         # Fall back: ask for class/section
         await save_pending_query(sender, reply_to, message_text)
         ask_msg = (
-            "Dear Parent,\n\n"
+            f"{_greeting(sender)},\n\n"
             "Thank you for your query regarding homework. "
             "Could you please share your ward's class and section "
             "(e.g. Grade 5A, Nursery 1, Prep 2) so that I can forward "
@@ -1321,7 +1321,7 @@ async def detect_and_handle_homework_query(
         logger.warning(f"No teacher found for grade {detected_grade}")
         await send_whatsapp_message(
             reply_to,
-            "Dear Parent,\n\n"
+            f"{_greeting(sender)},\n\n"
             f"We could not find a class teacher for {detected_grade} in our records. "
             "For further assistance, please contact:\n"
             "School Helpline: 8800935552\n"
@@ -1409,7 +1409,7 @@ async def detect_and_handle_homework_query(
     method_str = " and ".join(methods) if methods else "the school"
 
     confirm_msg = (
-        f"Dear Parent,\n\n"
+        f"{_greeting(sender)},\n\n"
         f"Your{subject_label} homework query for *{teacher_grade}* has been "
         f"forwarded to the class teacher ({teacher_name}) via {method_str}.\n\n"
         f"You will receive the response as soon as the teacher replies.\n\n"
@@ -1509,7 +1509,7 @@ async def detect_and_handle_leave_application(
     if not child_name or not teacher_entry:
         await save_pending_query(sender, reply_to, message_text)
         ask_msg = (
-            "Dear Parent,\n\n"
+            f"{_greeting(sender)},\n\n"
             "Thank you for informing us about the leave. "
             "To process your leave application, could you please provide:\n\n"
             "1. Your ward's *full name*\n"
@@ -1609,7 +1609,7 @@ async def detect_and_handle_leave_application(
     method_str = " and ".join(methods) if methods else "the school"
 
     confirm_msg = (
-        f"Dear Parent,\n\n"
+        f"{_greeting(sender)},\n\n"
         f"Your leave application has been received and forwarded to "
         f"the class teacher ({teacher_name}) via {method_str}.\n\n"
         f"Details:\n"
@@ -1882,7 +1882,7 @@ async def detect_and_handle_teacher_homework_broadcast(
         else:
             # Green API path — plain text is fine (linked device)
             parent_msg = (
-                f"Dear Parent,\n\n"
+                f"Dear Parent,\n\n"  # broadcast to parents; sender is teacher here
                 f"The following message has been shared by the class teacher "
                 f"of {matched_grade} ({teacher_name}):\n\n"
                 f"---\n{hw_content}\n---\n\n"
@@ -1947,66 +1947,104 @@ def _is_admin_panel(sender: str) -> bool:
     return last10 in ADMIN_PANEL_NUMBERS
 
 
+def _greeting(sender: str) -> str:
+    """Return 'Dear Admin' for admin panel numbers, 'Dear Parent' for others."""
+    return "Dear Admin" if _is_admin_panel(sender) else "Dear Parent"
+
+
 def _extract_location_from_message(message_text: str) -> str | None:
     """Extract any camera location name from message text for admin panel requests.
 
     Handles both classroom names (Grade 3C, Nursery 1) and non-classroom
     locations (library, reception, principal room, assembly ground, etc.).
+
+    The location keywords MUST match the actual camera mapping entries stored
+    in the cloud database (agent_camera_mapping table).
     """
     # First try the standard classroom extraction
     classroom = _extract_classroom_from_message(message_text)
     if classroom:
         return classroom
 
-    # For admin panel: match non-classroom locations from the camera mapping
-    # These are location keywords that appear in the camera mapping Excel
+    # For admin panel: match non-classroom locations from the camera mapping.
+    # These MUST match the actual location names in the cloud DB exactly.
     msg_upper = message_text.upper()
+
+    # --- Exact location keywords (match cloud DB camera_mapping keys) ---
     location_keywords = [
-        "LIBRARY ROOM", "LIBRARY",
-        "RECEPTION", "PRINCIPAL ROOM", "ADMIN ROOM", "ADMISSION ROOM",
-        "ACCOUNTS ROOM", "ASSEMBLY GROUND", "ART ROOM",
-        "COMPUTER LAB", "MINI COMPUTER LAB", "SCIENCE LAB", "MATHS LAB",
-        "SPORTS ROOM", "DRESS ROOM", "EDUCOMP ROOM", "MUSIC ROOM", "MUSICE ROOM",
-        "TEACHER STAFF", "ACTIVITY ROOM", "GERMAN ROOM", "EXTRA ROOM",
-        "PARK GATE", "PARK BACK CAMERA", "PARK SIDE SWING", "PARK SWING SIDE",
-        "PARK GENERATOR SIDE", "BUS PARKING SIDE",
-        "ENTRY GATE", "G FLOOR DISPERSAL EXIT",
-        "FIRST FLOOR LIBRARY GALLERY", "FIRST FLOOR LIBRARY GELLERY",
-        "FIRST FLOOR L/W GELLERY", "FIRST FLOOR R/W GELLERY",
-        "FIRST FLOOR L/W FIRST STRS", "FIRST FLOOR L/W MIDDEL STRS",
-        "FIRST FLOOR R/W MIDDEL STRS", "FIRST FLOOR MIDDLE STRS",
-        "G FLOOR L/W GELLERY", "G FLOOR R/W GELLERY",
-        "G FLOOR L/W MIDDEL STRS", "G FLOOR R/W MIDDLE STRS",
+        # Multi-word locations (longest first for priority matching)
         "G FLOOR RECEPTION BACK GELLERY",
-        "SECOND FLOOR GALLERY", "SECOND FLOOR ART GALLERY",
-        "LEFT SIDE THIRD FLOOR", "RIGHT SIDE THIRD FLOOR",
-        "RIGHT SIDE SEC FLOOR", "RIGHT SIDE THIRD FLOOR MIDDLE STRS",
-        "ACADEMIC CO ROOM",
+        "G FLOOR DISPERSAL EXIT",
+        "G FLOOR L/W GELLERY",
+        "G FLOOR R/W GELLERY",
+        "FIRST FLOOR GALLERY",
+        "SECOND FLOOR GALLERY",
+        "THIRD FLOOR GALLERY",
+        "ACADEMIC COORDINATOR",
+        "MINI COMPUTER LAB",
+        "PARK GENERATOR SIDE",
+        "PARK GENERATOR",
+        "ASSEMBLY GROUND",
+        "PRINCIPAL ROOM",
+        "ADMISSION ROOM",
+        "ACCOUNTS ROOM",
+        "ACTIVITY ROOM",
+        "COMPUTER LAB",
+        "TEACHER STAFF",
+        "BUS PARKING",
+        "SCIENCE LAB",
+        "GERMAN ROOM",
+        "ADMIN ROOM",
+        "DRESS ROOM",
+        "MUSIC ROOM",
+        "ENTRY GATE",
+        "PARK SWING",
+        "PARK BACK",
+        "PARK GATE",
+        "MATH LAB",
+        "ART ROOM",
+        # Single-word locations
         "POPSICLES",
-        "L 3 M", "R 2 F", "R3 M", "R 1  3  F",
+        "RECEPTION",
+        "LIBRARY",
+        "EDUCOMP",
     ]
-    # Match longest keyword first
-    location_keywords.sort(key=len, reverse=True)
     for loc in location_keywords:
         if loc in msg_upper:
             return loc
-    # Fuzzy single-word matches for common short names
-    short_map = {
-        "LIBRARY": "LIBRARY ROOM",
-        "RECEPTION": "RECEPTION",
-        "PRINCIPAL": "PRINCIPAL ROOM",
-        "ADMIN": "ADMIN ROOM",
-        "ADMISSION": "ADMISSION ROOM",
-        "ACCOUNTS": "ACCOUNTS ROOM",
-        "ASSEMBLY": "ASSEMBLY GROUND",
-        "SPORTS": "SPORTS ROOM",
-        "PARK": "PARK GATE",
-        "GATE": "ENTRY GATE- 2",
-        "MUSIC": "MUSICE ROOM",
-        "GERMAN": "GERMAN ROOM",
-        "GALLERY": "SECOND FLOOR GALLERY",
-    }
-    for keyword, location in short_map.items():
+
+    # --- Fuzzy single-word matches for common short names ---
+    # Maps user-friendly short words to actual camera mapping keys
+    # Use a list of tuples (not a dict) so multi-word entries are checked
+    # before their single-word substrings (e.g. "MAIN GATE" before "GATE").
+    short_map: list[tuple[str, str]] = [
+        # Multi-word first (longest match wins)
+        ("MAIN GATE", "ENTRY GATE- 2"),
+        ("ENTRY GATE", "ENTRY GATE- 2"),
+        ("STAFF ROOM", "TEACHER STAFF"),
+        ("STAFFROOM", "TEACHER STAFF"),
+        # Single-word
+        ("LIBRARY", "LIBRARY"),
+        ("RECEPTION", "RECEPTION"),
+        ("PRINCIPAL", "PRINCIPAL ROOM"),
+        ("ADMIN", "ADMIN ROOM"),
+        ("ADMISSION", "ADMISSION ROOM"),
+        ("ACCOUNTS", "ACCOUNTS ROOM"),
+        ("ASSEMBLY", "ASSEMBLY GROUND"),
+        ("PARK", "PARK GATE"),
+        ("GATE", "ENTRY GATE- 2"),
+        ("MUSIC", "MUSIC ROOM"),
+        ("GERMAN", "GERMAN ROOM"),
+        ("GALLERY", "SECOND FLOOR GALLERY"),
+        ("DRESS", "DRESS ROOM"),
+        ("ACTIVITY", "ACTIVITY ROOM"),
+        ("SPORTS", "ACTIVITY ROOM"),
+        ("STAFF", "TEACHER STAFF"),
+        ("ACADEMIC", "ACADEMIC COORDINATOR"),
+        ("BUS", "BUS PARKING"),
+        ("PARKING", "BUS PARKING"),
+    ]
+    for keyword, location in short_map:
         if re.search(r'\b' + re.escape(keyword) + r'\b', msg_upper):
             return location
     return None
@@ -2054,6 +2092,7 @@ _CHILD_PHOTO_RE = re.compile(
 # "show 12 b", "show 10 a" (bare grade numbers)
 _SHOW_LOCATION_RE = re.compile(
     r"(?:show|share|send)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?"
+    r"(?:photo\s+(?:of\s+)?|picture\s+(?:of\s+)?|image\s+(?:of\s+)?|pic\s+(?:of\s+)?)?"
     r"(?:"
     r"(?:class|grade|कक्षा|क्लास)\s*\d{1,2}\s*[a-cA-C]?"
     r"|\d{1,2}\s*[a-cA-C]"           # bare grade: "show 12 b", "show 10 a"
@@ -2077,10 +2116,18 @@ _SHOW_LOCATION_RE = re.compile(
     r"|dress\s*(?:room)?"
     r"|activity\s*(?:room)?"
     r"|german\s*(?:room)?"
-    r"|park"
+    r"|park\s*(?:gate|swing|back|generator)?"
+    r"|main\s*gate"
+    r"|entry\s*gate"
     r"|gate"
     r"|bus\s*parking"
     r"|educomp"
+    r"|teacher\s*staff"
+    r"|staff\s*room"
+    r"|academic\s*(?:coordinator)?"
+    r"|first\s*floor\s*gallery"
+    r"|second\s*floor\s*gallery"
+    r"|third\s*floor\s*gallery"
     r")",
     re.IGNORECASE,
 )
@@ -2156,19 +2203,23 @@ def _extract_classroom_from_message(message_text: str) -> str | None:
 def _is_snapshot_request(message_text: str, is_admin: bool = False) -> bool:
     """Detect if the message is asking for a live camera snapshot.
 
-    For admin panel members, a broader match is used — any snapshot keyword
-    combined with ANY location (not just classrooms) triggers detection.
+    RULE: ANY message that starts with 'show' should be treated as a photo
+    sharing request. For admin panel members, ALL locations are accessible.
+    For regular parents, only their child's classroom is accessible.
     """
-    msg_low = message_text.lower()
+    msg_low = message_text.strip().lower()
 
-    # Direct intent patterns
+    # ---- CRITICAL: Any message beginning with "show" = photo request ----
+    if msg_low.startswith("show"):
+        return True
+
+    # Direct intent patterns ("send me a photo of...", "share picture of...")
     if _SNAPSHOT_INTENT_RE.search(message_text):
         return True
     if _CHILD_PHOTO_RE.search(message_text):
         return True
 
-    # "show class 10 a", "show reception", "show gallery" etc.
-    # (show/share/send + location without photo/picture keyword)
+    # "share class 10 a", "send reception" etc.
     if _SHOW_LOCATION_RE.search(message_text):
         return True
 
@@ -2189,10 +2240,10 @@ def _is_snapshot_request(message_text: str, is_admin: bool = False) -> bool:
             location_words = [
                 "library", "reception", "principal", "admin", "admission",
                 "accounts", "assembly", "art room", "computer", "science",
-                "maths lab", "sports", "dress", "educomp", "music",
+                "math lab", "sports", "dress", "educomp", "music",
                 "teacher staff", "activity", "german", "park", "gate",
                 "floor", "gallery", "strs", "stairs", "bus parking",
-                "academic", "extra",
+                "academic", "main gate", "entry gate",
             ]
             if any(w in msg_low for w in location_words):
                 return True
@@ -2247,7 +2298,7 @@ async def detect_and_handle_snapshot_request(
             )
         await send_whatsapp_message(
             reply_to,
-            f"Dear {'Admin' if is_admin else 'Parent'},\n\n"
+            f"{_greeting(sender)},\n\n"
             f"{offline_msg}\n\n"
             "Thank you for your cooperation.\n"
             "Warm regards,\nPP International School"
@@ -2313,7 +2364,7 @@ async def detect_and_handle_snapshot_request(
                 )
                 await send_whatsapp_message(
                     reply_to,
-                    "Dear Parent,\n\n"
+                    f"{_greeting(sender)},\n\n"
                     "We found multiple wards registered to your number:\n"
                     f"{child_list}\n\n"
                     "Please specify the class and section "
@@ -2325,7 +2376,7 @@ async def detect_and_handle_snapshot_request(
             else:
                 await send_whatsapp_message(
                     reply_to,
-                    "Dear Parent,\n\n"
+                    f"{_greeting(sender)},\n\n"
                     "Please specify the class and section for the classroom photo "
                     "(e.g., 'Show photo of Grade 3C' or 'Send picture of Nursery 1').\n\n"
                     "Thank you for your cooperation.\n"
@@ -2337,7 +2388,7 @@ async def detect_and_handle_snapshot_request(
     label = f"{location} camera" if is_admin else f"{location} classroom camera"
     await send_whatsapp_message(
         reply_to,
-        f"Dear {'Admin' if is_admin else 'Parent'},\n\n"
+        f"{_greeting(sender)},\n\n"
         f"Capturing live photo(s) from the {label}. "
         f"Please wait a moment..."
     )
@@ -2416,7 +2467,7 @@ async def detect_and_handle_snapshot_request(
         logger.warning(f"Failed to upload/send any snapshot image for {location}")
         await send_whatsapp_message(
             reply_to,
-            f"Dear {'Admin' if is_admin else 'Parent'},\n\n"
+            f"{_greeting(sender)},\n\n"
             f"The photo(s) from {location} were captured but could not be delivered. "
             f"Please try again in a few minutes.\n\n"
             "Thank you for your patience.\n"
@@ -2440,7 +2491,7 @@ async def detect_and_handle_snapshot_request(
             fail_msg += "\n\nPlease try again later."
         await send_whatsapp_message(
             reply_to,
-            f"Dear {'Admin' if is_admin else 'Parent'},\n\n"
+            f"{_greeting(sender)},\n\n"
             f"{fail_msg}\n\n"
             "Thank you for your patience.\n"
             "Warm regards,\nPP International School"
@@ -2502,9 +2553,24 @@ async def receive_whatsapp_message(request: Request):
 
     # Wrap all message handling in try/finally to ensure bulk send resumes
     try:
+        # Check if a teacher is broadcasting homework to parents of their class
+        hw_broadcast = await detect_and_handle_teacher_homework_broadcast(
+            sender, message_text, reply_to, media_info,
+        )
+        if hw_broadcast:
+            return {"status": "ok"}
+
         # Check if this is a teacher replying to a forwarded message (text or media)
         relayed = await try_relay_teacher_reply(sender, message_text, reply_to, media_info)
         if relayed:
+            return {"status": "ok"}
+
+        # Check for classroom snapshot request (live photo from DVR camera)
+        # NOTE: This MUST run BEFORE try_direct_message / GPT so that
+        # "show reception", "show class 10 a", "show 12 b" etc. from admins
+        # are routed to the camera system, not to GPT or the DM handler.
+        snapshot_handled = await detect_and_handle_snapshot_request(sender, message_text, reply_to)
+        if snapshot_handled:
             return {"status": "ok"}
 
         # Check if this is a direct-message request (e.g. "send message to Harnoor: ...")
@@ -2525,6 +2591,13 @@ async def receive_whatsapp_message(request: Request):
         # Check for leave application — forward to class teacher
         leave_handled = await detect_and_handle_leave_application(sender, message_text, reply_to)
         if leave_handled:
+            return {"status": "ok"}
+
+        # Class list query
+        class_list_answer = await lookup_class_list(message_text)
+        if class_list_answer:
+            await save_message(bot_phone, sender, class_list_answer, "whatsapp", "outgoing")
+            await send_whatsapp_message(reply_to, class_list_answer)
             return {"status": "ok"}
 
         # Check if this is a transport/route query — answer from structured data
