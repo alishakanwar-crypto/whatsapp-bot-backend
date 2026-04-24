@@ -1369,7 +1369,8 @@ async def detect_and_handle_homework_query(
 
     # Send via WhatsApp
     if teacher_phone:
-        wa_success = await send_whatsapp_message(teacher_phone, forward_msg)
+        teacher_chat = _teacher_chat_id(teacher_phone)
+        wa_success = await send_whatsapp_message(teacher_chat, forward_msg)
         if wa_success:
             await save_forwarded_conversation(
                 teacher_phone=teacher_phone,
@@ -1567,7 +1568,8 @@ async def detect_and_handle_leave_application(
     email_success = False
 
     if teacher_phone:
-        wa_success = await send_whatsapp_message(teacher_phone, forward_msg)
+        teacher_chat = _teacher_chat_id(teacher_phone)
+        wa_success = await send_whatsapp_message(teacher_chat, forward_msg)
         if wa_success:
             await save_forwarded_conversation(
                 teacher_phone=teacher_phone,

@@ -488,7 +488,7 @@ def _normalize_grade_name(grade_raw: str) -> list[str]:
             n = m.group(1) or ""
             return [f"Prep {n}".strip()] if n else ["Prep"]
     elif "POPSICLE" in g_upper:
-        return ["Popsicles 1"]
+        return ["Popsicles"]
     return [g]
 
 
