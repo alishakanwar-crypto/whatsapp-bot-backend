@@ -1968,78 +1968,80 @@ def _extract_location_from_message(message_text: str) -> str | None:
 
     # For admin panel: match non-classroom locations from the camera mapping.
     # These MUST match the actual location names in the cloud DB exactly.
-    # Source of truth: School Camera Details - 24-04-2026.xls (89 unique locations).
+    # Source of truth: School Camera Details - 24-04-2026.xls "All Mix" tab
+    # (91 unique classroom names, 123 total entries across 3 DVRs).
     msg_upper = message_text.upper()
 
     # --- Exact location keywords (match cloud DB camera_mapping keys) ---
+    # Each tuple is (UPPERCASE_SEARCH_KEY, exact_cloud_db_key).
     # Longest first so multi-word entries match before their substrings.
-    location_keywords = [
+    location_keywords: list[tuple[str, str]] = [
         # Gallery entries (DVR 1 first-floor & DVR 2 ground-floor)
-        "GALLERY LIB 8",
-        "GALLERY LIB 7",
-        "GALLERY LIB 6",
-        "GALLERY LIB 5",
-        "GALLERY LIB 4",
-        "GALLERY LIB 3",
-        "GALLERY LIB 2",
-        "GALLERY LIB 1",
-        "GALLERY MID 6",
-        "GALLERY MID 5",
-        "GALLERY MID 4",
-        "GALLERY MID 3",
-        "GALLERY MID 2",
-        "GALLERY MID 1",
-        "GALLERY MID",
-        # Multi-word non-classroom locations
-        "PARK GENERATOR SIDE",
-        "BUS PARKING SIDE",
-        "DRESS ROOM BASEMENT",
-        "MINI COMPUTER LAB",
-        "ACADEMIC COORDINATOR",
-        "ADMISSION ROOM C1",
-        "ACTIVITY ROOM C2",
-        "ACTIVITY ROOM C1",
-        "ADMIN ROOM C1",
-        "ACCOUNTS ROOM",
-        "COMPUTER LAB 2",
-        "COMPUTER LAB",
-        "TEACHER STAFF 2",
-        "TEACHER STAFF 1",
-        "SCIENCE LAB 2",
-        "SCIENCE LAB 1",
-        "LIBRARY LAB 2",
-        "LIBRARY LAB 1",
-        "MATH LAB 2",
-        "MATH LAB 1",
-        "DISPERSAL EXIT",
-        "PARK GENERATOR",
-        "PRINCIPAL ROOM",
-        "EDUCOMP ROOM",
-        "GERMAN ROOM",
-        "MUSICE ROOM",
-        "ENTRY GATE- 2",
-        "RECEPTION C4",
-        "RECEPTION C3",
-        "RECEPTION C2",
-        "RECEPTION C1",
-        "ART ROOM",
-        "PARK SWING",
-        "PARK BACK",
-        "PARK GATE",
-        # Short entries
-        "R 1  3  F",
-        "R 2 F",
-        "R3 M",
-        "L 3 M",
-        "POPSICLES",
+        ("GALLERY LIB 8", "GALLERY LIB 8"),
+        ("GALLERY LIB 7", "GALLERY LIB 7"),
+        ("GALLERY LIB 6", "GALLERY LIB 6"),
+        ("GALLERY LIB 5", "GALLERY LIB 5"),
+        ("GALLERY LIB 4", "GALLERY LIB 4"),
+        ("GALLERY LIB 3", "GALLERY LIB 3"),
+        ("GALLERY LIB 2", "GALLERY LIB 2"),
+        ("GALLERY LIB 1", "GALLERY LIB 1"),
+        ("GALLERY MID 6", "GALLERY MID 6"),
+        ("GALLERY MID 5", "GALLERY MID 5"),
+        ("GALLERY MID 4", "GALLERY MID 4"),
+        ("GALLERY MID 3", "GALLERY MID 3"),
+        ("GALLERY MID 2", "GALLERY MID 2"),
+        ("GALLERY MID 1", "GALLERY MID 1"),
+        ("GALLERY MID", "GALLERY MID"),
+        # Multi-word non-classroom locations (exact DB keys)
+        ("PARK GENERATOR SIDE", "PARK GENERATOR SIDE"),
+        ("BUS PARKING SIDE", "BUS PARKING SIDE"),
+        ("DRESS ROOM BASEMENT", "Dress Room Basement"),
+        ("MINI COMPUTER LAB", "MINI COMPUTER LAB"),
+        ("ACADEMIC COORDINATOR", "Academic Coordinator"),
+        ("ADMISSION ROOM C1", "Admission Room C1"),
+        ("ACTIVITY ROOM C2", "ACTIVITY ROOM C2"),
+        ("ACTIVITY ROOM C1", "ACTIVITY ROOM C1"),
+        ("ADMIN ROOM C1", "Admin Room C1"),
+        ("ACCOUNTS ROOM", "Accounts Room"),
+        ("COMPUTER LAB 2", "COMPUTER LAB 2"),
+        ("COMPUTER LAB", "COMPUTER LAB"),
+        ("TEACHER STAFF 2", "TEACHER STAFF 2"),
+        ("TEACHER STAFF 1", "TEACHER STAFF 1"),
+        ("SCIENCE LAB 2", "SCIENCE LAB 2"),
+        ("SCIENCE LAB 1", "SCIENCE LAB 1"),
+        ("LIBRARY LAB 2", "LIBRARY LAB 2"),
+        ("LIBRARY LAB 1", "LIBRARY LAB 1"),
+        ("MATH LAB 2", "MATH LAB 2"),
+        ("MATH LAB 1", "MATH LAB 1"),
+        ("DISPERSAL EXIT", "DISPERSAL EXIT"),
+        ("PARK GENERATOR", "PARK GENERATOR"),
+        ("PRINCIPAL ROOM", "Principal Room"),
+        ("EDUCOMP ROOM", "EDUCOMP ROOM"),
+        ("GERMAN ROOM", "GERMAN ROOM"),
+        ("MUSICE ROOM", "MUSICE ROOM"),
+        ("ENTRY GATE", "ENTRY GATE- 2"),
+        ("RECEPTION C4", "Reception C4"),
+        ("RECEPTION C3", "Reception C3"),
+        ("RECEPTION C2", "Reception C2"),
+        ("RECEPTION C1", "Reception C1"),
+        ("ART ROOM", "ART ROOM"),
+        ("PARK SWING", "PARK SWING"),
+        ("PARK BACK", "PARK BACK"),
+        ("PARK GATE", "PARK GATE"),
+        # Short entries (exact DB case)
+        ("R 1  3  F", "R 1  3  F"),
+        ("R 2 F", "r 2 f"),
+        ("R3 M", "r3 m"),
+        ("L 3 M", "l 3 m"),
+        ("POPSICLES", "Popsicles"),
     ]
-    for loc in location_keywords:
-        if loc in msg_upper:
-            return loc
+    for search_key, db_key in location_keywords:
+        if search_key in msg_upper:
+            return db_key
 
     # --- Fuzzy single-word matches for common short names ---
     # Maps user-friendly short words to actual camera mapping keys.
-    # Use a list of tuples so multi-word entries are checked first.
+    # Values are the EXACT cloud DB key (case-sensitive).
     short_map: list[tuple[str, str]] = [
         # Multi-word first (longest match wins)
         ("MAIN GATE", "ENTRY GATE- 2"),
@@ -2053,27 +2055,30 @@ def _extract_location_from_message(message_text: str) -> str | None:
         ("MUSIC ROOM", "MUSICE ROOM"),
         # Single-word
         ("LIBRARY", "LIBRARY LAB 1"),
-        ("RECEPTION", "RECEPTION C1"),
-        ("PRINCIPAL", "PRINCIPAL ROOM"),
-        ("ADMIN", "ADMIN ROOM C1"),
-        ("ADMISSION", "ADMISSION ROOM C1"),
-        ("ACCOUNTS", "ACCOUNTS ROOM"),
+        ("RECEPTION", "Reception C1"),
+        ("PRINCIPAL", "Principal Room"),
+        ("ADMIN", "Admin Room C1"),
+        ("ADMISSION", "Admission Room C1"),
+        ("ACCOUNTS", "Accounts Room"),
         ("PARK", "PARK GATE"),
         ("GATE", "ENTRY GATE- 2"),
         ("MUSIC", "MUSICE ROOM"),
         ("GERMAN", "GERMAN ROOM"),
         ("GALLERY", "GALLERY MID 1"),
-        ("DRESS", "DRESS ROOM BASEMENT"),
+        ("DRESS", "Dress Room Basement"),
         ("ACTIVITY", "ACTIVITY ROOM C1"),
         ("SPORTS", "ACTIVITY ROOM C1"),
         ("STAFF", "TEACHER STAFF 1"),
-        ("ACADEMIC", "ACADEMIC COORDINATOR"),
+        ("ACADEMIC", "Academic Coordinator"),
         ("BUS", "BUS PARKING SIDE"),
         ("PARKING", "BUS PARKING SIDE"),
         ("EDUCOMP", "EDUCOMP ROOM"),
         ("ART", "ART ROOM"),
         ("DISPERSAL", "DISPERSAL EXIT"),
-        ("POPSICLE", "POPSICLES"),
+        ("POPSICLE", "Popsicles"),
+        ("NURSERY", "NUR-1"),
+        ("NUR", "NUR-1"),
+        ("PREP", "PREP-1"),
     ]
     for keyword, location in short_map:
         if re.search(r'\b' + re.escape(keyword) + r'\b', msg_upper):
@@ -2191,21 +2196,32 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
 
 
 def _extract_classroom_from_message(message_text: str) -> str | None:
-    """Extract classroom name from message text (e.g. 'Grade 3C', 'Nursery 1')."""
+    """Extract classroom name from message text.
+
+    Returns the EXACT cloud DB key as it appears in the Excel 'All Mix' tab
+    Classroom column.  Examples:
+      'GRADE 3C'   (uppercase with section)
+      'GRADE 10'   (uppercase without section)
+      'NUR-1'      (hyphenated nursery)
+      'PREP-1'     (hyphenated prep)
+      'Popsicles'  (mixed case)
+    """
     m = _GRADE_EXTRACT_RE.search(message_text)
     if m:
         if m.group(1):  # grade N [section]
             grade_num = m.group(1)
             section = (m.group(2) or "").upper()
             if section:
-                return f"Grade {grade_num}{section}"
-            return f"Grade {grade_num}"
+                return f"GRADE {grade_num}{section}"
+            return f"GRADE {grade_num}"
         elif m.group(3) is not None:  # nursery N
-            return f"Nursery {m.group(3)}" if m.group(3) else "Nursery"
+            n = m.group(3)
+            return f"NUR-{n}" if n else "NUR-1"
         elif m.group(4) is not None:  # prep N
-            return f"Prep {m.group(4)}" if m.group(4) else "Prep"
+            n = m.group(4)
+            return f"PREP-{n}" if n else "PREP-1"
         elif "popsicle" in message_text.lower():
-            return "POPSICLES"
+            return "Popsicles"
 
     # Fallback: bare grade number with optional section after "of/for/show/share/send"
     # e.g. "show photo of 12 b", "send picture of 3 c", "show 10 a", "show 12 b"
@@ -2216,7 +2232,7 @@ def _extract_classroom_from_message(message_text: str) -> str | None:
     if bare_grade:
         grade_num = bare_grade.group(1)
         section = bare_grade.group(2).upper()
-        return f"Grade {grade_num}{section}"
+        return f"GRADE {grade_num}{section}"
 
     # Fallback 2: bare grade number WITHOUT section after "of/for/show/share/send"
     # e.g. "show photo of 10", "show 12"
@@ -2226,7 +2242,7 @@ def _extract_classroom_from_message(message_text: str) -> str | None:
     )
     if bare_grade_no_section:
         grade_num = bare_grade_no_section.group(1)
-        return f"Grade {grade_num}"
+        return f"GRADE {grade_num}"
 
     return None
 
