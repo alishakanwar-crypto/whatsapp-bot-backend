@@ -1841,7 +1841,7 @@ async def detect_and_handle_teacher_homework_broadcast(
     sent_count = 0
     fail_count = 0
     for phone in parent_phones:
-        recipient = phone if phone.startswith("91") else f"91{phone}"
+        recipient = f"91{phone}" if len(phone) == 10 else phone
         if get_whatsapp_provider() == "cloud":
             # Use approved template — try ppis_homework_update first,
             # fall back to ppis_class_assignment if homework template not yet approved
@@ -1968,81 +1968,112 @@ def _extract_location_from_message(message_text: str) -> str | None:
 
     # For admin panel: match non-classroom locations from the camera mapping.
     # These MUST match the actual location names in the cloud DB exactly.
+    # Source of truth: School Camera Details - 24-04-2026.xls (89 unique locations).
     msg_upper = message_text.upper()
 
     # --- Exact location keywords (match cloud DB camera_mapping keys) ---
+    # Longest first so multi-word entries match before their substrings.
     location_keywords = [
-        # Multi-word locations (longest first for priority matching)
-        "G FLOOR RECEPTION BACK GELLERY",
-        "G FLOOR DISPERSAL EXIT",
-        "G FLOOR L/W GELLERY",
-        "G FLOOR R/W GELLERY",
-        "FIRST FLOOR GALLERY",
-        "SECOND FLOOR GALLERY",
-        "THIRD FLOOR GALLERY",
-        "ACADEMIC COORDINATOR",
-        "MINI COMPUTER LAB",
+        # Gallery entries (DVR 1 first-floor & DVR 2 ground-floor)
+        "GALLERY LIB 8",
+        "GALLERY LIB 7",
+        "GALLERY LIB 6",
+        "GALLERY LIB 5",
+        "GALLERY LIB 4",
+        "GALLERY LIB 3",
+        "GALLERY LIB 2",
+        "GALLERY LIB 1",
+        "GALLERY MID 6",
+        "GALLERY MID 5",
+        "GALLERY MID 4",
+        "GALLERY MID 3",
+        "GALLERY MID 2",
+        "GALLERY MID 1",
+        "GALLERY MID",
+        # Multi-word non-classroom locations
         "PARK GENERATOR SIDE",
-        "PARK GENERATOR",
-        "ASSEMBLY GROUND",
-        "PRINCIPAL ROOM",
-        "ADMISSION ROOM",
+        "BUS PARKING SIDE",
+        "DRESS ROOM BASEMENT",
+        "MINI COMPUTER LAB",
+        "ACADEMIC COORDINATOR",
+        "ADMISSION ROOM C1",
+        "ACTIVITY ROOM C2",
+        "ACTIVITY ROOM C1",
+        "ADMIN ROOM C1",
         "ACCOUNTS ROOM",
-        "ACTIVITY ROOM",
+        "COMPUTER LAB 2",
         "COMPUTER LAB",
-        "TEACHER STAFF",
-        "BUS PARKING",
-        "SCIENCE LAB",
+        "TEACHER STAFF 2",
+        "TEACHER STAFF 1",
+        "SCIENCE LAB 2",
+        "SCIENCE LAB 1",
+        "LIBRARY LAB 2",
+        "LIBRARY LAB 1",
+        "MATH LAB 2",
+        "MATH LAB 1",
+        "DISPERSAL EXIT",
+        "PARK GENERATOR",
+        "PRINCIPAL ROOM",
+        "EDUCOMP ROOM",
         "GERMAN ROOM",
-        "ADMIN ROOM",
-        "DRESS ROOM",
-        "MUSIC ROOM",
-        "ENTRY GATE",
+        "MUSICE ROOM",
+        "ENTRY GATE- 2",
+        "RECEPTION C4",
+        "RECEPTION C3",
+        "RECEPTION C2",
+        "RECEPTION C1",
+        "ART ROOM",
         "PARK SWING",
         "PARK BACK",
         "PARK GATE",
-        "MATH LAB",
-        "ART ROOM",
-        # Single-word locations
+        # Short entries
+        "R 1  3  F",
+        "R 2 F",
+        "R3 M",
+        "L 3 M",
         "POPSICLES",
-        "RECEPTION",
-        "LIBRARY",
-        "EDUCOMP",
     ]
     for loc in location_keywords:
         if loc in msg_upper:
             return loc
 
     # --- Fuzzy single-word matches for common short names ---
-    # Maps user-friendly short words to actual camera mapping keys
-    # Use a list of tuples (not a dict) so multi-word entries are checked
-    # before their single-word substrings (e.g. "MAIN GATE" before "GATE").
+    # Maps user-friendly short words to actual camera mapping keys.
+    # Use a list of tuples so multi-word entries are checked first.
     short_map: list[tuple[str, str]] = [
         # Multi-word first (longest match wins)
         ("MAIN GATE", "ENTRY GATE- 2"),
         ("ENTRY GATE", "ENTRY GATE- 2"),
-        ("STAFF ROOM", "TEACHER STAFF"),
-        ("STAFFROOM", "TEACHER STAFF"),
+        ("STAFF ROOM", "TEACHER STAFF 1"),
+        ("STAFFROOM", "TEACHER STAFF 1"),
+        ("COMPUTER LAB", "COMPUTER LAB"),
+        ("SCIENCE LAB", "SCIENCE LAB 1"),
+        ("MATH LAB", "MATH LAB 1"),
+        ("BUS PARKING", "BUS PARKING SIDE"),
+        ("MUSIC ROOM", "MUSICE ROOM"),
         # Single-word
-        ("LIBRARY", "LIBRARY"),
-        ("RECEPTION", "RECEPTION"),
+        ("LIBRARY", "LIBRARY LAB 1"),
+        ("RECEPTION", "RECEPTION C1"),
         ("PRINCIPAL", "PRINCIPAL ROOM"),
-        ("ADMIN", "ADMIN ROOM"),
-        ("ADMISSION", "ADMISSION ROOM"),
+        ("ADMIN", "ADMIN ROOM C1"),
+        ("ADMISSION", "ADMISSION ROOM C1"),
         ("ACCOUNTS", "ACCOUNTS ROOM"),
-        ("ASSEMBLY", "ASSEMBLY GROUND"),
         ("PARK", "PARK GATE"),
         ("GATE", "ENTRY GATE- 2"),
-        ("MUSIC", "MUSIC ROOM"),
+        ("MUSIC", "MUSICE ROOM"),
         ("GERMAN", "GERMAN ROOM"),
-        ("GALLERY", "SECOND FLOOR GALLERY"),
-        ("DRESS", "DRESS ROOM"),
-        ("ACTIVITY", "ACTIVITY ROOM"),
-        ("SPORTS", "ACTIVITY ROOM"),
-        ("STAFF", "TEACHER STAFF"),
+        ("GALLERY", "GALLERY MID 1"),
+        ("DRESS", "DRESS ROOM BASEMENT"),
+        ("ACTIVITY", "ACTIVITY ROOM C1"),
+        ("SPORTS", "ACTIVITY ROOM C1"),
+        ("STAFF", "TEACHER STAFF 1"),
         ("ACADEMIC", "ACADEMIC COORDINATOR"),
-        ("BUS", "BUS PARKING"),
-        ("PARKING", "BUS PARKING"),
+        ("BUS", "BUS PARKING SIDE"),
+        ("PARKING", "BUS PARKING SIDE"),
+        ("EDUCOMP", "EDUCOMP ROOM"),
+        ("ART", "ART ROOM"),
+        ("DISPERSAL", "DISPERSAL EXIT"),
+        ("POPSICLE", "POPSICLES"),
     ]
     for keyword, location in short_map:
         if re.search(r'\b' + re.escape(keyword) + r'\b', msg_upper):
@@ -2546,13 +2577,13 @@ async def receive_whatsapp_message(request: Request):
     # Bot is publicly accessible — reply to ALL incoming messages (no allowlist check)
 
     # BULK SEND SAFEGUARD: Pause bulk sending while we handle this incoming message
-    await pause_for_bot_reply()
-
-    bot_phone = "bot"
-    await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
-
-    # Wrap all message handling in try/finally to ensure bulk send resumes
+    # NOTE: pause + save_message are INSIDE the try block so that
+    # resume_after_bot_reply() is always called even if save_message raises.
     try:
+        await pause_for_bot_reply()
+
+        bot_phone = "bot"
+        await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
         # Check if a teacher is broadcasting homework to parents of their class
         hw_broadcast = await detect_and_handle_teacher_homework_broadcast(
             sender, message_text, reply_to, media_info,
@@ -2839,12 +2870,13 @@ async def receive_cloud_api_message(request: Request):
                     return {"status": "ok"}
 
     # BULK SEND SAFEGUARD
-    await pause_for_bot_reply()
-
-    bot_phone = "bot"
-    await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
-
+    # NOTE: pause + save_message are INSIDE the try block so that
+    # resume_after_bot_reply() is always called even if save_message raises.
     try:
+        await pause_for_bot_reply()
+
+        bot_phone = "bot"
+        await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
         # Check if a teacher is broadcasting homework to parents of their class
         # NOTE: This MUST run before try_relay_teacher_reply() so broadcast
         # messages ("Summary Sheet - Class 3A", homework, etc.) don't get

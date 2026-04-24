@@ -134,6 +134,17 @@ async def init_db():
                 value TEXT NOT NULL
             );
         """)
+
+        # ------------------------------------------------------------------
+        # Schema migrations — add columns that may not exist in older DBs
+        # ------------------------------------------------------------------
+        try:
+            await db.execute(
+                "ALTER TABLE pi_sheet_students ADD COLUMN class_teacher TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass  # column already exists
+
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()
     finally:

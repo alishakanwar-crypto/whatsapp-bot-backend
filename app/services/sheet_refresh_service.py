@@ -373,7 +373,11 @@ async def fetch_and_update_pi_sheet() -> bool:
         from app.database import get_db
         db = await get_db()
         try:
-            # Update pi_sheet_students metadata with latest grade/teacher mapping
+            # Update pi_sheet_students metadata with latest grade/teacher mapping.
+            # For each grade+teacher pair found in the CSV we update any matching
+            # students in pi_sheet_students so their class_teacher column stays
+            # current.  If no rows match we still count the entry so the log
+            # reflects how many grade rows were processed.
             updated_count = 0
             for row in rows[header_idx + 1:stop_at_row]:
                 if not row or len(row) <= col_grade:
@@ -386,6 +390,14 @@ async def fetch_and_update_pi_sheet() -> bool:
                 if not teacher or teacher.lower() in skip_values:
                     continue
 
+                # Perform the actual UPDATE so students in this grade get the
+                # latest class-teacher name written to the database.
+                await db.execute(
+                    "UPDATE pi_sheet_students SET class_teacher = ?, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE grade = ?",
+                    (teacher, grade),
+                )
                 updated_count += 1
 
             await db.commit()
