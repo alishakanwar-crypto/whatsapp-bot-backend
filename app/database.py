@@ -1,5 +1,10 @@
+import json
+import logging
+
 import aiosqlite
 import os
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "/data/app.db")
 
@@ -147,5 +152,58 @@ async def init_db():
 
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()
+
+        # -----------------------------------------------------------------
+        # Auto-seed agent DVRs & camera mappings when empty.
+        # Fly.io's ephemeral volume wipes the DB on every restart/suspend.
+        # This ensures the Campus Agent always gets valid config on startup.
+        # -----------------------------------------------------------------
+        cursor = await db.execute("SELECT COUNT(*) FROM agent_dvrs")
+        row = await cursor.fetchone()
+        dvr_count = row[0] if row else 0
+
+        if dvr_count == 0:
+            logger.info("agent_dvrs table is empty — auto-seeding from embedded data")
+            try:
+                from app.seed_data import SEED_DVRS, SEED_CAMERA_MAPPING
+
+                for dvr in SEED_DVRS:
+                    await db.execute(
+                        "INSERT INTO agent_dvrs (name, ip, port, username, password, channels) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            dvr.get("name", ""),
+                            dvr.get("ip", ""),
+                            dvr.get("port", 80),
+                            dvr.get("username", "admin"),
+                            dvr.get("password", ""),
+                            dvr.get("channels", 64),
+                        ),
+                    )
+
+                for location, data in SEED_CAMERA_MAPPING.items():
+                    all_cameras = data.get("all_cameras")
+                    await db.execute(
+                        "INSERT OR REPLACE INTO agent_camera_mapping "
+                        "(location, dvr_index, channel, description, cam_type, all_cameras) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            location,
+                            data.get("dvr_index", 0),
+                            data.get("channel", 1),
+                            data.get("description", ""),
+                            data.get("cam_type", ""),
+                            json.dumps(all_cameras) if all_cameras else None,
+                        ),
+                    )
+
+                await db.commit()
+                logger.info(
+                    f"Auto-seeded cloud DB: {len(SEED_DVRS)} DVRs, "
+                    f"{len(SEED_CAMERA_MAPPING)} camera mappings"
+                )
+            except Exception as e:
+                logger.error(f"Auto-seed failed: {e}", exc_info=True)
+
     finally:
         await db.close()
