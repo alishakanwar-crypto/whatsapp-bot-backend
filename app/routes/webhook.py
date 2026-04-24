@@ -2849,10 +2849,16 @@ async def receive_cloud_api_message(request: Request):
     if media_info and media_info.get("type") == "audioMessage":
         cloud_media_id = media_info.get("cloud_media_id", "")
         if cloud_media_id:
-            media_url = await get_cloud_media_url(cloud_media_id)
-            if media_url:
+            # Cloud API CDN URLs require Bearer token auth, so we must
+            # download the audio via download_cloud_media() first and
+            # pass the raw bytes to transcribe_audio().
+            from app.services.whatsapp_service import download_cloud_media
+            audio_bytes, audio_mime = await download_cloud_media(cloud_media_id)
+            if audio_bytes:
                 logger.info(f"Voice message detected from {sender} (Cloud API), transcribing...")
-                transcribed_text = await transcribe_audio(media_url)
+                transcribed_text = await transcribe_audio(
+                    audio_bytes=audio_bytes, content_type=audio_mime,
+                )
                 if transcribed_text:
                     logger.info(f"Voice transcription for {sender}: {transcribed_text[:100]}")
                     message_text = transcribed_text

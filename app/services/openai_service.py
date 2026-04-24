@@ -557,8 +557,18 @@ def generate_fallback_response(user_message: str) -> str:
         )
 
 
-async def transcribe_audio(audio_url: str) -> str | None:
-    """Download an audio file from a URL and transcribe it using OpenAI Whisper.
+async def transcribe_audio(
+    audio_url: str | None = None,
+    audio_bytes: bytes | None = None,
+    content_type: str = "",
+) -> str | None:
+    """Transcribe audio using OpenAI Whisper.
+
+    Accepts either a publicly-accessible *audio_url* (downloaded with a
+    plain GET) **or** pre-downloaded *audio_bytes*.  The latter is
+    required for Cloud API media whose CDN URLs need Bearer
+    authentication — callers should use ``download_cloud_media()``
+    first and pass the bytes here.
 
     Returns the transcribed text, or None on failure.
     """
@@ -568,13 +578,18 @@ async def transcribe_audio(audio_url: str) -> str | None:
         return None
 
     try:
-        # Download the audio file
-        async with httpx.AsyncClient() as http_client:
-            resp = await http_client.get(audio_url, timeout=60.0, follow_redirects=True)
-            if resp.status_code != 200:
-                logger.error(f"Failed to download audio: HTTP {resp.status_code}")
+        if audio_bytes is None:
+            if not audio_url:
+                logger.error("transcribe_audio called with no URL and no bytes")
                 return None
-            audio_bytes = resp.content
+            # Download the audio file (works for publicly-accessible URLs)
+            async with httpx.AsyncClient() as http_client:
+                resp = await http_client.get(audio_url, timeout=60.0, follow_redirects=True)
+                if resp.status_code != 200:
+                    logger.error(f"Failed to download audio: HTTP {resp.status_code}")
+                    return None
+                audio_bytes = resp.content
+                content_type = content_type or resp.headers.get("content-type", "")
 
         if not audio_bytes or len(audio_bytes) < 100:
             logger.error("Downloaded audio is empty or too small")
@@ -582,7 +597,6 @@ async def transcribe_audio(audio_url: str) -> str | None:
 
         # Write to a temp file — Whisper needs a file-like object with a name
         suffix = ".ogg"
-        content_type = resp.headers.get("content-type", "")
         if "mp4" in content_type or "m4a" in content_type:
             suffix = ".m4a"
         elif "mpeg" in content_type or "mp3" in content_type:

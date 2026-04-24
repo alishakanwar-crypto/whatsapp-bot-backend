@@ -176,10 +176,13 @@ def poll_homework_emails_sync() -> None:
         except Exception:
             pass
 
-    # Trim processed IDs set to prevent unbounded memory growth
+    # Trim processed IDs set to prevent unbounded memory growth.
+    # Python set does not preserve insertion order, so slicing removes
+    # arbitrary items (possibly recent ones), risking duplicate
+    # homework broadcasts.  Clearing is safe because the IMAP SINCE
+    # date filter will skip old emails on the next poll cycle anyway.
     if len(_processed_message_ids) > _MAX_PROCESSED_IDS:
-        excess = len(_processed_message_ids) - _MAX_PROCESSED_IDS
-        _processed_message_ids = set(list(_processed_message_ids)[excess:])
+        _processed_message_ids.clear()
 
     # Explicit garbage collection to help prevent OOM
     import gc
