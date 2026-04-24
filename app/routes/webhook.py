@@ -2340,6 +2340,16 @@ def _is_snapshot_request(message_text: str, is_admin: bool = False) -> bool:
     return False
 
 
+async def _is_pi_sheet_parent(sender: str) -> bool:
+    """Check if the sender's phone number is in the PI Sheet (parent database).
+
+    SECURITY: Only PI Sheet parents and admin panel members may receive
+    camera snapshots.  Everyone else is denied.
+    """
+    children = await _lookup_parent_child_class(sender)
+    return len(children) > 0
+
+
 async def detect_and_handle_snapshot_request(
     sender: str, message_text: str, reply_to: str
 ) -> bool:
@@ -2347,6 +2357,7 @@ async def detect_and_handle_snapshot_request(
 
     Admin panel numbers can request ANY camera location (library, reception, etc.).
     Regular parents can only request their child's classroom camera.
+    UNKNOWN numbers (not admin, not in PI Sheet) are DENIED.
 
     Returns True if handled, False if not a snapshot request.
     """
@@ -2354,6 +2365,28 @@ async def detect_and_handle_snapshot_request(
 
     if not _is_snapshot_request(message_text, is_admin=is_admin):
         return False
+
+    # ---- STRICT ACCESS CONTROL ----
+    # Only admin panel members and parents listed in the PI Sheet may
+    # receive camera snapshots.  Everyone else is politely refused.
+    if not is_admin and not await _is_pi_sheet_parent(sender):
+        logger.warning(
+            f"BLOCKED snapshot request from unknown number {sender} "
+            f"(not admin, not in PI Sheet): {message_text}"
+        )
+        await send_whatsapp_message(
+            reply_to,
+            "Dear User,\n\n"
+            "We are unable to process your request. "
+            "Access to live campus photos is restricted to registered parents "
+            "and school administrators only.\n\n"
+            "If you believe this is an error, please contact:\n"
+            "School Helpline / Front Desk: 8800935552\n"
+            "Ms. Harpreet Kaur (Administration Incharge): 9599488106\n\n"
+            "Thank you for your cooperation.\n"
+            "Warm regards,\nPP International School"
+        )
+        return True
 
     from app.routes.agent_ws import is_agent_connected, request_snapshot
     from app.services.whatsapp_service import (
