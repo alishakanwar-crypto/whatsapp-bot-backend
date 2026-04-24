@@ -2086,6 +2086,38 @@ def _extract_location_from_message(message_text: str) -> str | None:
     return None
 
 
+def _find_all_matching_locations(message_text: str) -> list[str]:
+    """Find ALL camera location keys that match a general area name.
+
+    For example, 'reception' matches Reception C1, C2, C3, C4.
+    This queries the cloud DB for all location keys containing the area name.
+    """
+    msg_upper = message_text.upper()
+
+    # Map general area names to prefixes used in the DB keys
+    area_prefixes: list[tuple[str, str]] = [
+        ("RECEPTION", "Reception"),
+        ("GALLERY LIB", "GALLERY LIB"),
+        ("GALLERY MID", "GALLERY MID"),
+        ("ACTIVITY ROOM", "Activity Room"),
+        ("ADMIN ROOM", "Admin Room"),
+        ("ADMISSION ROOM", "Admission Room"),
+    ]
+
+    for search_key, db_prefix in area_prefixes:
+        if search_key in msg_upper:
+            # Return all matching keys from SEED data
+            from app.seed_data import SEED_CAMERA_MAPPING
+            matches = [
+                k for k in SEED_CAMERA_MAPPING
+                if k.startswith(db_prefix)
+            ]
+            if len(matches) > 1:
+                return matches
+
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Classroom Snapshot Request Detection & Handling
 # ---------------------------------------------------------------------------
@@ -2354,11 +2386,14 @@ async def detect_and_handle_snapshot_request(
 
     # --- Determine which location/classroom to capture ---
     location = None
+    multi_locations: list[str] = []  # For multi-camera areas like Reception
 
     if is_admin:
-        # Admin panel: try to extract ANY location (classroom or non-classroom)
+        # Admin panel: check for multi-camera areas first (e.g. Reception -> C1,C2,C3,C4)
+        multi_locations = _find_all_matching_locations(message_text)
+        # Also try to extract a single specific location
         location = _extract_location_from_message(message_text)
-        if not location:
+        if not location and not multi_locations:
             # Admin didn't specify a location — try auto-detecting their child's class
             # (admins can also be parents)
             children = await _lookup_parent_child_class(sender)
@@ -2430,6 +2465,67 @@ async def detect_and_handle_snapshot_request(
                     "Warm regards,\nPP International School"
                 )
                 return True
+
+    # --- Handle multi-camera locations (e.g. Reception C1-C4) ---
+    if multi_locations and is_admin:
+        label = multi_locations[0].rsplit(" ", 1)[0] if multi_locations else location
+        await send_whatsapp_message(
+            reply_to,
+            f"{_greeting(sender)},\n\n"
+            f"Capturing live photo(s) from {label} ({len(multi_locations)} cameras). "
+            f"Please wait a moment..."
+        )
+
+        total_sent = 0
+        for loc in multi_locations:
+            try:
+                result = await request_snapshot(loc, timeout=60.0)
+            except Exception as exc:
+                logger.error(f"Snapshot request raised exception for {loc}: {exc}", exc_info=True)
+                result = {"success": False, "error": str(exc)}
+
+            if result.get("success"):
+                images_list = result.get("images", [])
+                if not images_list and result.get("image_base64"):
+                    images_list = [{
+                        "image_base64": result["image_base64"],
+                        "description": result.get("description", loc),
+                        "filename": result.get("filename", "snapshot.jpg"),
+                    }]
+                for img_data in images_list:
+                    image_b64 = img_data.get("image_base64", "")
+                    if not image_b64:
+                        continue
+                    try:
+                        media_id = await upload_base64_image_cloud(image_b64)
+                        del image_b64
+                        img_data.pop("image_base64", None)
+                        if media_id:
+                            caption = f"Live photo from {loc}\nPP International School"
+                            sent = await send_cloud_media(
+                                reply_to, "image", media_id=media_id, caption=caption,
+                            )
+                            if sent:
+                                total_sent += 1
+                    except Exception as exc:
+                        logger.error(f"Error sending snapshot for {loc}: {exc}", exc_info=True)
+            else:
+                logger.warning(f"Snapshot failed for {loc}: {result.get('error', 'unknown')}")
+
+        if total_sent > 0:
+            logger.info(f"Multi-location snapshot: sent {total_sent} images for {label}")
+            return True
+
+        await send_whatsapp_message(
+            reply_to,
+            f"{_greeting(sender)},\n\n"
+            f"We were unable to capture photos from {label} at this time. "
+            f"The cameras may be temporarily unavailable.\n\n"
+            f"Please try again later.\n\n"
+            "Thank you for your patience.\n"
+            "Warm regards,\nPP International School"
+        )
+        return True
 
     # Send "processing" message
     label = f"{location} camera" if is_admin else f"{location} classroom camera"
