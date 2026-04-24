@@ -119,7 +119,7 @@ async def send_cloud_media(to: str, media_type: str, media_url: str = "", media_
         return False
 
     recipient = to.split("@")[0] if "@" in to else to
-    if not recipient.startswith("91") and len(recipient) == 10:
+    if len(recipient) == 10:
         recipient = "91" + recipient
 
     url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"
@@ -226,7 +226,7 @@ async def send_cloud_template_message(
         return False
 
     recipient = to.split("@")[0] if "@" in to else to
-    if not recipient.startswith("91") and len(recipient) == 10:
+    if len(recipient) == 10:
         recipient = "91" + recipient
 
     url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"
@@ -289,7 +289,7 @@ async def _send_cloud_text(to: str, message: str) -> bool:
     # Strip Green-API chat-id suffix if present
     recipient = to.split("@")[0] if "@" in to else to
     # Ensure country code
-    if not recipient.startswith("91") and len(recipient) == 10:
+    if len(recipient) == 10:
         recipient = "91" + recipient
 
     url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"

@@ -22,7 +22,7 @@ import os
 import time
 import uuid
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketState
 
@@ -39,6 +39,14 @@ _pending_requests: dict[str, asyncio.Future] = {}
 _pending_images: dict[str, list] = {}
 
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
+
+
+async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
+    """Dependency that verifies the agent secret header. Skips if env var not set."""
+    if not AGENT_SECRET:
+        return
+    if x_agent_secret != AGENT_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
 
 def is_agent_connected() -> bool:
@@ -260,7 +268,7 @@ async def push_dvrs(dvrs: list) -> dict:
         return {"success": False, "error": str(e)}
 
 
-@router.post("/api/agent/push-mapping")
+@router.post("/api/agent/push-mapping", dependencies=[Depends(verify_agent_secret)])
 async def push_mapping_endpoint(request: Request):
     """Push camera mapping to the connected Campus Agent."""
     body = await request.json()

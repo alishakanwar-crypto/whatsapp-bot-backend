@@ -318,7 +318,7 @@ async def _broadcast_email_homework(
     sent_count = 0
     fail_count = 0
     for phone in parent_phones:
-        recipient = phone if phone.startswith("91") else f"91{phone}"
+        recipient = f"91{phone}" if len(phone) == 10 else phone
         if get_whatsapp_provider() == "cloud":
             # Use template message (required outside 24-hr window)
             success = await send_cloud_template_message(

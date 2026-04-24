@@ -3,6 +3,11 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from dotenv import load_dotenv
+
+# load_dotenv() MUST run before app module imports that read env vars at module level
+# (e.g. AGENT_SECRET in agent_config.py and agent_ws.py, IMAP/SMTP creds in email services)
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -11,8 +16,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.database import init_db
 from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config
 from app.services.scheduler_service import start_scheduler, stop_scheduler
-
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
