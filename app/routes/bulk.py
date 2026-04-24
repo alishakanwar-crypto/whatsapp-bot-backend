@@ -47,7 +47,10 @@ async def start_bulk_send(request: Request):
             "current_status": get_status(),
         }
 
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
 
     personalized_file = body.get("personalized_file", DEFAULT_PERSONALIZED)
     generic_file = body.get("generic_file", DEFAULT_GENERIC)
@@ -90,7 +93,10 @@ async def start_bulk_send(request: Request):
 @router.post("/stop")
 async def stop_bulk(request: Request):
     """Stop the current bulk send job."""
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     reason = body.get("reason", "Manual stop via API")
 
     state = get_bulk_state()

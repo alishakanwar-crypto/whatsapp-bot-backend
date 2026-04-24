@@ -1,5 +1,6 @@
 """Email service for sending reminder/notification emails to teachers via SMTP."""
 
+import html as html_module
 import os
 import logging
 import smtplib
@@ -43,7 +44,7 @@ def send_email(to_email: str, subject: str, body: str, sender_name: str = "PPIS 
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     # Simple HTML version
-    html_body = body.replace("\n", "<br>")
+    html_body = html_module.escape(body).replace("\n", "<br>")
     html = f"""<html><body style="font-family: Arial, sans-serif; line-height: 1.6;">
 {html_body}
 <br><br>

@@ -5,13 +5,17 @@ the agent_dvrs table is empty (e.g. after a Fly.io restart that
 wipes the ephemeral SQLite database).
 """
 
+import os
+
+_DVR_PASSWORD = os.getenv("DVR_DEFAULT_PASSWORD", "ppis@1980")
+
 SEED_DVRS = [
     {
         "name": "DVR 1",
         "ip": "192.168.0.11",
         "port": 80,
         "username": "admin",
-        "password": "ppis@1980",
+        "password": _DVR_PASSWORD,
         "channels": 64
     },
     {
@@ -19,7 +23,7 @@ SEED_DVRS = [
         "ip": "192.168.0.12",
         "port": 80,
         "username": "admin",
-        "password": "ppis@1980",
+        "password": _DVR_PASSWORD,
         "channels": 64
     },
     {
@@ -27,7 +31,7 @@ SEED_DVRS = [
         "ip": "192.168.0.14",
         "port": 80,
         "username": "admin",
-        "password": "ppis@1980",
+        "password": _DVR_PASSWORD,
         "channels": 64
     }
 ]
