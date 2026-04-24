@@ -623,7 +623,7 @@ async def generate_response(
     conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
     """Generate a response using OpenAI GPT, falling back to fixed replies."""
-    global USE_FALLBACK, FALLBACK_SINCE
+    global USE_FALLBACK, FALLBACK_SINCE, _QUOTA_ALERT_SENT
 
     if USE_FALLBACK:
         # Retry OpenAI periodically in case credits were added

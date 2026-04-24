@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 import uuid
 
@@ -37,7 +38,7 @@ _pending_requests: dict[str, asyncio.Future] = {}
 # Accumulate individual images for v2 protocol (request_id -> list of image dicts)
 _pending_images: dict[str, list] = {}
 
-AGENT_SECRET = "ppis-campus-agent-2026"
+AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
 
 
 def is_agent_connected() -> bool:

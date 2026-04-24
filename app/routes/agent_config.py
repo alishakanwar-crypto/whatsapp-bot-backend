@@ -8,8 +8,9 @@ and receives live updates via WebSocket push.
 
 import json
 import logging
+import os
 
-from fastapi import APIRouter, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 
 from app.database import get_db
@@ -17,12 +18,22 @@ from app.database import get_db
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agent-config", tags=["agent-config"])
 
+AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
+
+
+async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
+    """Dependency that verifies the agent secret header on all config endpoints."""
+    if not AGENT_SECRET:
+        return  # No secret configured — skip auth
+    if x_agent_secret != AGENT_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
+
 
 # ---------------------------------------------------------------------------
 # DVR endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/dvrs")
+@router.get("/dvrs", dependencies=[Depends(verify_agent_secret)])
 async def list_dvrs():
     """Return all DVR entries."""
     db = await get_db()
@@ -37,7 +48,7 @@ async def list_dvrs():
         await db.close()
 
 
-@router.post("/dvrs")
+@router.post("/dvrs", dependencies=[Depends(verify_agent_secret)])
 async def save_dvrs(request: Request):
     """Replace all DVRs with the provided list and push to connected agent."""
     body = await request.json()
@@ -75,7 +86,7 @@ async def save_dvrs(request: Request):
 # Camera mapping endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/camera-mapping")
+@router.get("/camera-mapping", dependencies=[Depends(verify_agent_secret)])
 async def get_camera_mapping():
     """Return the full camera mapping."""
     db = await get_db()
@@ -105,7 +116,7 @@ async def get_camera_mapping():
         await db.close()
 
 
-@router.post("/camera-mapping")
+@router.post("/camera-mapping", dependencies=[Depends(verify_agent_secret)])
 async def save_camera_mapping(request: Request):
     """Replace camera mapping with the provided dict."""
     body = await request.json()
@@ -152,7 +163,7 @@ async def save_camera_mapping(request: Request):
 # Agent settings endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/settings")
+@router.get("/settings", dependencies=[Depends(verify_agent_secret)])
 async def get_agent_settings():
     """Return all agent settings."""
     db = await get_db()
@@ -165,7 +176,7 @@ async def get_agent_settings():
         await db.close()
 
 
-@router.post("/settings")
+@router.post("/settings", dependencies=[Depends(verify_agent_secret)])
 async def save_agent_settings(request: Request):
     """Save/update agent settings."""
     body = await request.json()
@@ -187,7 +198,7 @@ async def save_agent_settings(request: Request):
 # Full config endpoint (used by Campus Agent on startup)
 # ---------------------------------------------------------------------------
 
-@router.get("/full")
+@router.get("/full", dependencies=[Depends(verify_agent_secret)])
 async def get_full_config():
     """Return the complete agent config (DVRs + camera mapping + settings).
 
@@ -234,7 +245,6 @@ async def get_full_config():
             "camera_mapping": camera_mapping,
             "settings": settings,
             "cloud_bot_url": "wss://app-ukmjfzku.fly.dev/ws/agent",
-            "agent_secret": "ppis-campus-agent-2026",
         }
     finally:
         await db.close()
@@ -244,7 +254,7 @@ async def get_full_config():
 # Seed endpoint — populate from existing config.json data
 # ---------------------------------------------------------------------------
 
-@router.post("/seed")
+@router.post("/seed", dependencies=[Depends(verify_agent_secret)])
 async def seed_from_config(request: Request):
     """Seed the cloud DB from a config.json payload (one-time migration)."""
     body = await request.json()
