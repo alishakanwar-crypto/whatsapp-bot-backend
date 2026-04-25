@@ -14,6 +14,23 @@ from app.services.openai_service import TEACHER_DATA
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Admin panel numbers that bypass Class Teacher routing restrictions.
+# Single source of truth — imported by webhook.py and messages.py.
+# ---------------------------------------------------------------------------
+ADMIN_PANEL_NUMBERS: set[str] = {
+    "9971166562",   # Mr. Rahul Gupta
+    "9910034550",   # Ms. Purnima Gupta
+    "9599488106",   # Ms. Harpreet Kaur
+    "8076455224",   # Ms. Alisha Ahuja
+}
+
+
+def is_admin_panel(phone: str) -> bool:
+    """Return True if *phone* is an admin panel number."""
+    return _normalize_phone(phone) in ADMIN_PANEL_NUMBERS
+
+
+# ---------------------------------------------------------------------------
 # Grades that follow the Class Teacher routing system.
 # ALL grades from Popsicles to Grade 12 are included — only the assigned
 # class teacher may communicate with parents of these grades.

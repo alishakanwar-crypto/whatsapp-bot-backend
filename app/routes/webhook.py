@@ -25,6 +25,7 @@ from app.services.openai_service import (
     transcribe_audio,
 )
 from app.services.mother_teacher_service import (
+    is_admin_panel,
     is_mother_teacher_grade,
     get_class_teacher_for_grade,
     is_assigned_class_teacher,
@@ -1990,19 +1991,9 @@ async def detect_and_handle_teacher_homework_broadcast(
 # Their numbers are NEVER shared by the bot (except Harpreet who is also admin).
 # ---------------------------------------------------------------------------
 
-ADMIN_PANEL_NUMBERS: set[str] = {
-    "9971166562",   # Mr. Rahul Gupta
-    "9910034550",   # Ms. Purnima Gupta
-    "9599488106",   # Ms. Harpreet Kaur
-    "8076455224",    # Ms. Alisha Ahuja
-}
-
-
 def _is_admin_panel(sender: str) -> bool:
-    """Check if the sender is an admin panel number (full camera access)."""
-    digits = re.sub(r"\D", "", sender)
-    last10 = digits[-10:] if len(digits) >= 10 else digits
-    return last10 in ADMIN_PANEL_NUMBERS
+    """Check if the sender is an admin panel number (full access)."""
+    return is_admin_panel(sender)
 
 
 def _greeting(sender: str) -> str:
@@ -2319,17 +2310,19 @@ async def enforce_class_teacher_routing(
         return False
 
     # Check if the target teacher is the assigned class teacher for ANY child.
+    any_verifiable = False
     for grade in child_grades:
         if is_assigned_class_teacher(target_teacher_entry, grade):
             return False  # allowed
-        # If grade not in TEACHER_DATA or assigned teacher has no phone, can't verify
         assigned_for_grade = get_class_teacher_for_grade(grade)
-        if not assigned_for_grade:
-            return False
-        if not assigned_for_grade.get("whatsapp", ""):
-            return False
+        if assigned_for_grade and assigned_for_grade.get("whatsapp", ""):
+            any_verifiable = True
 
-    # Target is NOT the assigned class teacher for any child — BLOCK.
+    # If no grade is verifiable (all missing from TEACHER_DATA or no phone), allow
+    if not any_verifiable:
+        return False
+
+    # Target is NOT the assigned class teacher for any verifiable child — BLOCK.
     primary_grade = child_grades[0]
     assigned = get_class_teacher_for_grade(primary_grade)
     teacher_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"

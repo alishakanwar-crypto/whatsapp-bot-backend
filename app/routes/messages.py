@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 from app.database import get_db
 from app.models.schemas import MessageResponse
 from app.services.mother_teacher_service import (
+    is_admin_panel,
     is_teacher_phone_assigned_for_grade,
     log_unauthorized_access,
 )
@@ -13,22 +14,9 @@ from app.services.openai_service import TEACHER_DATA
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/messages", tags=["messages"])
 
-# Admin panel numbers that bypass Mother Teacher access control
-_ADMIN_PANEL_NUMBERS: set[str] = {
-    "9971166562",   # Mr. Rahul Gupta
-    "9910034550",   # Ms. Purnima Gupta
-    "9599488106",   # Ms. Harpreet Kaur
-    "8076455224",   # Ms. Alisha Ahuja
-}
-
-
 def _normalize_phone(phone: str) -> str:
     digits = re.sub(r"\D", "", phone)
     return digits[-10:] if len(digits) >= 10 else digits
-
-
-def _is_admin(phone: str) -> bool:
-    return _normalize_phone(phone) in _ADMIN_PANEL_NUMBERS
 
 
 def _is_teacher(phone: str) -> bool:
@@ -82,7 +70,7 @@ async def list_messages(
       class teacher for one of the parent's children, or an admin.
     """
     # --- Class Teacher access control ---
-    if phone_number and requester_phone and not _is_admin(requester_phone):
+    if phone_number and requester_phone and not is_admin_panel(requester_phone):
         if _is_teacher(requester_phone):
             parent_grades = await _get_parent_grades(phone_number)
             if parent_grades:
