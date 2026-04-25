@@ -242,6 +242,13 @@ async def get_full_config(request: Request):
         setting_rows = await cursor.fetchall()
         settings = {r["key"]: r["value"] for r in setting_rows}
 
+        # Registered faces count (agent uses /api/face/images to download)
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) as count FROM agent_registered_faces"
+        )
+        face_row = await cursor.fetchone()
+        registered_faces = face_row["count"] if face_row else 0
+
         # Derive cloud_bot_url from the request host so the agent always
         # connects back to THIS app, regardless of which Fly.io app URL
         # this code is deployed to.  Env-var override still supported.
@@ -257,6 +264,7 @@ async def get_full_config(request: Request):
             "dvrs": dvrs,
             "camera_mapping": camera_mapping,
             "settings": settings,
+            "registered_faces": registered_faces,
             "cloud_bot_url": cloud_bot_url,
         }
     finally:

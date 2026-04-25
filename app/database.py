@@ -138,6 +138,17 @@ async def init_db():
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS agent_registered_faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT '',
+                angle TEXT NOT NULL DEFAULT 'front',
+                image_data BLOB NOT NULL,
+                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # ------------------------------------------------------------------
