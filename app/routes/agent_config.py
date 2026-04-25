@@ -21,11 +21,20 @@ router = APIRouter(prefix="/api/agent-config", tags=["agent-config"])
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
 
 
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
+
+
 async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
     """Dependency that verifies the agent secret header on all config endpoints."""
     if not AGENT_SECRET:
-        return  # No secret configured — skip auth
-    if x_agent_secret != AGENT_SECRET:
+        if ENVIRONMENT == "development":
+            return  # Allow unauthenticated access in dev mode only
+        raise HTTPException(
+            status_code=503,
+            detail="AGENT_SECRET not configured. Set it in .env to enable agent access.",
+        )
+    import hmac
+    if not hmac.compare_digest(x_agent_secret, AGENT_SECRET):
         raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
 

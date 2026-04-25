@@ -39,13 +39,20 @@ _pending_requests: dict[str, asyncio.Future] = {}
 _pending_images: dict[str, list] = {}
 
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 
 
 async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
-    """Dependency that verifies the agent secret header. Skips if env var not set."""
+    """Dependency that verifies the agent secret header. Required in production."""
     if not AGENT_SECRET:
-        return
-    if x_agent_secret != AGENT_SECRET:
+        if ENVIRONMENT == "development":
+            return
+        raise HTTPException(
+            status_code=503,
+            detail="AGENT_SECRET not configured. Set it in .env to enable agent access.",
+        )
+    import hmac
+    if not hmac.compare_digest(x_agent_secret, AGENT_SECRET):
         raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
 
@@ -111,10 +118,15 @@ async def agent_websocket(websocket: WebSocket):
     """WebSocket endpoint for the PPIS Campus Agent."""
     global _agent_ws
 
-    # Verify agent secret
+    # Verify agent secret (required in production)
     secret = websocket.headers.get("x-agent-secret", "")
-    if AGENT_SECRET and secret != AGENT_SECRET:
-        logger.warning(f"Agent WebSocket rejected: invalid secret")
+    if not AGENT_SECRET and ENVIRONMENT != "development":
+        logger.warning("Agent WebSocket rejected: AGENT_SECRET not configured")
+        await websocket.close(code=4003, reason="AGENT_SECRET not configured on server")
+        return
+    import hmac
+    if AGENT_SECRET and not hmac.compare_digest(secret, AGENT_SECRET):
+        logger.warning("Agent WebSocket rejected: invalid secret")
         await websocket.close(code=4001, reason="Invalid agent secret")
         return
 

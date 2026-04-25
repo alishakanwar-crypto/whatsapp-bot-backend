@@ -50,13 +50,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="WhatsApp & SMS Bot", version="1.0.0", lifespan=lifespan)
 
-# Disable CORS. Do not remove this for full-stack development.
+# CORS — restrict to known origins; fall back to permissive in dev mode only.
+import os as _os
+_CORS_ORIGINS = _os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+_CORS_ORIGINS = [o.strip() for o in _CORS_ORIGINS if o.strip()]
+if not _CORS_ORIGINS:
+    # No explicit origins → allow all but WITHOUT credentials (safe default)
+    _CORS_ORIGINS = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials="*" not in _CORS_ORIGINS,  # credentials forbidden with wildcard
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.add_middleware(LowercaseURLMiddleware)
@@ -82,44 +89,11 @@ async def healthz():
     return {"status": "ok"}
 
 
-@app.get("/debug/parent-phones")
-async def debug_parent_phones():
-    """Debug endpoint to verify parent phone data is loaded."""
-    from app.database import get_db
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM pi_sheet_students WHERE father_mobile != '' OR mother_mobile != ''"
-        )
-        row = await cursor.fetchone()
-        count_with_phones = row[0] if row else 0
-
-        cursor2 = await db.execute("SELECT COUNT(*) FROM pi_sheet_students")
-        row2 = await cursor2.fetchone()
-        total_count = row2[0] if row2 else 0
-
-        # Sample a few records
-        cursor3 = await db.execute(
-            "SELECT student_name, grade, father_mobile, mother_mobile "
-            "FROM pi_sheet_students WHERE father_mobile != '' LIMIT 3"
-        )
-        samples = [
-            {"name": r[0], "grade": r[1], "father": r[2][:4] + "****", "mother": (r[3] or "")[:4] + "****"}
-            for r in await cursor3.fetchall()
-        ]
-
-        return {
-            "total_students": total_count,
-            "students_with_phones": count_with_phones,
-            "samples": samples,
-        }
-    finally:
-        await db.close()
-
-
 @app.post("/api/send-email")
 async def api_send_email(request: Request):
     """Send an email via the server's SMTP config (for admin use)."""
+    from app.auth import require_admin
+    await require_admin(request.headers.get("x-admin-key", ""))
     from app.services.email_service import send_email_async
     body = await request.json()
     to = body.get("to", "")

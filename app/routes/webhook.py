@@ -166,6 +166,8 @@ BOT_ENABLED = True  # Re-enabled per user request
 
 @router.post("/webhook/bot-enabled")
 async def set_bot_enabled(request: Request):
+    from app.auth import require_admin
+    await require_admin(request.headers.get("x-admin-key", ""))
     global BOT_ENABLED
     body = await request.json()
     BOT_ENABLED = bool(body.get("enabled", False))
@@ -2685,9 +2687,30 @@ async def detect_and_handle_snapshot_request(
         return True
 
 
+# Green API public IPs (https://green-api.com/en/docs/api/receiving/technology-webhook-endpoint/)
+_GREEN_API_IPS = {
+    "46.101.109.139", "51.250.12.167", "51.250.84.44", "51.250.95.149",
+    "89.169.137.216", "158.160.49.84", "165.22.93.202", "167.172.162.71",
+    "104.248.252.93", "158.160.139.176", "64.226.111.11", "207.154.255.195",
+}
+_GREEN_API_WEBHOOK_TOKEN = os.getenv("GREEN_API_WEBHOOK_TOKEN", "")
+
+
 @router.post("/webhook")
 async def receive_whatsapp_message(request: Request):
     """Handle incoming WhatsApp messages from Green API webhook."""
+    # --- Verify request origin ---
+    client_ip = request.client.host if request.client else ""
+    if _GREEN_API_WEBHOOK_TOKEN:
+        auth = request.headers.get("authorization", "")
+        import hmac
+        if not hmac.compare_digest(auth, f"Bearer {_GREEN_API_WEBHOOK_TOKEN}"):
+            logger.warning(f"Green API webhook rejected: bad token from {client_ip}")
+            return Response(content="Unauthorized", status_code=401)
+    elif client_ip and client_ip not in _GREEN_API_IPS and client_ip not in ("127.0.0.1", "::1"):
+        logger.warning(f"Green API webhook rejected: unknown IP {client_ip}")
+        return Response(content="Forbidden", status_code=403)
+
     if not BOT_ENABLED:
         return {"status": "ok", "note": "bot disabled"}
     body = await request.json()
@@ -2901,6 +2924,8 @@ async def receive_whatsapp_message(request: Request):
 @router.post("/webhook/send-image")
 async def send_image_to_chat(request: Request):
     """Send an image to a WhatsApp chat (individual or group)."""
+    from app.auth import require_admin
+    await require_admin(request.headers.get("x-admin-key", ""))
     body = await request.json()
     chat_id = body.get("chatId", "")
     image_url = body.get("imageUrl", "")
@@ -2948,7 +2973,7 @@ async def receive_sms(request: Request):
 # Meta Cloud API Webhook — verification (GET) and incoming messages (POST)
 # ---------------------------------------------------------------------------
 
-CLOUD_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "ppis_bot_verify_2026")
+CLOUD_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
 
 
 @router.get("/webhook/cloud")
@@ -2959,7 +2984,11 @@ async def verify_cloud_webhook(request: Request):
     token = params.get("hub.verify_token", "")
     challenge = params.get("hub.challenge", "")
 
-    if mode == "subscribe" and token == CLOUD_VERIFY_TOKEN:
+    if not CLOUD_VERIFY_TOKEN:
+        logger.warning("Cloud API webhook verification failed: WHATSAPP_WEBHOOK_VERIFY_TOKEN not set")
+        return Response(content="Verify token not configured", status_code=503)
+    import hmac
+    if mode == "subscribe" and hmac.compare_digest(token, CLOUD_VERIFY_TOKEN):
         logger.info("Cloud API webhook verified successfully")
         # Meta expects the hub.challenge echoed back as an integer
         return Response(content=str(challenge), media_type="text/plain", status_code=200)
