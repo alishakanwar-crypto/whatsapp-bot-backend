@@ -244,7 +244,9 @@ async def get_full_config():
             "dvrs": dvrs,
             "camera_mapping": camera_mapping,
             "settings": settings,
-            "cloud_bot_url": "wss://app-lylftduj.fly.dev/ws/agent",
+            "cloud_bot_url": os.environ.get(
+                "CLOUD_BOT_WS_URL", "wss://app-ypdweegy.fly.dev/ws/agent"
+            ),
         }
     finally:
         await db.close()
