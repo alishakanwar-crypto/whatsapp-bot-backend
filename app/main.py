@@ -133,7 +133,18 @@ async def api_send_email(request: Request):
 
 @app.post("/api/send-whatsapp")
 async def api_send_whatsapp(request: Request):
-    """Send a WhatsApp message (used by Campus Agent for attendance notifications)."""
+    """Send a WhatsApp message (used by Campus Agent for attendance notifications).
+
+    Requires X-Agent-Secret header when AGENT_SECRET is configured.
+    """
+    import os
+    from fastapi import HTTPException
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
+
     from app.services.whatsapp_service import send_whatsapp_message
     body = await request.json()
     phone = body.get("phone", "")
