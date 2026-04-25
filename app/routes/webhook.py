@@ -2322,6 +2322,10 @@ async def enforce_class_teacher_routing(
     for grade in child_grades:
         if is_assigned_class_teacher(target_teacher_entry, grade):
             return False  # allowed
+        # If the assigned class teacher has no phone, we can't verify — don't block
+        assigned_for_grade = get_class_teacher_for_grade(grade)
+        if assigned_for_grade and not assigned_for_grade.get("whatsapp", ""):
+            return False
 
     # Target is NOT the assigned class teacher for any child — BLOCK.
     primary_grade = child_grades[0]
