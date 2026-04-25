@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query
 
 from app.database import get_db
 from app.services.mother_teacher_service import (
-    MOTHER_TEACHER_GRADES,
+    get_mother_teacher_grades,
     get_class_teacher_for_grade,
 )
 
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/mother-teacher", tags=["mother-teacher"])
 async def list_mother_teacher_grades():
     """Return all grades under the Mother Teacher system with their assigned teachers."""
     result = []
-    for grade in sorted(MOTHER_TEACHER_GRADES):
+    for grade in sorted(get_mother_teacher_grades()):
         entry = get_class_teacher_for_grade(grade)
         teacher_name = entry["teacher"].split("/")[0].strip() if entry else "Unknown"
         teacher_phone = entry.get("whatsapp", "") if entry else ""

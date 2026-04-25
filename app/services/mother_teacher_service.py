@@ -17,14 +17,18 @@ logger = logging.getLogger(__name__)
 # Grades that follow the Class Teacher routing system.
 # ALL grades from Popsicles to Grade 12 are included — only the assigned
 # class teacher may communicate with parents of these grades.
-# The set is derived dynamically from TEACHER_DATA so it stays in sync.
+# Computed on each call so it stays in sync after periodic TEACHER_DATA refresh.
 # ---------------------------------------------------------------------------
-MOTHER_TEACHER_GRADES: set[str] = {entry["grade"] for entry in TEACHER_DATA}
+
+
+def get_mother_teacher_grades() -> set[str]:
+    """Return the current set of grades that follow Class Teacher routing."""
+    return {entry["grade"] for entry in TEACHER_DATA}
 
 
 def is_mother_teacher_grade(grade: str) -> bool:
     """Return True if *grade* follows the Mother Teacher routing rule."""
-    return grade in MOTHER_TEACHER_GRADES
+    return grade in get_mother_teacher_grades()
 
 
 def get_class_teacher_for_grade(grade: str) -> dict | None:

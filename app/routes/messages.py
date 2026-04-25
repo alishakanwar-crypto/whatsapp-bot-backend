@@ -5,10 +5,10 @@ from fastapi import APIRouter, Query
 from app.database import get_db
 from app.models.schemas import MessageResponse
 from app.services.mother_teacher_service import (
+    get_mother_teacher_grades,
     is_mother_teacher_grade,
     is_teacher_phone_assigned_for_grade,
     log_unauthorized_access,
-    MOTHER_TEACHER_GRADES,
 )
 from app.services.openai_service import TEACHER_DATA
 
@@ -56,7 +56,8 @@ async def _get_parent_mt_grades(parent_phone: str) -> list[str]:
             (f"%{last10}%", f"%{last10}%"),
         )
         rows = await cursor.fetchall()
-        return [row[0] for row in rows if row[0] in MOTHER_TEACHER_GRADES]
+        mt_grades = get_mother_teacher_grades()
+        return [row[0] for row in rows if row[0] in mt_grades]
     finally:
         await db.close()
 
