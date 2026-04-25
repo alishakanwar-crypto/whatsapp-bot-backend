@@ -51,7 +51,8 @@ async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
             status_code=503,
             detail="AGENT_SECRET not configured. Set it in .env to enable agent access.",
         )
-    if x_agent_secret != AGENT_SECRET:
+    import hmac
+    if not hmac.compare_digest(x_agent_secret, AGENT_SECRET):
         raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
 
@@ -123,7 +124,8 @@ async def agent_websocket(websocket: WebSocket):
         logger.warning("Agent WebSocket rejected: AGENT_SECRET not configured")
         await websocket.close(code=4003, reason="AGENT_SECRET not configured on server")
         return
-    if AGENT_SECRET and secret != AGENT_SECRET:
+    import hmac
+    if AGENT_SECRET and not hmac.compare_digest(secret, AGENT_SECRET):
         logger.warning("Agent WebSocket rejected: invalid secret")
         await websocket.close(code=4001, reason="Invalid agent secret")
         return

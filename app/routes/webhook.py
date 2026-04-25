@@ -2703,7 +2703,8 @@ async def receive_whatsapp_message(request: Request):
     client_ip = request.client.host if request.client else ""
     if _GREEN_API_WEBHOOK_TOKEN:
         auth = request.headers.get("authorization", "")
-        if auth != f"Bearer {_GREEN_API_WEBHOOK_TOKEN}":
+        import hmac
+        if not hmac.compare_digest(auth, f"Bearer {_GREEN_API_WEBHOOK_TOKEN}"):
             logger.warning(f"Green API webhook rejected: bad token from {client_ip}")
             return Response(content="Unauthorized", status_code=401)
     elif client_ip and client_ip not in _GREEN_API_IPS and client_ip not in ("127.0.0.1", "::1"):
@@ -2986,7 +2987,8 @@ async def verify_cloud_webhook(request: Request):
     if not CLOUD_VERIFY_TOKEN:
         logger.warning("Cloud API webhook verification failed: WHATSAPP_WEBHOOK_VERIFY_TOKEN not set")
         return Response(content="Verify token not configured", status_code=503)
-    if mode == "subscribe" and token == CLOUD_VERIFY_TOKEN:
+    import hmac
+    if mode == "subscribe" and hmac.compare_digest(token, CLOUD_VERIFY_TOKEN):
         logger.info("Cloud API webhook verified successfully")
         return Response(content=challenge, media_type="text/plain")
 
