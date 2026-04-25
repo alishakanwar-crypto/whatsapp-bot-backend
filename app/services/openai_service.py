@@ -241,7 +241,7 @@ def lookup_transport(query: str) -> str | None:
     # 3. General transport query — return route summary
     lines = ["*PPIS Transport Routes (Summer 2026-27)*\n"]
     lines.append(f"Total Routes: {len(TRANSPORT_DATA)} | Total Students: {sum(len(r['students']) for r in TRANSPORT_DATA.values())}\n")
-    for rname in sorted(TRANSPORT_DATA.keys(), key=lambda x: int(re.search(r'\d+', x).group())):
+    for rname in sorted(TRANSPORT_DATA.keys(), key=lambda x: int(m.group()) if (m := re.search(r'\d+', x)) else 999):
         r = TRANSPORT_DATA[rname]
         # Summarise areas covered
         areas = set()

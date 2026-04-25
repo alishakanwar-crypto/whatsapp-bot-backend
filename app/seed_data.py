@@ -7,7 +7,12 @@ wipes the ephemeral SQLite database).
 
 import os
 
-_DVR_PASSWORD = os.getenv("DVR_DEFAULT_PASSWORD", "ppis@1980")
+_DVR_PASSWORD = os.getenv("DVR_DEFAULT_PASSWORD", "")
+if not _DVR_PASSWORD:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "DVR_DEFAULT_PASSWORD env var not set — DVR seed entries will have empty passwords"
+    )
 
 SEED_DVRS = [
     {
@@ -839,18 +844,6 @@ SEED_CAMERA_MAPPING = {
         "dvr_index": 1,
         "channel": 49,
         "description": "R 1  3  F",
-        "cam_type": ""
-    },
-    "Reception C4": {
-        "dvr_index": 1,
-        "channel": 52,
-        "description": "Reception C4",
-        "cam_type": ""
-    },
-    "Reception C3": {
-        "dvr_index": 1,
-        "channel": 53,
-        "description": "Reception C3",
         "cam_type": ""
     },
     "Reception C1": {

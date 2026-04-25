@@ -208,10 +208,12 @@ async def save_agent_settings(request: Request):
 # ---------------------------------------------------------------------------
 
 @router.get("/full", dependencies=[Depends(verify_agent_secret)])
-async def get_full_config():
+async def get_full_config(request: Request):
     """Return the complete agent config (DVRs + camera mapping + settings).
 
     The Campus Agent calls this on startup to load its config from the cloud.
+    The cloud_bot_url is derived from the request host so it always points
+    to the correct app — no hardcoded URLs that go stale after redeployment.
     """
     db = await get_db()
     try:
@@ -249,11 +251,22 @@ async def get_full_config():
         setting_rows = await cursor.fetchall()
         settings = {r["key"]: r["value"] for r in setting_rows}
 
+        # Derive cloud_bot_url from the request host so the agent always
+        # connects back to THIS app, regardless of which Fly.io app URL
+        # this code is deployed to.  Env-var override still supported.
+        cloud_bot_url = os.environ.get("CLOUD_BOT_WS_URL", "")
+        if not cloud_bot_url:
+            host = request.headers.get("host", "")
+            if host:
+                cloud_bot_url = f"wss://{host}/ws/agent"
+            else:
+                cloud_bot_url = "wss://app-ypdweegy.fly.dev/ws/agent"
+
         return {
             "dvrs": dvrs,
             "camera_mapping": camera_mapping,
             "settings": settings,
-            "cloud_bot_url": "wss://app-lylftduj.fly.dev/ws/agent",
+            "cloud_bot_url": cloud_bot_url,
         }
     finally:
         await db.close()

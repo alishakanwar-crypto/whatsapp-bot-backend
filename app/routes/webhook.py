@@ -2990,7 +2990,8 @@ async def verify_cloud_webhook(request: Request):
     import hmac
     if mode == "subscribe" and hmac.compare_digest(token, CLOUD_VERIFY_TOKEN):
         logger.info("Cloud API webhook verified successfully")
-        return Response(content=challenge, media_type="text/plain")
+        # Meta expects the hub.challenge echoed back as an integer
+        return Response(content=str(challenge), media_type="text/plain", status_code=200)
 
     logger.warning(f"Cloud API webhook verification failed: mode={mode}")
     return Response(content="Forbidden", status_code=403)
