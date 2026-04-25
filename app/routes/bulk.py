@@ -11,7 +11,9 @@ import asyncio
 import logging
 import os
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
+
+from app.auth import require_admin
 
 from app.services.bulk_service import (
     run_bulk_send,
@@ -22,7 +24,11 @@ from app.services.bulk_service import (
 from app.services.sheet_refresh_service import fetch_and_update_teacher_data
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/bulk", tags=["bulk"])
+router = APIRouter(
+    prefix="/bulk",
+    tags=["bulk"],
+    dependencies=[Depends(require_admin)],
+)
 
 # Default file paths
 DEFAULT_PERSONALIZED = os.getenv("BULK_PERSONALIZED_FILE", "/data/personalized_parents.json")

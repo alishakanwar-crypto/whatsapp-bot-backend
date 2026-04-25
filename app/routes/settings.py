@@ -1,13 +1,18 @@
 import json
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.database import get_db
+from app.auth import require_admin
 from app.models.schemas import SettingsUpdate, SettingsResponse
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/settings", tags=["settings"])
+router = APIRouter(
+    prefix="/api/settings",
+    tags=["settings"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 @router.get("/", response_model=SettingsResponse)

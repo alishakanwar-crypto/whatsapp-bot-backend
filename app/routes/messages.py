@@ -1,11 +1,17 @@
 import logging
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+
+from app.auth import require_admin
 
 from app.database import get_db
 from app.models.schemas import MessageResponse
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/messages", tags=["messages"])
+router = APIRouter(
+    prefix="/api/messages",
+    tags=["messages"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 @router.get("/", response_model=list[MessageResponse])

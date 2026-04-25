@@ -1,11 +1,17 @@
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.auth import require_admin
 
 from app.database import get_db
 from app.models.schemas import AllowlistEntry, AllowlistResponse
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/allowlist", tags=["allowlist"])
+router = APIRouter(
+    prefix="/api/allowlist",
+    tags=["allowlist"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 @router.get("/", response_model=list[AllowlistResponse])
