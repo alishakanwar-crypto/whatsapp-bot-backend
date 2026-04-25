@@ -7,7 +7,12 @@ wipes the ephemeral SQLite database).
 
 import os
 
-_DVR_PASSWORD = os.getenv("DVR_DEFAULT_PASSWORD", "ppis@1980")
+_DVR_PASSWORD = os.getenv("DVR_DEFAULT_PASSWORD", "")
+if not _DVR_PASSWORD:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "DVR_DEFAULT_PASSWORD env var not set — DVR seed entries will have empty passwords"
+    )
 
 SEED_DVRS = [
     {

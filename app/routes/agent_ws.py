@@ -113,7 +113,7 @@ async def agent_websocket(websocket: WebSocket):
 
     # Verify agent secret
     secret = websocket.headers.get("x-agent-secret", "")
-    if secret != AGENT_SECRET:
+    if AGENT_SECRET and secret != AGENT_SECRET:
         logger.warning(f"Agent WebSocket rejected: invalid secret")
         await websocket.close(code=4001, reason="Invalid agent secret")
         return
