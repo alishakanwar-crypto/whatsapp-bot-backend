@@ -131,6 +131,19 @@ async def api_send_email(request: Request):
     return {"status": "ok" if success else "error", "sent_to": to}
 
 
+@app.post("/api/send-whatsapp")
+async def api_send_whatsapp(request: Request):
+    """Send a WhatsApp message (used by Campus Agent for attendance notifications)."""
+    from app.services.whatsapp_service import send_whatsapp_message
+    body = await request.json()
+    phone = body.get("phone", "")
+    message = body.get("message", "")
+    if not phone or not message:
+        return {"status": "error", "error": "Missing phone or message"}
+    success = await send_whatsapp_message(phone, message)
+    return {"status": "ok" if success else "error", "sent_to": phone}
+
+
 @app.get("/privacy-policy")
 async def privacy_policy():
     from fastapi.responses import HTMLResponse
