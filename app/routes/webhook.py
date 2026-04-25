@@ -1080,6 +1080,7 @@ async def try_direct_message(
     target_phone: str | None = None
     target_email: str | None = None
     target_name: str = recipient_clean  # fallback display name
+    resolved_teacher_entry: dict | None = None  # TEACHER_DATA entry, if found
 
     # 0. Check if recipient is already an email address
     if re.match(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", recipient_clean):
@@ -1089,6 +1090,7 @@ async def try_direct_message(
             if t.get("email", "").lower() == recipient_clean.lower():
                 target_name = t["teacher"].split("/")[0].strip()
                 target_phone = t.get("whatsapp", "")
+                resolved_teacher_entry = t
                 break
         if target_name == recipient_clean:
             # Use the part before @ as a display name
@@ -1103,6 +1105,7 @@ async def try_direct_message(
             if entry:
                 target_name = entry["teacher"].split("/")[0].strip()
                 target_email = entry.get("email", "")
+                resolved_teacher_entry = entry
 
     if not target_phone and not target_email:
         # 2. Look up by name / grade in TEACHER_DATA
@@ -1111,9 +1114,11 @@ async def try_direct_message(
             target_phone = entry.get("whatsapp", "")
             target_email = entry.get("email", "")
             target_name = entry["teacher"].split("/")[0].strip()
+            resolved_teacher_entry = entry
 
     if not target_phone and not target_email:
-        # 3. Check admin staff (Harpreet Kaur)
+        # 3. Check admin staff (Harpreet Kaur) — not a class teacher,
+        #    so resolved_teacher_entry stays None (routing check skipped).
         admin = _lookup_admin_staff(recipient_clean)
         if admin:
             target_phone = admin.get("whatsapp", "")
@@ -1136,7 +1141,6 @@ async def try_direct_message(
     logger.info(f"Resolved recipient to {target_name} (phone={target_phone}, email={target_email})")
 
     # --- Class Teacher routing: block DMs to non-assigned teachers ---
-    resolved_teacher_entry = lookup_person_by_name_or_phone(target_name)
     if resolved_teacher_entry:
         blocked = await enforce_class_teacher_routing(
             sender, resolved_teacher_entry, message_text, reply_to,
