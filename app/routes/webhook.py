@@ -404,8 +404,7 @@ async def try_handle_pending_query(
     original_query = pending["original_query"]
     grade = teacher_entry["grade"]
 
-    # Mother Teacher routing: for early classes, always route to the
-    # assigned class teacher regardless of what grade was mentioned.
+    # Class Teacher routing: always route to the assigned class teacher.
     if is_mother_teacher_grade(grade):
         assigned = get_class_teacher_for_grade(grade)
         if assigned:
@@ -582,43 +581,35 @@ async def forward_to_teachers_and_confirm(
         child = parent_children[0]
         parent_label = f"Parent of {child['student_name']} ({child['grade']})"
 
-        # Mother Teacher routing: only filter teachers whose own grade is an
-        # MT grade.  Teachers of non-MT grades pass through unmodified so that
-        # parents with children in both MT and non-MT grades aren't over-blocked.
-        # We iterate ALL child grades so parents with multiple children aren't
-        # blocked from reaching any of their assigned class teachers.
-        mt_grades = [c["grade"] for c in parent_children if is_mother_teacher_grade(c["grade"])]
-        if mt_grades:
-            mt_teachers = [t for t in teachers if is_mother_teacher_grade(t.get("grade", ""))]
-            non_mt_teachers = [t for t in teachers if not is_mother_teacher_grade(t.get("grade", ""))]
+        # Class Teacher routing: only the assigned class teacher(s) for the
+        # parent's children may receive forwarded messages.  We collect
+        # allowed teachers across ALL child grades so parents with multiple
+        # children can reach each child's class teacher.
+        child_grades = [c["grade"] for c in parent_children]
+        allowed_ids: set[int] = set()
+        for g in child_grades:
+            for t in filter_teachers_for_mother_teacher(teachers, g):
+                allowed_ids.add(id(t))
+        blocked = [t for t in teachers if id(t) not in allowed_ids]
+        teachers = [t for t in teachers if id(t) in allowed_ids]
 
-            # Collect allowed MT teachers across ALL child grades
-            allowed_mt_ids: set[int] = set()
-            for g in mt_grades:
-                for t in filter_teachers_for_mother_teacher(mt_teachers, g):
-                    allowed_mt_ids.add(id(t))
-            filtered_mt = [t for t in mt_teachers if id(t) in allowed_mt_ids]
-            blocked_mt = [t for t in mt_teachers if id(t) not in allowed_mt_ids]
-            teachers = filtered_mt + non_mt_teachers
+        for t in blocked:
+            await log_blocked_message(
+                sender_phone=sender,
+                child_grade=t.get("grade", child_grades[0]),
+                target_teacher_name=t["teacher"].split("/")[0].strip(),
+                target_teacher_phone=t.get("whatsapp", ""),
+                message_snippet=message_text,
+                reason="parent_tried_non_class_teacher_forward",
+            )
 
-            # Log every blocked MT-grade teacher target
-            for t in blocked_mt:
-                await log_blocked_message(
-                    sender_phone=sender,
-                    child_grade=t.get("grade", mt_grades[0]),
-                    target_teacher_name=t["teacher"].split("/")[0].strip(),
-                    target_teacher_phone=t.get("whatsapp", ""),
-                    message_snippet=message_text,
-                    reason="parent_tried_non_class_teacher_forward",
-                )
-
-            if not teachers:
-                assigned = get_class_teacher_for_grade(mt_grades[0])
-                t_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"
-                from app.services.openai_service import _is_hindi
-                auto_reply = build_auto_reply(t_name, mt_grades[0], is_hindi=_is_hindi(message_text))
-                await send_whatsapp_message(reply_to, auto_reply)
-                return
+        if not teachers:
+            assigned = get_class_teacher_for_grade(child_grades[0])
+            t_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"
+            from app.services.openai_service import _is_hindi
+            auto_reply = build_auto_reply(t_name, child_grades[0], is_hindi=_is_hindi(message_text))
+            await send_whatsapp_message(reply_to, auto_reply)
+            return
     else:
         parent_label = f"A parent (phone: ...{sender[-4:]})"
 
@@ -1144,10 +1135,10 @@ async def try_direct_message(
 
     logger.info(f"Resolved recipient to {target_name} (phone={target_phone}, email={target_email})")
 
-    # --- Mother Teacher routing: block DMs to non-class-teachers for early classes ---
+    # --- Class Teacher routing: block DMs to non-assigned teachers ---
     resolved_teacher_entry = lookup_person_by_name_or_phone(target_name)
     if resolved_teacher_entry:
-        blocked = await enforce_mother_teacher_routing(
+        blocked = await enforce_class_teacher_routing(
             sender, resolved_teacher_entry, message_text, reply_to,
         )
         if blocked:
@@ -2292,24 +2283,23 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
         await db.close()
 
 
-async def _get_mother_teacher_grades_for_parent(sender_phone: str) -> list[str]:
-    """Return the list of Mother Teacher grades linked to *sender_phone*.
+async def _get_child_grades_for_parent(sender_phone: str) -> list[str]:
+    """Return the list of child grades linked to *sender_phone*.
 
-    Only returns grades that are in MOTHER_TEACHER_GRADES.  Empty list means
-    the parent has no children in early classes (or is not in the PI Sheet).
+    Empty list means the parent is not in the PI Sheet.
     """
     children = await _lookup_parent_child_class(sender_phone)
-    return [c["grade"] for c in children if is_mother_teacher_grade(c["grade"])]
+    return [c["grade"] for c in children]
 
 
-async def enforce_mother_teacher_routing(
+async def enforce_class_teacher_routing(
     sender: str,
     target_teacher_entry: dict | None,
     message_text: str,
     reply_to: str,
 ) -> bool:
-    """Check Mother Teacher routing and block if the parent is trying to reach
-    the wrong teacher.
+    """Enforce Class Teacher routing — block if the parent is trying to reach
+    a teacher who is not the assigned class teacher for any of their children.
 
     Returns True if the message was BLOCKED (and an auto-reply was sent).
     Returns False if the message should proceed normally.
@@ -2317,25 +2307,17 @@ async def enforce_mother_teacher_routing(
     if target_teacher_entry is None:
         return False
 
-    # If the target teacher's own grade is NOT a Mother Teacher grade,
-    # allow the message — MT restrictions only apply within MT grades.
-    target_grade = target_teacher_entry.get("grade", "")
-    if not is_mother_teacher_grade(target_grade):
+    child_grades = await _get_child_grades_for_parent(sender)
+    if not child_grades:
         return False
 
-    mt_grades = await _get_mother_teacher_grades_for_parent(sender)
-    if not mt_grades:
-        return False
-
-    # The parent has at least one child in a Mother Teacher grade.
-    # Check if the target teacher is the assigned class teacher for ANY of them.
-    for grade in mt_grades:
+    # Check if the target teacher is the assigned class teacher for ANY child.
+    for grade in child_grades:
         if is_assigned_class_teacher(target_teacher_entry, grade):
-            return False  # allowed — target IS the class teacher
+            return False  # allowed
 
-    # Target teaches an MT grade but is NOT the assigned class teacher — BLOCK.
-    # Use the first Mother Teacher grade for the auto-reply.
-    primary_grade = mt_grades[0]
+    # Target is NOT the assigned class teacher for any child — BLOCK.
+    primary_grade = child_grades[0]
     assigned = get_class_teacher_for_grade(primary_grade)
     teacher_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"
 

@@ -5,8 +5,6 @@ from fastapi import APIRouter, Query
 from app.database import get_db
 from app.models.schemas import MessageResponse
 from app.services.mother_teacher_service import (
-    get_mother_teacher_grades,
-    is_mother_teacher_grade,
     is_teacher_phone_assigned_for_grade,
     log_unauthorized_access,
 )
@@ -33,20 +31,20 @@ def _is_admin(phone: str) -> bool:
     return _normalize_phone(phone) in _ADMIN_PANEL_NUMBERS
 
 
-def _requester_teaches_mt_grade(phone: str) -> bool:
-    """Return True if *phone* belongs to a teacher whose grade is a Mother Teacher grade."""
+def _is_teacher(phone: str) -> bool:
+    """Return True if *phone* belongs to a known teacher in TEACHER_DATA."""
     norm = _normalize_phone(phone)
     for entry in TEACHER_DATA:
         t_phone = entry.get("whatsapp", "")
         if not t_phone:
             continue
         if _normalize_phone(t_phone) == norm:
-            return is_mother_teacher_grade(entry.get("grade", ""))
+            return True
     return False
 
 
-async def _get_parent_mt_grades(parent_phone: str) -> list[str]:
-    """Return Mother Teacher grades linked to *parent_phone* via pi_sheet_students."""
+async def _get_parent_grades(parent_phone: str) -> list[str]:
+    """Return child grades linked to *parent_phone* via pi_sheet_students."""
     last10 = _normalize_phone(parent_phone)
     db = await get_db()
     try:
@@ -56,8 +54,7 @@ async def _get_parent_mt_grades(parent_phone: str) -> list[str]:
             (f"%{last10}%", f"%{last10}%"),
         )
         rows = await cursor.fetchall()
-        mt_grades = get_mother_teacher_grades()
-        return [row[0] for row in rows if row[0] in mt_grades]
+        return [row[0] for row in rows]
     finally:
         await db.close()
 
@@ -76,36 +73,34 @@ async def list_messages(
 ):
     """Get message history with optional filters.
 
-    Access control for Mother Teacher grades (Nursery to Class 2):
+    Access control (Class Teacher system):
     - Admin panel users can view all messages.
-    - Non-admin teachers can only view messages of their own assigned class.
+    - Teachers can only view messages of parents whose child is in their
+      assigned class.
     - If *requester_phone* is provided and the queried *phone_number* belongs
-      to a parent of a Mother Teacher grade, the request is blocked unless the
-      requester is the assigned class teacher or an admin.
+      to a parent, the request is blocked unless the requester is the assigned
+      class teacher for one of the parent's children, or an admin.
     """
-    # --- Mother Teacher access control ---
-    # Only restrict access when the requester is a teacher whose own grade is
-    # an MT grade but is NOT the assigned class teacher.  Non-MT-grade teachers
-    # are allowed through (the parent may also have children in their grade).
+    # --- Class Teacher access control ---
     if phone_number and requester_phone and not _is_admin(requester_phone):
-        if _requester_teaches_mt_grade(requester_phone):
-            parent_mt_grades = await _get_parent_mt_grades(phone_number)
-            if parent_mt_grades:
+        if _is_teacher(requester_phone):
+            parent_grades = await _get_parent_grades(phone_number)
+            if parent_grades:
                 requester_authorized = any(
                     is_teacher_phone_assigned_for_grade(requester_phone, g)
-                    for g in parent_mt_grades
+                    for g in parent_grades
                 )
                 if not requester_authorized:
                     await log_unauthorized_access(
                         accessor_phone=requester_phone,
                         accessor_role="teacher",
                         attempted_resource=f"messages for {phone_number}",
-                        child_grade=parent_mt_grades[0],
+                        child_grade=parent_grades[0],
                         reason="non_class_teacher_viewing_chat",
                     )
                     logger.warning(
-                        "Mother Teacher access denied: %s tried to view messages of %s (grade %s)",
-                        requester_phone, phone_number, parent_mt_grades[0],
+                        "Class Teacher access denied: %s tried to view messages of %s (grade %s)",
+                        requester_phone, phone_number, parent_grades[0],
                     )
                     return []
 
