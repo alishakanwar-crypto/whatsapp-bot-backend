@@ -2961,7 +2961,8 @@ async def verify_cloud_webhook(request: Request):
 
     if mode == "subscribe" and token == CLOUD_VERIFY_TOKEN:
         logger.info("Cloud API webhook verified successfully")
-        return Response(content=challenge, media_type="text/plain")
+        # Meta expects the hub.challenge echoed back as an integer
+        return Response(content=str(challenge), media_type="text/plain", status_code=200)
 
     logger.warning(f"Cloud API webhook verification failed: mode={mode}")
     return Response(content="Forbidden", status_code=403)
