@@ -596,7 +596,7 @@ async def forward_to_teachers_and_confirm(
             for t in blocked:
                 await log_blocked_message(
                     sender_phone=sender,
-                    child_grade=t.get("grade", child_grades[0]),
+                    child_grade=child_grades[0],
                     target_teacher_name=t["teacher"].split("/")[0].strip(),
                     target_teacher_phone=t.get("whatsapp", ""),
                     message_snippet=message_text,
