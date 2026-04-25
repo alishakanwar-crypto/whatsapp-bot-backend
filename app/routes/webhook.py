@@ -582,34 +582,34 @@ async def forward_to_teachers_and_confirm(
         parent_label = f"Parent of {child['student_name']} ({child['grade']})"
 
         # Class Teacher routing: only the assigned class teacher(s) for the
-        # parent's children may receive forwarded messages.  We collect
-        # allowed teachers across ALL child grades so parents with multiple
-        # children can reach each child's class teacher.
-        child_grades = [c["grade"] for c in parent_children]
-        allowed_ids: set[int] = set()
-        for g in child_grades:
-            for t in filter_teachers_for_mother_teacher(teachers, g):
-                allowed_ids.add(id(t))
-        blocked = [t for t in teachers if id(t) not in allowed_ids]
-        teachers = [t for t in teachers if id(t) in allowed_ids]
+        # parent's children may receive forwarded messages.
+        # Admin panel members bypass this restriction entirely.
+        if not _is_admin_panel(sender):
+            child_grades = [c["grade"] for c in parent_children]
+            allowed_ids: set[int] = set()
+            for g in child_grades:
+                for t in filter_teachers_for_mother_teacher(teachers, g):
+                    allowed_ids.add(id(t))
+            blocked = [t for t in teachers if id(t) not in allowed_ids]
+            teachers = [t for t in teachers if id(t) in allowed_ids]
 
-        for t in blocked:
-            await log_blocked_message(
-                sender_phone=sender,
-                child_grade=t.get("grade", child_grades[0]),
-                target_teacher_name=t["teacher"].split("/")[0].strip(),
-                target_teacher_phone=t.get("whatsapp", ""),
-                message_snippet=message_text,
-                reason="parent_tried_non_class_teacher_forward",
-            )
+            for t in blocked:
+                await log_blocked_message(
+                    sender_phone=sender,
+                    child_grade=t.get("grade", child_grades[0]),
+                    target_teacher_name=t["teacher"].split("/")[0].strip(),
+                    target_teacher_phone=t.get("whatsapp", ""),
+                    message_snippet=message_text,
+                    reason="parent_tried_non_class_teacher_forward",
+                )
 
-        if not teachers:
-            assigned = get_class_teacher_for_grade(child_grades[0])
-            t_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"
-            from app.services.openai_service import _is_hindi
-            auto_reply = build_auto_reply(t_name, child_grades[0], is_hindi=_is_hindi(message_text))
-            await send_whatsapp_message(reply_to, auto_reply)
-            return
+            if not teachers:
+                assigned = get_class_teacher_for_grade(child_grades[0])
+                t_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"
+                from app.services.openai_service import _is_hindi
+                auto_reply = build_auto_reply(t_name, child_grades[0], is_hindi=_is_hindi(message_text))
+                await send_whatsapp_message(reply_to, auto_reply)
+                return
     else:
         parent_label = f"A parent (phone: ...{sender[-4:]})"
 
@@ -2309,6 +2309,9 @@ async def enforce_class_teacher_routing(
     Returns False if the message should proceed normally.
     """
     if target_teacher_entry is None:
+        return False
+
+    if _is_admin_panel(sender):
         return False
 
     child_grades = await _get_child_grades_for_parent(sender)
