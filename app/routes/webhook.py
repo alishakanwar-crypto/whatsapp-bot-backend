@@ -2500,7 +2500,9 @@ async def detect_and_handle_snapshot_request(
                 return True
 
     # --- Handle multi-camera locations (e.g. Reception C1-C4) ---
+    # RULE: Only share exactly 2 photos (C1 + C2). Never more.
     if multi_locations and is_admin:
+        multi_locations = multi_locations[:2]  # Max 2 cameras (C1 + C2 only)
         label = multi_locations[0].rsplit(" ", 1)[0] if multi_locations else location
         await send_whatsapp_message(
             reply_to,
@@ -2587,8 +2589,10 @@ async def detect_and_handle_snapshot_request(
                 "filename": result.get("filename", "snapshot.jpg"),
             }]
 
+        # RULE: Only share exactly 2 photos (C1 + C2). Never more.
+        images_list = images_list[:2]
         image_count = len(images_list)
-        logger.info(f"Snapshot result for {location}: {image_count} image(s)")
+        logger.info(f"Snapshot result for {location}: {image_count} image(s) (capped at 2)")
 
         sent_count = 0
         for idx, img_data in enumerate(images_list):
