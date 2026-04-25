@@ -46,10 +46,11 @@ def is_assigned_class_teacher(teacher_entry: dict, child_grade: str) -> bool:
     assigned = get_class_teacher_for_grade(child_grade)
     if assigned is None:
         return False
-    return (
-        _normalize_phone(assigned.get("whatsapp", ""))
-        == _normalize_phone(teacher_entry.get("whatsapp", ""))
-    )
+    assigned_phone = assigned.get("whatsapp", "")
+    teacher_phone = teacher_entry.get("whatsapp", "")
+    if not assigned_phone or not teacher_phone:
+        return False
+    return _normalize_phone(assigned_phone) == _normalize_phone(teacher_phone)
 
 
 def is_teacher_phone_assigned_for_grade(teacher_phone: str, child_grade: str) -> bool:
@@ -176,6 +177,8 @@ def filter_teachers_for_mother_teacher(
         return teachers
 
     assigned_phone = _normalize_phone(assigned.get("whatsapp", ""))
+    if not assigned_phone:
+        return teachers
     return [
         t for t in teachers
         if _normalize_phone(t.get("whatsapp", "")) == assigned_phone

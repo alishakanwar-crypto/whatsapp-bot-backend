@@ -585,19 +585,27 @@ async def forward_to_teachers_and_confirm(
         # Mother Teacher routing: only filter teachers whose own grade is an
         # MT grade.  Teachers of non-MT grades pass through unmodified so that
         # parents with children in both MT and non-MT grades aren't over-blocked.
+        # We iterate ALL child grades so parents with multiple children aren't
+        # blocked from reaching any of their assigned class teachers.
         mt_grades = [c["grade"] for c in parent_children if is_mother_teacher_grade(c["grade"])]
         if mt_grades:
             mt_teachers = [t for t in teachers if is_mother_teacher_grade(t.get("grade", ""))]
             non_mt_teachers = [t for t in teachers if not is_mother_teacher_grade(t.get("grade", ""))]
-            filtered_mt = filter_teachers_for_mother_teacher(mt_teachers, mt_grades[0])
-            blocked_mt = [t for t in mt_teachers if t not in filtered_mt]
+
+            # Collect allowed MT teachers across ALL child grades
+            allowed_mt_ids: set[int] = set()
+            for g in mt_grades:
+                for t in filter_teachers_for_mother_teacher(mt_teachers, g):
+                    allowed_mt_ids.add(id(t))
+            filtered_mt = [t for t in mt_teachers if id(t) in allowed_mt_ids]
+            blocked_mt = [t for t in mt_teachers if id(t) not in allowed_mt_ids]
             teachers = filtered_mt + non_mt_teachers
 
             # Log every blocked MT-grade teacher target
             for t in blocked_mt:
                 await log_blocked_message(
                     sender_phone=sender,
-                    child_grade=mt_grades[0],
+                    child_grade=t.get("grade", mt_grades[0]),
                     target_teacher_name=t["teacher"].split("/")[0].strip(),
                     target_teacher_phone=t.get("whatsapp", ""),
                     message_snippet=message_text,
