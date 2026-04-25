@@ -841,18 +841,6 @@ SEED_CAMERA_MAPPING = {
         "description": "R 1  3  F",
         "cam_type": ""
     },
-    "Reception C4": {
-        "dvr_index": 1,
-        "channel": 52,
-        "description": "Reception C4",
-        "cam_type": ""
-    },
-    "Reception C3": {
-        "dvr_index": 1,
-        "channel": 53,
-        "description": "Reception C3",
-        "cam_type": ""
-    },
     "Reception C1": {
         "dvr_index": 1,
         "channel": 54,
