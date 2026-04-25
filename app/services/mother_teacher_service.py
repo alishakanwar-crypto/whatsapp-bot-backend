@@ -1,7 +1,6 @@
-"""Mother Teacher (Class Teacher) routing system for early classes.
+"""Class Teacher routing system for all classes (Popsicles to Grade 12).
 
-For Nursery (all sections), Prep (all sections), Class 1, and Class 2,
-only the assigned Class Teacher is authorized to communicate with parents.
+Only the assigned Class Teacher is authorized to communicate with parents.
 Messages are never forwarded to other teachers; access to chat history
 is restricted; and every blocked or unauthorized attempt is logged.
 """
@@ -15,22 +14,12 @@ from app.services.openai_service import TEACHER_DATA
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Grades that follow the Mother Teacher / Class Teacher system.
-# Only the assigned class teacher may communicate with parents of these grades.
+# Grades that follow the Class Teacher routing system.
+# ALL grades from Popsicles to Grade 12 are included — only the assigned
+# class teacher may communicate with parents of these grades.
+# The set is derived dynamically from TEACHER_DATA so it stays in sync.
 # ---------------------------------------------------------------------------
-MOTHER_TEACHER_GRADES: set[str] = {
-    "Popsicles",
-    "Nursery 1",
-    "Nursery 2",
-    "Nursery 3",
-    "Prep 1",
-    "Prep 2",
-    "Prep 3",
-    "Grade 1A",
-    "Grade 1B",
-    "Grade 2A",
-    "Grade 2B",
-}
+MOTHER_TEACHER_GRADES: set[str] = {entry["grade"] for entry in TEACHER_DATA}
 
 
 def is_mother_teacher_grade(grade: str) -> bool:
@@ -143,8 +132,8 @@ async def log_unauthorized_access(
 # ---------------------------------------------------------------------------
 
 MOTHER_TEACHER_AUTO_REPLY_EN = (
-    "For your child's class (Nursery to Class 2), "
-    "please contact only the Class Teacher (Mother Teacher) for all queries.\n\n"
+    "For your child's class, "
+    "please contact only the assigned Class Teacher for all queries.\n\n"
     "Your assigned Class Teacher is *{teacher_name}* ({grade}).\n"
     "All your queries will be routed to them directly.\n\n"
     "Thank you for your cooperation.\n"
@@ -152,8 +141,8 @@ MOTHER_TEACHER_AUTO_REPLY_EN = (
 )
 
 MOTHER_TEACHER_AUTO_REPLY_HI = (
-    "आपके बच्चे की कक्षा (Nursery से Class 2) के लिए, "
-    "कृपया सभी प्रश्नों के लिए केवल Class Teacher (Mother Teacher) से संपर्क करें।\n\n"
+    "आपके बच्चे की कक्षा के लिए, "
+    "कृपया सभी प्रश्नों के लिए केवल नियुक्त Class Teacher से संपर्क करें।\n\n"
     "आपकी नियुक्त Class Teacher हैं *{teacher_name}* ({grade}).\n"
     "आपके सभी प्रश्न सीधे उन्हें भेजे जाएंगे।\n\n"
     "आपके सहयोग के लिए धन्यवाद।\n"

@@ -5,10 +5,12 @@ from fastapi import APIRouter, Query
 from app.database import get_db
 from app.models.schemas import MessageResponse
 from app.services.mother_teacher_service import (
+    is_mother_teacher_grade,
     is_teacher_phone_assigned_for_grade,
     log_unauthorized_access,
     MOTHER_TEACHER_GRADES,
 )
+from app.services.openai_service import TEACHER_DATA
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/messages", tags=["messages"])
@@ -29,6 +31,18 @@ def _normalize_phone(phone: str) -> str:
 
 def _is_admin(phone: str) -> bool:
     return _normalize_phone(phone) in _ADMIN_PANEL_NUMBERS
+
+
+def _requester_teaches_mt_grade(phone: str) -> bool:
+    """Return True if *phone* belongs to a teacher whose grade is a Mother Teacher grade."""
+    norm = _normalize_phone(phone)
+    for entry in TEACHER_DATA:
+        t_phone = entry.get("whatsapp", "")
+        if not t_phone:
+            continue
+        if _normalize_phone(t_phone) == norm:
+            return is_mother_teacher_grade(entry.get("grade", ""))
+    return False
 
 
 async def _get_parent_mt_grades(parent_phone: str) -> list[str]:
@@ -69,27 +83,30 @@ async def list_messages(
       requester is the assigned class teacher or an admin.
     """
     # --- Mother Teacher access control ---
+    # Only restrict access when the requester is a teacher whose own grade is
+    # an MT grade but is NOT the assigned class teacher.  Non-MT-grade teachers
+    # are allowed through (the parent may also have children in their grade).
     if phone_number and requester_phone and not _is_admin(requester_phone):
-        parent_mt_grades = await _get_parent_mt_grades(phone_number)
-        if parent_mt_grades:
-            # Check if requester is the assigned class teacher for any grade
-            requester_authorized = any(
-                is_teacher_phone_assigned_for_grade(requester_phone, g)
-                for g in parent_mt_grades
-            )
-            if not requester_authorized:
-                await log_unauthorized_access(
-                    accessor_phone=requester_phone,
-                    accessor_role="teacher",
-                    attempted_resource=f"messages for {phone_number}",
-                    child_grade=parent_mt_grades[0],
-                    reason="non_class_teacher_viewing_chat",
+        if _requester_teaches_mt_grade(requester_phone):
+            parent_mt_grades = await _get_parent_mt_grades(phone_number)
+            if parent_mt_grades:
+                requester_authorized = any(
+                    is_teacher_phone_assigned_for_grade(requester_phone, g)
+                    for g in parent_mt_grades
                 )
-                logger.warning(
-                    "Mother Teacher access denied: %s tried to view messages of %s (grade %s)",
-                    requester_phone, phone_number, parent_mt_grades[0],
-                )
-                return []
+                if not requester_authorized:
+                    await log_unauthorized_access(
+                        accessor_phone=requester_phone,
+                        accessor_role="teacher",
+                        attempted_resource=f"messages for {phone_number}",
+                        child_grade=parent_mt_grades[0],
+                        reason="non_class_teacher_viewing_chat",
+                    )
+                    logger.warning(
+                        "Mother Teacher access denied: %s tried to view messages of %s (grade %s)",
+                        requester_phone, phone_number, parent_mt_grades[0],
+                    )
+                    return []
 
     db = await get_db()
     try:
