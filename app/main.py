@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import init_db
-from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, mother_teacher
+from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, mother_teacher, face
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -69,6 +69,7 @@ app.include_router(bulk.router)
 app.include_router(agent_ws.router)
 app.include_router(agent_config.router)
 app.include_router(mother_teacher.router)
+app.include_router(face.router)
 
 
 # Serve static files (school images)
@@ -130,6 +131,30 @@ async def api_send_email(request: Request):
         return {"status": "error", "error": "Missing to, subject, or body"}
     success = await send_email_async(to, subject, text, "PP International School")
     return {"status": "ok" if success else "error", "sent_to": to}
+
+
+@app.post("/api/send-whatsapp")
+async def api_send_whatsapp(request: Request):
+    """Send a WhatsApp message (used by Campus Agent for attendance notifications).
+
+    Requires X-Agent-Secret header when AGENT_SECRET is configured.
+    """
+    import os
+    from fastapi import HTTPException
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
+
+    from app.services.whatsapp_service import send_whatsapp_message
+    body = await request.json()
+    phone = body.get("phone", "")
+    message = body.get("message", "")
+    if not phone or not message:
+        return {"status": "error", "error": "Missing phone or message"}
+    success = await send_whatsapp_message(phone, message)
+    return {"status": "ok" if success else "error", "sent_to": phone}
 
 
 @app.get("/privacy-policy")
