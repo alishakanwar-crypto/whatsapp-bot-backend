@@ -2106,14 +2106,16 @@ def _find_all_matching_locations(message_text: str) -> list[str]:
 
     for search_key, db_prefix in area_prefixes:
         if search_key in msg_upper:
-            # Return all matching keys from SEED data
+            # Return matching keys from SEED data — prefer C1 and C2 only
             from app.seed_data import SEED_CAMERA_MAPPING
             matches = [
                 k for k in SEED_CAMERA_MAPPING
                 if k.startswith(db_prefix)
             ]
             if len(matches) > 1:
-                return matches
+                # RULE: Only share C1 + C2. Filter to C1/C2 entries only.
+                c1_c2 = [m for m in matches if m.endswith("C1") or m.endswith("C2")]
+                return c1_c2[:2] if c1_c2 else matches[:2]
 
     return []
 
@@ -2527,6 +2529,9 @@ async def detect_and_handle_snapshot_request(
                         "description": result.get("description", loc),
                         "filename": result.get("filename", "snapshot.jpg"),
                     }]
+                # RULE: Only take the FIRST image from each camera location.
+                # Each location = 1 photo. 2 locations (C1+C2) = exactly 2 photos.
+                images_list = images_list[:1]
                 for img_data in images_list:
                     image_b64 = img_data.get("image_base64", "")
                     if not image_b64:
@@ -2590,6 +2595,7 @@ async def detect_and_handle_snapshot_request(
             }]
 
         # RULE: Only share exactly 2 photos (C1 + C2). Never more.
+        # For single-location requests, limit to max 2 images.
         images_list = images_list[:2]
         image_count = len(images_list)
         logger.info(f"Snapshot result for {location}: {image_count} image(s) (capped at 2)")

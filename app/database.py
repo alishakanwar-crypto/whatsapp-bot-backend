@@ -158,15 +158,17 @@ async def init_db():
         # Fly.io's ephemeral volume wipes the DB on every restart/suspend.
         # This ensures the Campus Agent always gets valid config on startup.
         # -----------------------------------------------------------------
+        # Auto-seed DVRs and camera mappings independently.
+        # Check each table separately so partial failures don't block the other.
+        from app.seed_data import SEED_DVRS, SEED_CAMERA_MAPPING
+
         cursor = await db.execute("SELECT COUNT(*) FROM agent_dvrs")
         row = await cursor.fetchone()
         dvr_count = row[0] if row else 0
 
         if dvr_count == 0:
-            logger.info("agent_dvrs table is empty — auto-seeding from embedded data")
+            logger.info("agent_dvrs table is empty — auto-seeding DVRs")
             try:
-                from app.seed_data import SEED_DVRS, SEED_CAMERA_MAPPING
-
                 for dvr in SEED_DVRS:
                     await db.execute(
                         "INSERT INTO agent_dvrs (name, ip, port, username, password, channels) "
@@ -180,7 +182,18 @@ async def init_db():
                             dvr.get("channels", 64),
                         ),
                     )
+                await db.commit()
+                logger.info(f"Auto-seeded {len(SEED_DVRS)} DVRs")
+            except Exception as e:
+                logger.error(f"Auto-seed DVRs failed: {e}", exc_info=True)
 
+        cursor = await db.execute("SELECT COUNT(*) FROM agent_camera_mapping")
+        row = await cursor.fetchone()
+        mapping_count = row[0] if row else 0
+
+        if mapping_count == 0:
+            logger.info("agent_camera_mapping table is empty — auto-seeding camera mappings")
+            try:
                 for location, data in SEED_CAMERA_MAPPING.items():
                     all_cameras = data.get("all_cameras")
                     await db.execute(
@@ -196,14 +209,10 @@ async def init_db():
                             json.dumps(all_cameras) if all_cameras else None,
                         ),
                     )
-
                 await db.commit()
-                logger.info(
-                    f"Auto-seeded cloud DB: {len(SEED_DVRS)} DVRs, "
-                    f"{len(SEED_CAMERA_MAPPING)} camera mappings"
-                )
+                logger.info(f"Auto-seeded {len(SEED_CAMERA_MAPPING)} camera mappings")
             except Exception as e:
-                logger.error(f"Auto-seed failed: {e}", exc_info=True)
+                logger.error(f"Auto-seed camera mappings failed: {e}", exc_info=True)
 
     finally:
         await db.close()
