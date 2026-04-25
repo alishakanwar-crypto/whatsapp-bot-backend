@@ -240,10 +240,18 @@ async def get_full_config():
         setting_rows = await cursor.fetchall()
         settings = {r["key"]: r["value"] for r in setting_rows}
 
+        # Registered faces count (agent uses /api/face/images to download)
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) as count FROM agent_registered_faces"
+        )
+        face_row = await cursor.fetchone()
+        registered_faces = face_row["count"] if face_row else 0
+
         return {
             "dvrs": dvrs,
             "camera_mapping": camera_mapping,
             "settings": settings,
+            "registered_faces": registered_faces,
             "cloud_bot_url": os.environ.get(
                 "CLOUD_BOT_WS_URL", "wss://app-ypdweegy.fly.dev/ws/agent"
             ),
