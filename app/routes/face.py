@@ -130,14 +130,24 @@ async def delete_person(person_id: str):
     """Delete all face images for a person."""
     db = await get_db()
     try:
-        # Use COLLATE NOCASE because LowercaseURLMiddleware lowercases the path
+        # Retrieve the original person_id from DB before deleting
+        # (LowercaseURLMiddleware lowercases the path param, so we need
+        # the DB value to return the correct casing to the client)
+        cursor = await db.execute(
+            "SELECT person_id FROM agent_registered_faces "
+            "WHERE person_id = ? COLLATE NOCASE LIMIT 1",
+            (person_id,),
+        )
+        row = await cursor.fetchone()
+        original_person_id = row["person_id"] if row else person_id
+
         cursor = await db.execute(
             "DELETE FROM agent_registered_faces WHERE person_id = ? COLLATE NOCASE",
             (person_id,),
         )
         await db.commit()
         deleted = cursor.rowcount
-        logger.info(f"Deleted {deleted} face(s) for {person_id}")
-        return {"deleted": deleted, "person_id": person_id}
+        logger.info(f"Deleted {deleted} face(s) for {original_person_id}")
+        return {"deleted": deleted, "person_id": original_person_id}
     finally:
         await db.close()
