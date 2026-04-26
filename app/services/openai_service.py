@@ -5,6 +5,7 @@ import json
 import logging
 import tempfile
 import asyncio
+from datetime import datetime, timezone, timedelta
 import httpx
 from openai import AsyncOpenAI
 
@@ -687,8 +688,37 @@ async def generate_response(
                 "mixed with English as appropriate. Be warm and respectful."
             )
 
+        # Inject current date/time (IST) so GPT knows the actual day and can greet accordingly
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist)
+        day_name = now_ist.strftime("%A")  # e.g. "Sunday"
+        date_str = now_ist.strftime("%d %B %Y")  # e.g. "27 April 2026"
+        time_str = now_ist.strftime("%I:%M %p")  # e.g. "02:30 PM"
+        hour = now_ist.hour
+        if hour < 12:
+            greeting = "Good Morning"
+        elif hour < 16:
+            greeting = "Good Afternoon"
+        elif hour < 20:
+            greeting = "Good Evening"
+        else:
+            greeting = "Good Night"
+
+        is_sunday = day_name == "Sunday"
+        school_status = "TODAY IS SUNDAY — THE SCHOOL IS CLOSED. It is a holiday." if is_sunday else f"Today is {day_name} — the school is OPEN (working day)."
+
+        datetime_context = (
+            f"\n\n== CURRENT DATE & TIME (IST) ==\n"
+            f"Date: {date_str} ({day_name})\n"
+            f"Time: {time_str} IST\n"
+            f"Appropriate greeting: {greeting}\n"
+            f"{school_status}\n"
+            f"IMPORTANT: If anyone asks whether school is open today, check the day above. "
+            f"Sunday is ALWAYS a holiday. Monday to Saturday are working days.\n"
+        )
+
         # Activity contacts are already in the comprehensive system prompt — no need to inject separately
-        full_system_prompt = system_prompt + lang_instruction
+        full_system_prompt = system_prompt + lang_instruction + datetime_context
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": full_system_prompt}
