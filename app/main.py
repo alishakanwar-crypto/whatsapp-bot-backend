@@ -104,6 +104,32 @@ async def debug_version():
     }
 
 
+@app.get("/debug/webhook-config")
+async def debug_webhook_config():
+    """Check webhook and WhatsApp provider configuration."""
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT key, value FROM settings WHERE key IN "
+            "('GREEN_API_ID_INSTANCE','GREEN_API_TOKEN','GREEN_API_URL',"
+            "'WHATSAPP_CLOUD_TOKEN','WHATSAPP_PHONE_ID')"
+        )
+        rows = await cursor.fetchall()
+        config = {}
+        for row in rows:
+            k, v = row[0], row[1]
+            if "TOKEN" in k and v and len(v) > 10:
+                config[k] = v[:10] + "..." + v[-5:]
+            else:
+                config[k] = v
+        return {"settings_keys": config, "note": "Tokens are masked"}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        await db.close()
+
+
 @app.get("/debug/parent-phones")
 async def debug_parent_phones():
     """Debug endpoint to verify parent phone data is loaded."""
