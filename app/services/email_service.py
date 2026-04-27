@@ -54,14 +54,18 @@ def send_email(to_email: str, subject: str, body: str, sender_name: str = "PPIS 
 
     try:
         server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(smtp_user, smtp_password)
-        server.sendmail(smtp_user, [to_email], msg.as_string())
-        server.quit()
-        logger.info(f"Email sent to {to_email}: {subject}")
-        return True
+        try:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, [to_email], msg.as_string())
+            server.quit()
+            logger.info(f"Email sent to {to_email}: {subject}")
+            return True
+        except Exception:
+            server.close()
+            raise
     except smtplib.SMTPAuthenticationError as e:
         logger.error(f"SMTP auth failed (may need App Password): {e}")
         return False
