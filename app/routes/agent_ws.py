@@ -166,9 +166,17 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     _pending_requests[request_id] = future
     _pending_images[request_id] = []  # Initialize image accumulator
 
+    # Capture the WebSocket reference in a local variable to avoid race
+    # condition where _agent_ws becomes None between null-check and send.
+    ws = _agent_ws
+    if ws is None:
+        _pending_requests.pop(request_id, None)
+        _pending_images.pop(request_id, None)
+        return {"success": False, "error": "Campus agent disconnected before request could be sent"}
+
     # Send the request — if the WebSocket is stale, retry once after reconnect
     try:
-        await _agent_ws.send_json({
+        await ws.send_json({
             "type": "snapshot_request",
             "classroom": classroom,
             "request_id": request_id,
@@ -189,8 +197,13 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
         future = asyncio.get_event_loop().create_future()
         _pending_requests[request_id] = future
         _pending_images[request_id] = []
+        ws = _agent_ws
+        if ws is None:
+            _pending_requests.pop(request_id, None)
+            _pending_images.pop(request_id, None)
+            return {"success": False, "error": "Campus agent disconnected before retry"}
         try:
-            await _agent_ws.send_json({
+            await ws.send_json({
                 "type": "snapshot_request",
                 "classroom": classroom,
                 "request_id": request_id,
