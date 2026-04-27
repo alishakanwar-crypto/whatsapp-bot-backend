@@ -1,9 +1,49 @@
 import base64
 import os
 import logging
+import sqlite3
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Credential cache from DB (avoids async DB call on every message)
+# ---------------------------------------------------------------------------
+_db_creds_cache: dict[str, str] = {}
+
+
+def _load_db_creds():
+    """Load WhatsApp credentials from the settings table (sync, cached)."""
+    if _db_creds_cache:
+        return
+    db_path = os.getenv("DATABASE_PATH", "ppis_bot.db")
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.execute(
+            "SELECT key, value FROM settings WHERE key IN "
+            "('GREEN_API_ID_INSTANCE','GREEN_API_TOKEN','GREEN_API_URL',"
+            "'WHATSAPP_CLOUD_TOKEN','WHATSAPP_PHONE_ID')"
+        )
+        for row in cur.fetchall():
+            _db_creds_cache[row[0]] = row[1]
+        conn.close()
+    except Exception:
+        pass
+
+
+def _get_cred(env_key: str, default: str = "") -> str:
+    """Read from env var first, then fall back to settings table."""
+    val = os.getenv(env_key, "")
+    if val:
+        return val
+    _load_db_creds()
+    return _db_creds_cache.get(env_key, default)
+
+
+def refresh_creds_cache():
+    """Clear the cached credentials so they are re-read from DB."""
+    _db_creds_cache.clear()
+
 
 # ---------------------------------------------------------------------------
 # Provider detection: "cloud" uses Meta Cloud API, "green" uses Green API
@@ -11,29 +51,29 @@ logger = logging.getLogger(__name__)
 
 def get_whatsapp_provider() -> str:
     """Return 'cloud' if Cloud API credentials are set, else 'green'."""
-    if os.getenv("WHATSAPP_CLOUD_TOKEN") and os.getenv("WHATSAPP_PHONE_ID"):
+    if _get_cred("WHATSAPP_CLOUD_TOKEN") and _get_cred("WHATSAPP_PHONE_ID"):
         return "cloud"
     return "green"
 
 
 def get_id_instance() -> str:
-    return os.getenv("GREEN_API_ID_INSTANCE", "")
+    return _get_cred("GREEN_API_ID_INSTANCE")
 
 
 def get_api_token() -> str:
-    return os.getenv("GREEN_API_TOKEN", "")
+    return _get_cred("GREEN_API_TOKEN")
 
 
 def get_api_url() -> str:
-    return os.getenv("GREEN_API_URL", "https://api.green-api.com")
+    return _get_cred("GREEN_API_URL", "https://api.green-api.com")
 
 
 def get_cloud_token() -> str:
-    return os.getenv("WHATSAPP_CLOUD_TOKEN", "")
+    return _get_cred("WHATSAPP_CLOUD_TOKEN")
 
 
 def get_cloud_phone_id() -> str:
-    return os.getenv("WHATSAPP_PHONE_ID", "")
+    return _get_cred("WHATSAPP_PHONE_ID")
 
 
 async def send_whatsapp_image(to: str, image_url: str, caption: str = "") -> bool:

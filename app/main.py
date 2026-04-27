@@ -156,6 +156,38 @@ async def api_send_whatsapp(request: Request):
     return {"status": "ok" if success else "error", "sent_to": phone}
 
 
+@app.post("/api/whatsapp-creds")
+async def set_whatsapp_creds(request: Request):
+    """Save WhatsApp API credentials to the database.
+
+    Accepts JSON with any of: GREEN_API_ID_INSTANCE, GREEN_API_TOKEN,
+    GREEN_API_URL, WHATSAPP_CLOUD_TOKEN, WHATSAPP_PHONE_ID.
+    """
+    from app.database import get_db
+    from app.services.whatsapp_service import refresh_creds_cache
+
+    allowed_keys = {
+        "GREEN_API_ID_INSTANCE", "GREEN_API_TOKEN", "GREEN_API_URL",
+        "WHATSAPP_CLOUD_TOKEN", "WHATSAPP_PHONE_ID",
+    }
+    body = await request.json()
+    db = await get_db()
+    saved = []
+    try:
+        for key, value in body.items():
+            if key in allowed_keys and value:
+                await db.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+                saved.append(key)
+        await db.commit()
+    finally:
+        await db.close()
+    refresh_creds_cache()
+    return {"status": "ok", "saved": saved}
+
+
 @app.get("/privacy-policy")
 async def privacy_policy():
     from fastapi.responses import HTMLResponse
