@@ -2398,12 +2398,22 @@ async def detect_and_handle_snapshot_request(
 
     logger.info(f"Snapshot request detected from {sender} (admin={is_admin}): {message_text}")
 
-    # Check if agent is connected — wait up to 15s for reconnection after OOM kills
-    agent_ready = await wait_for_agent(max_wait=15.0)
+    # Check if agent is connected — wait up to 30s for reconnection after OOM kills
+    agent_ready = await wait_for_agent(max_wait=30.0)
     if not agent_ready:
+        # Only send one offline message per user within a 5-minute window
+        # to prevent spam when OOM restarts keep happening
+        dedup_key = f"offline_{sender}"
+        if _is_duplicate(dedup_key):
+            logger.info(f"Suppressing duplicate offline message for {sender}")
+            return True
+
+        greeting = _greeting(sender)
+        addr = "Dear Admin" if is_admin else f"{greeting}"
         offline_msg = (
-            "The campus camera system is currently offline. "
-            "Please try again later."
+            "The campus camera system is temporarily unavailable. "
+            "The system is restarting and should be back shortly. "
+            "Please try again in a few minutes."
         )
         if not is_admin:
             offline_msg += (
@@ -2413,9 +2423,9 @@ async def detect_and_handle_snapshot_request(
             )
         await send_whatsapp_message(
             reply_to,
-            f"{_greeting(sender)},\n\n"
+            f"{addr},\n\n"
             f"{offline_msg}\n\n"
-            "Thank you for your cooperation.\n"
+            "Thank you for your patience.\n"
             "Warm regards,\nPP International School"
         )
         return True

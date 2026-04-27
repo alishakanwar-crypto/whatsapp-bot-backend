@@ -527,24 +527,24 @@ def start_scheduler() -> None:
     logger.info("Scheduled parent phone data refresh every 14 days (fortnightly)")
 
     # --- Teacher Homework Email Polling ---
-    # Poll info@ppischool.in IMAP inbox every 10 minutes for homework emails
+    # Poll info@ppischool.in IMAP inbox every 30 minutes (reduced from 10 to prevent OOM)
     scheduler.add_job(
         poll_homework_emails_sync,
-        trigger=IntervalTrigger(minutes=10),
+        trigger=IntervalTrigger(minutes=30),
         id="email_homework_poll",
         replace_existing=True,
     )
-    logger.info("Scheduled teacher homework email polling every 10 minutes")
+    logger.info("Scheduled teacher homework email polling every 30 minutes")
 
-    # Run initial email poll after 60 seconds (let other services initialize first)
+    # Run initial email poll after 120 seconds (let other services finish first)
     scheduler.add_job(
         poll_homework_emails_sync,
         trigger="date",
-        run_date=datetime.now() + timedelta(seconds=60),
+        run_date=datetime.now() + timedelta(seconds=120),
         id="email_homework_poll_initial",
         replace_existing=True,
     )
-    logger.info("Scheduled initial email homework poll in 60 seconds")
+    logger.info("Scheduled initial email homework poll in 120 seconds")
 
     # --- Daily Message History Report ---
     # Send daily report to alisha.kanwar@ppischool.in at 11:30 PM IST (18:00 UTC)

@@ -53,18 +53,21 @@ def is_agent_connected() -> bool:
     return _agent_ws is not None
 
 
-async def wait_for_agent(max_wait: float = 15.0) -> bool:
+async def wait_for_agent(max_wait: float = 30.0) -> bool:
     """Wait up to max_wait seconds for the agent to reconnect.
 
     After an OOM kill, the Fly.io app restarts and `_agent_ws` is None.
     The campus agent auto-reconnects within seconds. This avoids
     immediately telling the user 'camera offline' during that brief window.
+
+    Increased to 30s (from 15s) because OOM restarts can take 20-25s
+    on Fly.io free-tier machines.
     """
     if _agent_ws is not None:
         return True
     logger.info("Agent not connected — waiting up to %.0fs for reconnection...", max_wait)
     elapsed = 0.0
-    step = 2.0
+    step = 1.0  # Check every 1s (was 2s) for faster detection
     while elapsed < max_wait:
         await asyncio.sleep(step)
         elapsed += step

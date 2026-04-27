@@ -154,22 +154,26 @@ def poll_homework_emails_sync() -> None:
         return
 
     try:
-        # Search for emails from the last 24 hours (to avoid reprocessing old mail)
-        since_date = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%d-%b-%Y")
-        status, data = mailbox.search(None, f'(SINCE "{since_date}")')
+        # Search for UNSEEN emails only (much lighter than scanning all recent)
+        status, data = mailbox.search(None, "UNSEEN")
         if status != "OK" or not data[0]:
-            logger.info("No recent emails found")
+            logger.info("No unseen emails found")
             return
 
         email_ids = data[0].split()
-        logger.info(f"Found {len(email_ids)} recent email(s) to scan")
+        logger.info(f"Found {len(email_ids)} unseen email(s) to scan")
 
-        # Process from newest first (limit to last 15 to avoid OOM)
-        for eid in reversed(email_ids[-15:]):
+        # Process only the last 5 unseen emails to avoid OOM on 256MB instances
+        batch = list(reversed(email_ids[-5:]))
+        for eid in batch:
             try:
                 _process_single_email(mailbox, eid)
             except Exception as e:
                 logger.error(f"Error processing email {eid}: {e}")
+            finally:
+                # Force garbage collection after each email to prevent OOM
+                import gc
+                gc.collect()
     finally:
         try:
             mailbox.logout()
@@ -187,6 +191,7 @@ def poll_homework_emails_sync() -> None:
     # Explicit garbage collection to help prevent OOM
     import gc
     gc.collect()
+    logger.info("Email poll completed")
 
 
 def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
