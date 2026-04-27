@@ -2404,7 +2404,7 @@ async def detect_and_handle_snapshot_request(
         # Only send one offline message per user within a 5-minute window
         # to prevent spam when OOM restarts keep happening
         dedup_key = f"offline_{sender}"
-        if _is_duplicate(dedup_key):
+        if await _is_duplicate(dedup_key):
             logger.info(f"Suppressing duplicate offline message for {sender}")
             return True
 
