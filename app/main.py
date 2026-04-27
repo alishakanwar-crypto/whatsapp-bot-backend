@@ -157,13 +157,25 @@ async def api_send_whatsapp(request: Request):
         if header_secret != agent_secret:
             raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
-    from app.services.whatsapp_service import send_whatsapp_message
+    from app.services.whatsapp_service import send_whatsapp_message, send_cloud_template_message
     body = await request.json()
     phone = body.get("phone", "")
     message = body.get("message", "")
-    if not phone or not message:
-        return {"status": "error", "error": "Missing phone or message"}
-    success = await send_whatsapp_message(phone, message)
+    template_name = body.get("template_name", "")
+    template_params = body.get("template_params", [])
+
+    if not phone:
+        return {"status": "error", "error": "Missing phone"}
+
+    if template_name:
+        success = await send_cloud_template_message(
+            phone, template_name, body_params=template_params or None,
+        )
+    elif message:
+        success = await send_whatsapp_message(phone, message)
+    else:
+        return {"status": "error", "error": "Missing message or template_name"}
+
     return {"status": "ok" if success else "error", "sent_to": phone}
 
 
