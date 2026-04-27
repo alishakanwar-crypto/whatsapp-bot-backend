@@ -83,6 +83,12 @@ async def healthz():
     return {"status": "ok"}
 
 
+@app.get("/debug/version")
+async def debug_version():
+    """Check deployed code version."""
+    return {"version": "2026-04-27-v3-image-fix", "image_handler": True}
+
+
 @app.get("/debug/parent-phones")
 async def debug_parent_phones():
     """Debug endpoint to verify parent phone data is loaded."""

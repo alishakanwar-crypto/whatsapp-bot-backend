@@ -3169,39 +3169,50 @@ async def receive_cloud_api_message(request: Request):
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
 
         # --- Parent photo / image handling (MUST run BEFORE text handlers) ---
-        if media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id"):
-            logger.info(f"Image message detected from {sender}, cloud_media_id={media_info.get('cloud_media_id')}")
-            face_reg_handled = await _try_register_child_face(
-                sender, reply_to, bot_phone, media_info,
-            )
-            if face_reg_handled:
-                return {"status": "ok"}
+        has_image = media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id")
+        logger.info(f"[IMAGE CHECK] sender={sender} has_image={has_image} media_info_type={media_info.get('type') if media_info else 'None'}")
+        if has_image:
+            logger.info(f"[IMAGE HANDLER] Processing image from {sender}, cloud_media_id={media_info.get('cloud_media_id')}")
+            try:
+                face_reg_handled = await _try_register_child_face(
+                    sender, reply_to, bot_phone, media_info,
+                )
+                logger.info(f"[IMAGE HANDLER] face_reg_handled={face_reg_handled} for {sender}")
+                if face_reg_handled:
+                    return {"status": "ok"}
+            except Exception as img_exc:
+                logger.error(f"[IMAGE HANDLER] Exception in face registration for {sender}: {img_exc}", exc_info=True)
 
             # --- Image vision fallback: describe the image via GPT ---
-            system_prompt = await get_system_prompt()
-            history = await get_conversation_history(sender)
-            from app.services.whatsapp_service import download_cloud_media
-            from app.services.openai_service import generate_vision_response
-            img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
-            if img_bytes:
-                caption = media_info.get("caption", "")
-                img_sender_name = media_info.get("sender_name", "")
-                ai_response = await generate_vision_response(
-                    img_bytes, img_mime, caption, system_prompt, history,
-                    sender_name=img_sender_name,
-                )
-                del img_bytes
-                await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                await send_whatsapp_message(reply_to, ai_response)
-                await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)
-                return {"status": "ok"}
-            else:
-                logger.error(f"Failed to download image from Cloud API for {sender}")
-                # Don't fall through to text handlers — acknowledge the image
-                err_msg = (
-                    "Your image has been received but we encountered an issue processing it. "
-                    "Please try sending the photo again."
-                )
+            try:
+                system_prompt = await get_system_prompt()
+                history = await get_conversation_history(sender)
+                from app.services.whatsapp_service import download_cloud_media
+                from app.services.openai_service import generate_vision_response
+                img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
+                if img_bytes:
+                    caption = media_info.get("caption", "")
+                    img_sender_name = media_info.get("sender_name", "")
+                    ai_response = await generate_vision_response(
+                        img_bytes, img_mime, caption, system_prompt, history,
+                        sender_name=img_sender_name,
+                    )
+                    del img_bytes
+                    await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, ai_response)
+                    return {"status": "ok"}
+                else:
+                    logger.error(f"[IMAGE HANDLER] Failed to download image for {sender}")
+                    err_msg = (
+                        "Your image has been received but we encountered an issue processing it. "
+                        "Please try sending the photo again."
+                    )
+                    await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, err_msg)
+                    return {"status": "ok"}
+            except Exception as vis_exc:
+                logger.error(f"[IMAGE HANDLER] Vision fallback error for {sender}: {vis_exc}", exc_info=True)
+                err_msg = "Your image has been received. Please try again if needed."
                 await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
                 await send_whatsapp_message(reply_to, err_msg)
                 return {"status": "ok"}
