@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import init_db
-from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face
+from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, mother_teacher, face
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -68,6 +68,7 @@ app.include_router(settings.router)
 app.include_router(bulk.router)
 app.include_router(agent_ws.router)
 app.include_router(agent_config.router)
+app.include_router(mother_teacher.router)
 app.include_router(face.router)
 
 

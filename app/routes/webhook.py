@@ -24,6 +24,15 @@ from app.services.openai_service import (
     find_teacher_by_grade,
     transcribe_audio,
 )
+from app.services.mother_teacher_service import (
+    is_admin_panel,
+    is_mother_teacher_grade,
+    get_class_teacher_for_grade,
+    is_assigned_class_teacher,
+    log_blocked_message,
+    build_auto_reply,
+    filter_teachers_for_mother_teacher,
+)
 
 # School images stored as local files for direct upload
 import os
@@ -394,10 +403,17 @@ async def try_handle_pending_query(
         return False
 
     original_query = pending["original_query"]
+    grade = teacher_entry["grade"]
+
+    # Class Teacher routing: always route to the assigned class teacher.
+    if is_mother_teacher_grade(grade):
+        assigned = get_class_teacher_for_grade(grade)
+        if assigned:
+            teacher_entry = assigned
+
     teacher_name = teacher_entry["teacher"].split("/")[0].strip()
     teacher_email = teacher_entry.get("email", "")
     teacher_phone = teacher_entry.get("whatsapp", "")
-    grade = teacher_entry["grade"]
 
     if not teacher_email and not teacher_phone:
         # No contact info for this teacher
@@ -565,6 +581,36 @@ async def forward_to_teachers_and_confirm(
         # Use the first child (most common case: one child per parent)
         child = parent_children[0]
         parent_label = f"Parent of {child['student_name']} ({child['grade']})"
+
+        # Class Teacher routing: only the assigned class teacher(s) for the
+        # parent's children may receive forwarded messages.
+        # Admin panel members bypass this restriction entirely.
+        if not _is_admin_panel(sender):
+            child_grades = [c["grade"] for c in parent_children]
+            allowed_ids: set[int] = set()
+            for g in child_grades:
+                for t in filter_teachers_for_mother_teacher(teachers, g):
+                    allowed_ids.add(id(t))
+            blocked = [t for t in teachers if id(t) not in allowed_ids]
+            teachers = [t for t in teachers if id(t) in allowed_ids]
+
+            for t in blocked:
+                await log_blocked_message(
+                    sender_phone=sender,
+                    child_grade=child_grades[0],
+                    target_teacher_name=t["teacher"].split("/")[0].strip(),
+                    target_teacher_phone=t.get("whatsapp", ""),
+                    message_snippet=message_text,
+                    reason="parent_tried_non_class_teacher_forward",
+                )
+
+            if not teachers:
+                assigned = get_class_teacher_for_grade(child_grades[0])
+                t_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"
+                from app.services.openai_service import _is_hindi
+                auto_reply = build_auto_reply(t_name, child_grades[0], is_hindi=_is_hindi(message_text))
+                await send_whatsapp_message(reply_to, auto_reply)
+                return
     else:
         parent_label = f"A parent (phone: ...{sender[-4:]})"
 
@@ -1035,6 +1081,7 @@ async def try_direct_message(
     target_phone: str | None = None
     target_email: str | None = None
     target_name: str = recipient_clean  # fallback display name
+    resolved_teacher_entry: dict | None = None  # TEACHER_DATA entry, if found
 
     # 0. Check if recipient is already an email address
     if re.match(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", recipient_clean):
@@ -1044,6 +1091,7 @@ async def try_direct_message(
             if t.get("email", "").lower() == recipient_clean.lower():
                 target_name = t["teacher"].split("/")[0].strip()
                 target_phone = t.get("whatsapp", "")
+                resolved_teacher_entry = t
                 break
         if target_name == recipient_clean:
             # Use the part before @ as a display name
@@ -1058,6 +1106,7 @@ async def try_direct_message(
             if entry:
                 target_name = entry["teacher"].split("/")[0].strip()
                 target_email = entry.get("email", "")
+                resolved_teacher_entry = entry
 
     if not target_phone and not target_email:
         # 2. Look up by name / grade in TEACHER_DATA
@@ -1066,9 +1115,11 @@ async def try_direct_message(
             target_phone = entry.get("whatsapp", "")
             target_email = entry.get("email", "")
             target_name = entry["teacher"].split("/")[0].strip()
+            resolved_teacher_entry = entry
 
     if not target_phone and not target_email:
-        # 3. Check admin staff (Harpreet Kaur)
+        # 3. Check admin staff (Harpreet Kaur) — not a class teacher,
+        #    so resolved_teacher_entry stays None (routing check skipped).
         admin = _lookup_admin_staff(recipient_clean)
         if admin:
             target_phone = admin.get("whatsapp", "")
@@ -1089,6 +1140,14 @@ async def try_direct_message(
         return False
 
     logger.info(f"Resolved recipient to {target_name} (phone={target_phone}, email={target_email})")
+
+    # --- Class Teacher routing: block DMs to non-assigned teachers ---
+    if resolved_teacher_entry:
+        blocked = await enforce_class_teacher_routing(
+            sender, resolved_teacher_entry, message_text, reply_to,
+        )
+        if blocked:
+            return True
 
     # --- Always send email to the teacher if we have their email ---
     wa_success = False
@@ -1932,19 +1991,9 @@ async def detect_and_handle_teacher_homework_broadcast(
 # Their numbers are NEVER shared by the bot (except Harpreet who is also admin).
 # ---------------------------------------------------------------------------
 
-ADMIN_PANEL_NUMBERS: set[str] = {
-    "9971166562",   # Mr. Rahul Gupta
-    "9910034550",   # Ms. Purnima Gupta
-    "9599488106",   # Ms. Harpreet Kaur
-    "8076455224",    # Ms. Alisha Ahuja
-}
-
-
 def _is_admin_panel(sender: str) -> bool:
-    """Check if the sender is an admin panel number (full camera access)."""
-    digits = re.sub(r"\D", "", sender)
-    last10 = digits[-10:] if len(digits) >= 10 else digits
-    return last10 in ADMIN_PANEL_NUMBERS
+    """Check if the sender is an admin panel number (full access)."""
+    return is_admin_panel(sender)
 
 
 def _greeting(sender: str) -> str:
@@ -2227,6 +2276,72 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
         return results
     finally:
         await db.close()
+
+
+async def _get_child_grades_for_parent(sender_phone: str) -> list[str]:
+    """Return the list of child grades linked to *sender_phone*.
+
+    Empty list means the parent is not in the PI Sheet.
+    """
+    children = await _lookup_parent_child_class(sender_phone)
+    return [c["grade"] for c in children]
+
+
+async def enforce_class_teacher_routing(
+    sender: str,
+    target_teacher_entry: dict | None,
+    message_text: str,
+    reply_to: str,
+) -> bool:
+    """Enforce Class Teacher routing — block if the parent is trying to reach
+    a teacher who is not the assigned class teacher for any of their children.
+
+    Returns True if the message was BLOCKED (and an auto-reply was sent).
+    Returns False if the message should proceed normally.
+    """
+    if target_teacher_entry is None:
+        return False
+
+    if _is_admin_panel(sender):
+        return False
+
+    child_grades = await _get_child_grades_for_parent(sender)
+    if not child_grades:
+        return False
+
+    # Check if the target teacher is the assigned class teacher for ANY child.
+    any_verifiable = False
+    for grade in child_grades:
+        if is_assigned_class_teacher(target_teacher_entry, grade):
+            return False  # allowed
+        assigned_for_grade = get_class_teacher_for_grade(grade)
+        if assigned_for_grade and assigned_for_grade.get("whatsapp", ""):
+            any_verifiable = True
+
+    # If no grade is verifiable (all missing from TEACHER_DATA or no phone), allow
+    if not any_verifiable:
+        return False
+
+    # Target is NOT the assigned class teacher for any verifiable child — BLOCK.
+    primary_grade = child_grades[0]
+    assigned = get_class_teacher_for_grade(primary_grade)
+    teacher_name = (assigned["teacher"].split("/")[0].strip()) if assigned else "the Class Teacher"
+
+    from app.services.openai_service import _is_hindi
+    auto_reply = build_auto_reply(teacher_name, primary_grade, is_hindi=_is_hindi(message_text))
+    await send_whatsapp_message(reply_to, auto_reply)
+
+    target_name = target_teacher_entry["teacher"].split("/")[0].strip()
+    target_phone = target_teacher_entry.get("whatsapp", "")
+    await log_blocked_message(
+        sender_phone=sender,
+        child_grade=primary_grade,
+        target_teacher_name=target_name,
+        target_teacher_phone=target_phone,
+        message_snippet=message_text,
+        reason="parent_tried_non_class_teacher",
+    )
+    return True
 
 
 def _extract_classroom_from_message(message_text: str) -> str | None:

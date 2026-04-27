@@ -139,6 +139,29 @@ async def init_db():
                 value TEXT NOT NULL
             );
 
+            -- Mother Teacher routing: log blocked parent messages
+            CREATE TABLE IF NOT EXISTS mother_teacher_blocked_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_phone TEXT NOT NULL,
+                child_grade TEXT NOT NULL,
+                target_teacher_name TEXT NOT NULL DEFAULT '',
+                target_teacher_phone TEXT NOT NULL DEFAULT '',
+                message_snippet TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT 'mother_teacher_routing',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Mother Teacher routing: log unauthorized access attempts
+            CREATE TABLE IF NOT EXISTS mother_teacher_access_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                accessor_phone TEXT NOT NULL,
+                accessor_role TEXT NOT NULL DEFAULT '',
+                attempted_resource TEXT NOT NULL DEFAULT '',
+                child_grade TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT 'unauthorized_access',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS agent_registered_faces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 person_id TEXT NOT NULL,
