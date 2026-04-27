@@ -183,37 +183,64 @@ async def check_meta_webhook():
     return results
 
 
-@app.get("/debug/subscribe-webhook")
-async def subscribe_webhook():
-    """Try to subscribe this server's webhook URL with Meta."""
+@app.get("/debug/update-webhook-url")
+async def update_webhook_url():
+    """Try to update Meta webhook callback URL to this server."""
     import httpx
     from app.services.whatsapp_service import get_cloud_token
     token = get_cloud_token()
     if not token:
         return {"error": "No cloud token configured"}
 
-    results = {}
-    async with httpx.AsyncClient(timeout=15) as client:
-        # Try to get app_id from the token debug endpoint
-        try:
-            r = await client.get(
-                "https://graph.facebook.com/v25.0/debug_token",
-                params={"input_token": token, "access_token": token},
-            )
-            results["token_debug"] = r.json()
-        except Exception as e:
-            results["token_debug_error"] = str(e)
+    app_id = "1250990343758441"
+    new_callback = "https://app-itszlsnn.fly.dev/webhook/cloud"
+    verify_token = "ppis_bot_verify_2024"
 
-        # Try getting WABA via phone number business profile
+    results = {"target_url": new_callback}
+    async with httpx.AsyncClient(timeout=30) as client:
+        # Method 1: Try POST to /app/subscriptions with system user token
+        try:
+            r = await client.post(
+                f"https://graph.facebook.com/v25.0/{app_id}/subscriptions",
+                headers={"Authorization": f"Bearer {token}"},
+                data={
+                    "object": "whatsapp_business_account",
+                    "callback_url": new_callback,
+                    "verify_token": verify_token,
+                    "fields": "messages",
+                },
+            )
+            results["subscription_result"] = r.json()
+        except Exception as e:
+            results["subscription_error"] = str(e)
+
+        # Method 2: Try subscribing WABA to get webhooks
+        # First get WABA ID
         try:
             r2 = await client.get(
-                "https://graph.facebook.com/v25.0/1143087072210203/whatsapp_business_profile",
-                params={"fields": "about,address,description,email,profile_picture_url,websites,vertical"},
+                f"https://graph.facebook.com/v25.0/1143087072210203",
+                params={"fields": "id"},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            results["business_profile"] = r2.json()
+            results["phone_check"] = r2.json()
         except Exception as e:
-            results["business_profile_error"] = str(e)
+            results["phone_check_error"] = str(e)
+
+        # Method 3: Try overriding callback_url at WABA level
+        try:
+            r3 = await client.post(
+                f"https://graph.facebook.com/v25.0/{app_id}/subscriptions",
+                params={"access_token": token},
+                json={
+                    "object": "whatsapp_business_account",
+                    "callback_url": new_callback,
+                    "verify_token": verify_token,
+                    "fields": ["messages"],
+                },
+            )
+            results["subscription_json_result"] = r3.json()
+        except Exception as e:
+            results["subscription_json_error"] = str(e)
 
     return results
 
