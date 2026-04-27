@@ -3003,7 +3003,7 @@ async def receive_sms(request: Request):
 # Meta Cloud API Webhook — verification (GET) and incoming messages (POST)
 # ---------------------------------------------------------------------------
 
-CLOUD_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "ppis_bot_verify_2026")
+CLOUD_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "ppis_bot_verify_2024")
 
 
 @router.get("/webhook/cloud")

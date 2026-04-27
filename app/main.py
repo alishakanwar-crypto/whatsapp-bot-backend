@@ -27,7 +27,14 @@ class LowercaseURLMiddleware(BaseHTTPMiddleware):
     """Middleware to normalize URL paths to lowercase for case-insensitive routing."""
 
     async def dispatch(self, request: Request, call_next):
-        request.scope["path"] = request.scope["path"].lower()
+        path = request.scope["path"]
+        method = request.method
+        # Log all webhook-related requests for debugging
+        if "webhook" in path.lower():
+            logging.getLogger("app.main").info(
+                f"[REQUEST] {method} {path} from {request.client.host if request.client else 'unknown'}"
+            )
+        request.scope["path"] = path.lower()
         return await call_next(request)
 
 
