@@ -2220,9 +2220,18 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
         )
         rows = await cursor.fetchall()
         for row in rows:
+            # Collect both parent phones for notifications
+            father_phone = re.sub(r"\D", "", row[2] or "") if row[2] else ""
+            mother_phone = re.sub(r"\D", "", row[3] or "") if row[3] else ""
+            parent_phones = []
+            for p in (father_phone, mother_phone):
+                if len(p) >= 10:
+                    p10 = p[-10:]
+                    parent_phones.append(f"91{p10}")
             results.append({
                 "student_name": row[0],
                 "grade": row[1],
+                "parent_phones": parent_phones,
             })
         return results
     finally:
@@ -3107,6 +3116,22 @@ async def _try_register_child_face(
     grade = target_child["grade"]
     person_id = re.sub(r"[^a-zA-Z0-9]", "_", student_name.upper()) + "_" + re.sub(r"[^a-zA-Z0-9]", "", grade.upper())
 
+    # Build comma-separated phone list with both parents for notifications
+    parent_phones = target_child.get("parent_phones", [])
+    if not parent_phones:
+        parent_phones = [sender]
+    # Ensure sender is included and de-duplicate
+    sender_digits = re.sub(r"\D", "", sender)
+    sender_10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
+    normalized_phones = set()
+    for p in parent_phones:
+        p_digits = re.sub(r"\D", "", p)
+        p_10 = p_digits[-10:] if len(p_digits) >= 10 else p_digits
+        normalized_phones.add(f"91{p_10}")
+    if sender_10:
+        normalized_phones.add(f"91{sender_10}")
+    phone_str = ",".join(sorted(normalized_phones))
+
     # Store the face image in the cloud DB
     db = await get_db()
     try:
@@ -3124,25 +3149,31 @@ async def _try_register_child_face(
             "INSERT INTO agent_registered_faces "
             "(person_id, name, role, phone, angle, image_data) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (person_id, student_name, "Student", sender, angle, img_bytes),
+            (person_id, student_name, "Student", phone_str, angle, img_bytes),
         )
         await db.commit()
         photo_num = existing_count + 1
 
         logger.info(
             f"Face registered: {student_name} ({grade}) person_id={person_id} "
-            f"photo #{photo_num} from parent {sender}"
+            f"photo #{photo_num} phones={phone_str}"
         )
     finally:
         await db.close()
 
     del img_bytes
 
+    notify_count = len(normalized_phones)
+    notify_note = (
+        "Both parents" if notify_count >= 2
+        else "You"
+    )
+
     if photo_num == 1:
         confirm_msg = (
             f"Thank you! Your ward *{student_name}* ({grade}) has been "
             f"registered for automatic attendance tracking.\n\n"
-            f"You will receive a WhatsApp notification whenever "
+            f"{notify_note} will receive a WhatsApp notification whenever "
             f"{student_name} arrives at school.\n\n"
             f"You can send more photos from different angles to improve "
             f"recognition accuracy."
