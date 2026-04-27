@@ -166,18 +166,27 @@ async def init_db():
 
         # -----------------------------------------------------------------
         # Auto-seed agent DVRs & camera mappings when empty.
-        # Fly.io's ephemeral volume wipes the DB on every restart/suspend.
+        # Fly.io's ephemeral filesystem wipes the DB on every restart/OOM.
         # This ensures the Campus Agent always gets valid config on startup.
         # -----------------------------------------------------------------
-        # Auto-seed DVRs and camera mappings independently.
-        # Check each table separately so partial failures don't block the other.
-        from app.seed_data import SEED_DVRS, SEED_CAMERA_MAPPING
+        try:
+            from app.seed_data import SEED_DVRS, SEED_CAMERA_MAPPING
+            logger.info(
+                f"SEED DATA loaded: {len(SEED_DVRS)} DVRs, "
+                f"{len(SEED_CAMERA_MAPPING)} camera mappings"
+            )
+        except Exception as e:
+            logger.error(f"Failed to import seed_data: {e}", exc_info=True)
+            SEED_DVRS = []
+            SEED_CAMERA_MAPPING = {}
 
+        # --- Auto-seed DVRs ---
         cursor = await db.execute("SELECT COUNT(*) FROM agent_dvrs")
         row = await cursor.fetchone()
         dvr_count = row[0] if row else 0
+        logger.info(f"agent_dvrs count on startup: {dvr_count}")
 
-        if dvr_count == 0:
+        if dvr_count == 0 and SEED_DVRS:
             logger.info("agent_dvrs table is empty — auto-seeding DVRs")
             try:
                 for dvr in SEED_DVRS:
@@ -194,17 +203,23 @@ async def init_db():
                         ),
                     )
                 await db.commit()
-                logger.info(f"Auto-seeded {len(SEED_DVRS)} DVRs")
+                logger.info(f"Auto-seeded {len(SEED_DVRS)} DVRs OK")
             except Exception as e:
                 logger.error(f"Auto-seed DVRs failed: {e}", exc_info=True)
 
+        # --- Auto-seed camera mappings ---
         cursor = await db.execute("SELECT COUNT(*) FROM agent_camera_mapping")
         row = await cursor.fetchone()
         mapping_count = row[0] if row else 0
+        logger.info(f"agent_camera_mapping count on startup: {mapping_count}")
 
-        if mapping_count == 0:
-            logger.info("agent_camera_mapping table is empty — auto-seeding camera mappings")
+        if mapping_count == 0 and SEED_CAMERA_MAPPING:
+            logger.info(
+                f"agent_camera_mapping table is empty — auto-seeding "
+                f"{len(SEED_CAMERA_MAPPING)} camera mappings"
+            )
             try:
+                seeded = 0
                 for location, data in SEED_CAMERA_MAPPING.items():
                     all_cameras = data.get("all_cameras")
                     await db.execute(
@@ -220,10 +235,22 @@ async def init_db():
                             json.dumps(all_cameras) if all_cameras else None,
                         ),
                     )
+                    seeded += 1
                 await db.commit()
-                logger.info(f"Auto-seeded {len(SEED_CAMERA_MAPPING)} camera mappings")
+                # Verify the seed worked
+                cursor2 = await db.execute(
+                    "SELECT COUNT(*) FROM agent_camera_mapping"
+                )
+                verify_row = await cursor2.fetchone()
+                verify_count = verify_row[0] if verify_row else 0
+                logger.info(
+                    f"Auto-seeded camera mappings: inserted {seeded}, "
+                    f"verified {verify_count} in DB"
+                )
             except Exception as e:
-                logger.error(f"Auto-seed camera mappings failed: {e}", exc_info=True)
+                logger.error(
+                    f"Auto-seed camera mappings failed: {e}", exc_info=True
+                )
 
     finally:
         await db.close()
