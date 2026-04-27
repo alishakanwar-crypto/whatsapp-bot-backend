@@ -91,7 +91,7 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
 
     # Wait for agent to reconnect if it's briefly disconnected (e.g. after OOM kill)
     if _agent_ws is None:
-        connected = await wait_for_agent(max_wait=15.0)
+        connected = await wait_for_agent(max_wait=30.0)
         if not connected:
             return {"success": False, "error": "Campus agent is not connected"}
 
@@ -107,6 +107,33 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
             "request_id": request_id,
         })
         logger.info(f"Sent snapshot request {request_id} for classroom: {classroom}")
+    except Exception as send_err:
+        # WebSocket may be stale after OOM restart — clear it and wait for reconnect
+        logger.warning(f"Failed to send snapshot request (stale WS?): {send_err}")
+        _agent_ws = None
+        _pending_requests.pop(request_id, None)
+        _pending_images.pop(request_id, None)
+        # Give the agent time to reconnect, then retry once
+        reconnected = await wait_for_agent(max_wait=30.0)
+        if not reconnected:
+            return {"success": False, "error": "Campus agent disconnected during request"}
+        # Retry with a fresh request
+        request_id = str(uuid.uuid4())
+        future = asyncio.get_event_loop().create_future()
+        _pending_requests[request_id] = future
+        _pending_images[request_id] = []
+        try:
+            await _agent_ws.send_json({
+                "type": "snapshot_request",
+                "classroom": classroom,
+                "request_id": request_id,
+            })
+            logger.info(f"Retry snapshot request {request_id} for classroom: {classroom}")
+        except Exception as retry_err:
+            logger.error(f"Retry snapshot request also failed: {retry_err}")
+            _pending_requests.pop(request_id, None)
+            _pending_images.pop(request_id, None)
+            return {"success": False, "error": "Campus agent connection is unstable"}
 
         result = await asyncio.wait_for(future, timeout=timeout)
         return result

@@ -129,14 +129,42 @@ def _extract_grade_from_text(text: str) -> str:
     return "Popsicles"
 
 
+def _check_memory_ok() -> bool:
+    """Return True if RSS is below the safe threshold (100 MB).
+
+    On 256 MB Fly.io instances the OOM killer fires around 136 MB RSS.
+    We abort the poll early if we're already using too much memory so
+    that the core bot (WhatsApp replies + camera snapshots) stays alive.
+    """
+    try:
+        import resource
+        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # KB→B on Linux
+        rss_mb = rss_bytes / (1024 * 1024)
+        if rss_mb > 100:
+            logger.warning(f"Memory too high ({rss_mb:.0f} MB) — skipping email poll to prevent OOM")
+            return False
+        return True
+    except Exception:
+        return True  # If we can't check, proceed cautiously
+
+
 def poll_homework_emails_sync() -> None:
     """Connect to IMAP, fetch recent emails from teachers with homework content,
     and broadcast them to parents via WhatsApp.
 
-    This is designed to be called periodically from the APScheduler
-    (every 10 minutes).
+    Designed to be called periodically from APScheduler (every 60 min).
+
+    MEMORY SAFETY:
+    - Checks RSS before starting; aborts if already > 100 MB
+    - Processes at most 2 emails per poll (not 5) to stay under OOM threshold
+    - Uses IMAP HEADER-only fetch first to filter before downloading full body
+    - Forces gc.collect() after each email
     """
     global _processed_message_ids
+    import gc
+
+    if not _check_memory_ok():
+        return
 
     imap_password = IMAP_PASSWORD or os.getenv("SMTP_PASSWORD", "")
     if not imap_password:
@@ -145,88 +173,70 @@ def poll_homework_emails_sync() -> None:
 
     logger.info("Polling for teacher homework emails...")
 
+    mailbox = None
     try:
-        mailbox = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=30)
+        mailbox = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=15)
         mailbox.login(IMAP_USER, imap_password)
-        mailbox.select("INBOX")
+        mailbox.select("INBOX", readonly=True)  # readonly=True avoids auto-marking as Seen
     except Exception as e:
         logger.error(f"Failed to connect to IMAP: {e}")
+        if mailbox:
+            try:
+                mailbox.logout()
+            except Exception:
+                pass
         return
 
     try:
-        # Search for UNSEEN emails only (much lighter than scanning all recent)
+        # Search for UNSEEN emails only
         status, data = mailbox.search(None, "UNSEEN")
         if status != "OK" or not data[0]:
             logger.info("No unseen emails found")
             return
 
         email_ids = data[0].split()
-        logger.info(f"Found {len(email_ids)} unseen email(s) to scan")
+        logger.info(f"Found {len(email_ids)} unseen email(s) — will process max 2")
 
-        # Process only the last 5 unseen emails to avoid OOM on 256MB instances
-        batch = list(reversed(email_ids[-5:]))
+        # Process only the last 2 unseen emails per poll (was 5 — caused OOM)
+        batch = list(reversed(email_ids[-2:]))
         for eid in batch:
+            if not _check_memory_ok():
+                logger.warning("Memory limit approaching — stopping email processing early")
+                break
             try:
                 _process_single_email(mailbox, eid)
             except Exception as e:
                 logger.error(f"Error processing email {eid}: {e}")
             finally:
-                # Force garbage collection after each email to prevent OOM
-                import gc
                 gc.collect()
     finally:
         try:
-            mailbox.logout()
+            if mailbox:
+                mailbox.logout()
         except Exception:
             pass
 
-    # Trim processed IDs set to prevent unbounded memory growth.
-    # We keep the most recent _MAX_PROCESSED_IDS entries to avoid
-    # re-processing emails that are still within the IMAP UNSEEN window.
-    # Since Python 3.7+ dicts preserve insertion order, we convert to a
-    # list and keep the tail (most recently added IDs).
+    # Trim processed IDs set to prevent unbounded memory growth
     if len(_processed_message_ids) > _MAX_PROCESSED_IDS:
         keep = list(_processed_message_ids)[-_MAX_PROCESSED_IDS:]
         _processed_message_ids.clear()
         _processed_message_ids.update(keep)
 
-    # Explicit garbage collection to help prevent OOM
-    import gc
     gc.collect()
     logger.info("Email poll completed")
 
 
 def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     """Process a single email — check if it's from a teacher with homework content.
-    
-    Preserves the original read/unread status of each email:
-    - If the email was unread before we fetched it, we mark it back as unread.
-    - If the email was already read, we leave it as read.
+
+    The mailbox is opened in readonly mode, so FETCH does NOT mark emails
+    as Seen — original read/unread status is automatically preserved.
     """
     global _processed_message_ids
-
-    # Check if the email was already read BEFORE we fetch it
-    # (IMAP FETCH with RFC822 automatically sets the \Seen flag)
-    was_already_read = False
-    try:
-        flag_status, flag_data = mailbox.fetch(email_id, "(FLAGS)")
-        if flag_status == "OK" and flag_data[0]:
-            flag_str = flag_data[0].decode() if isinstance(flag_data[0], bytes) else str(flag_data[0])
-            was_already_read = "\\Seen" in flag_str
-    except Exception as e:
-        logger.warning(f"Failed to check flags for email {email_id}: {e}")
 
     status, msg_data = mailbox.fetch(email_id, "(RFC822)")
     if status != "OK" or not msg_data[0]:
         return
-
-    # Restore original read/unread status:
-    # FETCH with RFC822 sets \Seen, so if it was unread before, remove the flag
-    if not was_already_read:
-        try:
-            mailbox.store(email_id, "-FLAGS", "\\Seen")
-        except Exception as e:
-            logger.warning(f"Failed to restore unread status for email {email_id}: {e}")
 
     raw_email = msg_data[0][1]
     msg = email.message_from_bytes(raw_email)

@@ -477,26 +477,27 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled teacher data refresh from Google Sheet every 14 days (fortnightly)")
 
-    # Run initial refresh after 30 seconds
+    # Run initial refresh after 60 seconds (was 30s — staggered to reduce memory spikes)
     scheduler.add_job(
         refresh_teacher_data_sync,
         trigger="date",
-        run_date=datetime.now() + timedelta(seconds=30),
+        run_date=datetime.now() + timedelta(seconds=60),
         id="sheet_refresh_initial",
         replace_existing=True,
     )
-    logger.info("Scheduled initial teacher data refresh in 30 seconds")
+    logger.info("Scheduled initial teacher data refresh in 60 seconds")
 
     # --- Birthday Wishes ---
-    # Load student DOB data into DB at startup (after 45 seconds to let DB init)
+    # Load student DOB data into DB at startup (after 120s — was 45s, staggered
+    # so it doesn't overlap with sheet_refresh_initial which runs at 60s)
     scheduler.add_job(
         _load_student_dob_data_sync,
         trigger="date",
-        run_date=datetime.now() + timedelta(seconds=45),
+        run_date=datetime.now() + timedelta(seconds=120),
         id="load_student_dob_initial",
         replace_existing=True,
     )
-    logger.info("Scheduled initial student DOB data load in 45 seconds")
+    logger.info("Scheduled initial student DOB data load in 120 seconds")
 
     # Send birthday wishes daily at midnight IST (18:30 UTC previous day)
     scheduler.add_job(
@@ -527,24 +528,26 @@ def start_scheduler() -> None:
     logger.info("Scheduled parent phone data refresh every 14 days (fortnightly)")
 
     # --- Teacher Homework Email Polling ---
-    # Poll info@ppischool.in IMAP inbox every 30 minutes (reduced from 10 to prevent OOM)
+    # Poll info@ppischool.in IMAP inbox every 60 minutes (was 30 — caused OOM on 256MB)
+    # The poll itself now has memory guards and processes max 2 emails per run.
     scheduler.add_job(
         poll_homework_emails_sync,
-        trigger=IntervalTrigger(minutes=30),
+        trigger=IntervalTrigger(minutes=60),
         id="email_homework_poll",
         replace_existing=True,
     )
-    logger.info("Scheduled teacher homework email polling every 30 minutes")
+    logger.info("Scheduled teacher homework email polling every 60 minutes")
 
-    # Run initial email poll after 120 seconds (let other services finish first)
+    # Run initial email poll after 300 seconds (5 min) — let DB seed, sheet refresh,
+    # and parent phone population all finish first so baseline memory is stable.
     scheduler.add_job(
         poll_homework_emails_sync,
         trigger="date",
-        run_date=datetime.now() + timedelta(seconds=120),
+        run_date=datetime.now() + timedelta(seconds=300),
         id="email_homework_poll_initial",
         replace_existing=True,
     )
-    logger.info("Scheduled initial email homework poll in 120 seconds")
+    logger.info("Scheduled initial email homework poll in 300 seconds (5 min)")
 
     # --- Daily Message History Report ---
     # Send daily report to alisha.kanwar@ppischool.in at 11:30 PM IST (18:00 UTC)
