@@ -183,6 +183,41 @@ async def check_meta_webhook():
     return results
 
 
+@app.get("/debug/subscribe-webhook")
+async def subscribe_webhook():
+    """Try to subscribe this server's webhook URL with Meta."""
+    import httpx
+    from app.services.whatsapp_service import get_cloud_token
+    token = get_cloud_token()
+    if not token:
+        return {"error": "No cloud token configured"}
+
+    results = {}
+    async with httpx.AsyncClient(timeout=15) as client:
+        # Try to get app_id from the token debug endpoint
+        try:
+            r = await client.get(
+                "https://graph.facebook.com/v25.0/debug_token",
+                params={"input_token": token, "access_token": token},
+            )
+            results["token_debug"] = r.json()
+        except Exception as e:
+            results["token_debug_error"] = str(e)
+
+        # Try getting WABA via phone number business profile
+        try:
+            r2 = await client.get(
+                "https://graph.facebook.com/v25.0/1143087072210203/whatsapp_business_profile",
+                params={"fields": "about,address,description,email,profile_picture_url,websites,vertical"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            results["business_profile"] = r2.json()
+        except Exception as e:
+            results["business_profile_error"] = str(e)
+
+    return results
+
+
 @app.get("/debug/parent-phones")
 async def debug_parent_phones():
     """Debug endpoint to verify parent phone data is loaded."""
