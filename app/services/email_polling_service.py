@@ -11,6 +11,7 @@ import email
 import imaplib
 import logging
 import asyncio
+import collections
 from email.header import decode_header
 from datetime import datetime, timedelta, timezone
 
@@ -47,8 +48,10 @@ _GRADE_EXTRACT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Track processed email message-IDs to avoid re-processing
-_processed_message_ids: set[str] = set()
+# Track processed email message-IDs to avoid re-processing.
+# OrderedDict preserves insertion order so trimming always discards the
+# oldest entries (a plain set has no guaranteed order).
+_processed_message_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
 _MAX_PROCESSED_IDS = 200  # reduced from 500 to limit memory usage
 
 
@@ -216,11 +219,11 @@ def poll_homework_emails_sync() -> None:
         except Exception:
             pass
 
-    # Trim processed IDs set to prevent unbounded memory growth
-    if len(_processed_message_ids) > _MAX_PROCESSED_IDS:
-        keep = list(_processed_message_ids)[-_MAX_PROCESSED_IDS:]
-        _processed_message_ids.clear()
-        _processed_message_ids.update(keep)
+    # Trim processed IDs to prevent unbounded memory growth.
+    # Because _processed_message_ids is an OrderedDict, popping from the
+    # left always removes the *oldest* entries first.
+    while len(_processed_message_ids) > _MAX_PROCESSED_IDS:
+        _processed_message_ids.popitem(last=False)  # remove oldest
 
     gc.collect()
     logger.info("Email poll completed")
@@ -246,6 +249,7 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     if message_id in _processed_message_ids:
         return
 
+
     from_addr = _decode_mime_header(msg.get("From", ""))
     subject = _decode_mime_header(msg.get("Subject", ""))
     body = _extract_text_from_email(msg)
@@ -253,13 +257,13 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     # Check if sender is a known teacher
     teacher_entry = _match_teacher_by_email(from_addr)
     if teacher_entry is None:
-        _processed_message_ids.add(message_id)
+        _processed_message_ids[message_id] = None
         return
 
     # Check for homework keywords in subject or body
     combined_text = f"{subject}\n{body}"
     if not _HW_RE.search(combined_text):
-        _processed_message_ids.add(message_id)
+        _processed_message_ids[message_id] = None
         return
 
     teacher_name = teacher_entry["teacher"].split("/")[0].strip()
@@ -301,7 +305,7 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     finally:
         loop.close()
 
-    _processed_message_ids.add(message_id)
+    _processed_message_ids[message_id] = None
 
 
 async def _broadcast_email_homework(

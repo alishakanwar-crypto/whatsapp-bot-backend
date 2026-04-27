@@ -100,6 +100,7 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     _pending_requests[request_id] = future
     _pending_images[request_id] = []  # Initialize image accumulator
 
+    # Send the request — if the WebSocket is stale, retry once after reconnect
     try:
         await _agent_ws.send_json({
             "type": "snapshot_request",
@@ -135,6 +136,8 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
             _pending_images.pop(request_id, None)
             return {"success": False, "error": "Campus agent connection is unstable"}
 
+    # Now wait for the agent to send back the snapshot images
+    try:
         result = await asyncio.wait_for(future, timeout=timeout)
         return result
     except asyncio.TimeoutError:
