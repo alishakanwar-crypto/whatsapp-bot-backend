@@ -2390,7 +2390,7 @@ async def detect_and_handle_snapshot_request(
         )
         return True
 
-    from app.routes.agent_ws import is_agent_connected, request_snapshot
+    from app.routes.agent_ws import is_agent_connected, request_snapshot, wait_for_agent
     from app.services.whatsapp_service import (
         upload_base64_image_cloud,
         send_cloud_media,
@@ -2398,8 +2398,9 @@ async def detect_and_handle_snapshot_request(
 
     logger.info(f"Snapshot request detected from {sender} (admin={is_admin}): {message_text}")
 
-    # Check if agent is connected first
-    if not is_agent_connected():
+    # Check if agent is connected — wait up to 15s for reconnection after OOM kills
+    agent_ready = await wait_for_agent(max_wait=15.0)
+    if not agent_ready:
         offline_msg = (
             "The campus camera system is currently offline. "
             "Please try again later."

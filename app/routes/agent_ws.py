@@ -53,6 +53,28 @@ def is_agent_connected() -> bool:
     return _agent_ws is not None
 
 
+async def wait_for_agent(max_wait: float = 15.0) -> bool:
+    """Wait up to max_wait seconds for the agent to reconnect.
+
+    After an OOM kill, the Fly.io app restarts and `_agent_ws` is None.
+    The campus agent auto-reconnects within seconds. This avoids
+    immediately telling the user 'camera offline' during that brief window.
+    """
+    if _agent_ws is not None:
+        return True
+    logger.info("Agent not connected — waiting up to %.0fs for reconnection...", max_wait)
+    elapsed = 0.0
+    step = 2.0
+    while elapsed < max_wait:
+        await asyncio.sleep(step)
+        elapsed += step
+        if _agent_ws is not None:
+            logger.info("Agent reconnected after %.0fs wait", elapsed)
+            return True
+    logger.warning("Agent did not reconnect within %.0fs", max_wait)
+    return False
+
+
 async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     """Request a snapshot from the campus agent.
 
@@ -63,8 +85,12 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
       error: str — only if not success
     """
     global _agent_ws
+
+    # Wait for agent to reconnect if it's briefly disconnected (e.g. after OOM kill)
     if _agent_ws is None:
-        return {"success": False, "error": "Campus agent is not connected"}
+        connected = await wait_for_agent(max_wait=15.0)
+        if not connected:
+            return {"success": False, "error": "Campus agent is not connected"}
 
     request_id = str(uuid.uuid4())
     future: asyncio.Future = asyncio.get_event_loop().create_future()
