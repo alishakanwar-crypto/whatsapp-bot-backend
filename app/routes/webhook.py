@@ -2750,6 +2750,50 @@ async def receive_whatsapp_message(request: Request):
 
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
+
+        # --- Parent photo / image handling (MUST run BEFORE text handlers) ---
+        has_image_green = media_info and media_info.get("type") == "imageMessage"
+        logger.info(f"[GREEN IMAGE CHECK] sender={sender} has_image={has_image_green} media_type={media_info.get('type') if media_info else 'None'}")
+        if has_image_green:
+            logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, url={media_info.get('url', '')[:80]}")
+            try:
+                face_reg_handled = await _try_register_child_face(
+                    sender, reply_to, bot_phone, media_info,
+                )
+                logger.info(f"[GREEN IMAGE HANDLER] face_reg_handled={face_reg_handled} for {sender}")
+                if face_reg_handled:
+                    return {"status": "ok"}
+            except Exception as img_exc:
+                logger.error(f"[GREEN IMAGE HANDLER] Exception: {img_exc}", exc_info=True)
+
+            # Vision fallback: describe the image via GPT
+            try:
+                import httpx as _httpx
+                direct_url = media_info.get("url", "")
+                if direct_url:
+                    async with _httpx.AsyncClient(timeout=30) as _client:
+                        _resp = await _client.get(direct_url)
+                        if _resp.status_code == 200:
+                            from app.services.openai_service import generate_vision_response
+                            system_prompt = await get_system_prompt()
+                            history = await get_conversation_history(sender)
+                            caption = media_info.get("caption", "")
+                            ai_response = await generate_vision_response(
+                                _resp.content, _resp.headers.get("content-type", "image/jpeg"),
+                                caption, system_prompt, history,
+                            )
+                            await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
+                            await send_whatsapp_message(reply_to, ai_response)
+                            return {"status": "ok"}
+            except Exception as vis_exc:
+                logger.error(f"[GREEN IMAGE HANDLER] Vision fallback error: {vis_exc}", exc_info=True)
+
+            # If all image processing fails, acknowledge receipt
+            err_msg = "Your image has been received. Please try sending it again if needed."
+            await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
+            await send_whatsapp_message(reply_to, err_msg)
+            return {"status": "ok"}
+
         # Check if a teacher is broadcasting homework to parents of their class
         hw_broadcast = await detect_and_handle_teacher_homework_broadcast(
             sender, message_text, reply_to, media_info,
@@ -2998,16 +3042,35 @@ async def _try_register_child_face(
     if not children:
         return False
 
+    # Download image — supports both Cloud API (cloud_media_id) and Green API (direct url)
     cloud_media_id = media_info.get("cloud_media_id", "")
-    if not cloud_media_id:
-        logger.warning(f"Face registration: no cloud_media_id for {sender}")
+    direct_url = media_info.get("url", "")
+    img_bytes = None
+    img_mime = "image/jpeg"
+
+    if cloud_media_id:
+        from app.services.whatsapp_service import download_cloud_media
+        logger.info(f"Face registration: downloading image via Cloud API {cloud_media_id} from {sender}")
+        img_bytes, img_mime = await download_cloud_media(cloud_media_id)
+    elif direct_url:
+        import httpx
+        logger.info(f"Face registration: downloading image via direct URL from {sender}")
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(direct_url)
+                if resp.status_code == 200:
+                    img_bytes = resp.content
+                    img_mime = resp.headers.get("content-type", "image/jpeg")
+                else:
+                    logger.error(f"Face registration: direct URL returned {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Face registration: direct URL download error: {e}")
+    else:
+        logger.warning(f"Face registration: no cloud_media_id or url for {sender}")
         return False
 
-    from app.services.whatsapp_service import download_cloud_media
-    logger.info(f"Face registration: downloading image {cloud_media_id} from {sender}")
-    img_bytes, img_mime = await download_cloud_media(cloud_media_id)
     if not img_bytes:
-        logger.error(f"Face registration: failed to download image {cloud_media_id} from {sender}")
+        logger.error(f"Face registration: failed to download image from {sender}")
         return False
 
     caption = (media_info.get("caption", "") or "").strip().lower()

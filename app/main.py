@@ -86,7 +86,7 @@ async def healthz():
 @app.get("/debug/version")
 async def debug_version():
     """Check deployed code version."""
-    return {"version": "2026-04-27-v3-image-fix", "image_handler": True}
+    return {"version": "2026-04-27-v4-green-api-image-fix", "image_handler_cloud": True, "image_handler_green": True}
 
 
 @app.get("/debug/parent-phones")
