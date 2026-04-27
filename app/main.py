@@ -93,7 +93,15 @@ async def healthz():
 @app.get("/debug/version")
 async def debug_version():
     """Check deployed code version."""
-    return {"version": "2026-04-27-v4-green-api-image-fix", "image_handler_cloud": True, "image_handler_green": True}
+    from app.services.whatsapp_service import get_whatsapp_provider, get_id_instance, get_api_url
+    return {
+        "version": "2026-04-27-v5-verify-token-fix",
+        "image_handler_cloud": True,
+        "image_handler_green": True,
+        "whatsapp_provider": get_whatsapp_provider(),
+        "green_api_instance": get_id_instance()[:10] + "..." if get_id_instance() else "not_set",
+        "green_api_url": get_api_url(),
+    }
 
 
 @app.get("/debug/parent-phones")
