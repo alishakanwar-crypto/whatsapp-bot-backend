@@ -130,6 +130,41 @@ async def debug_webhook_config():
         await db.close()
 
 
+@app.get("/debug/check-meta-webhook")
+async def check_meta_webhook():
+    """Server-side check of Meta webhook subscription status."""
+    import httpx
+    from app.services.whatsapp_service import get_cloud_token
+    token = get_cloud_token()
+    if not token:
+        return {"error": "No cloud token configured"}
+
+    results = {}
+    async with httpx.AsyncClient(timeout=15) as client:
+        # Get WABA ID from phone number
+        try:
+            r = await client.get(
+                "https://graph.facebook.com/v25.0/1143087072210203",
+                params={"fields": "display_phone_number,verified_name"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            results["phone_info"] = r.json()
+        except Exception as e:
+            results["phone_info_error"] = str(e)
+
+        # Get app subscriptions
+        try:
+            r2 = await client.get(
+                "https://graph.facebook.com/v25.0/app/subscriptions",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            results["subscriptions"] = r2.json()
+        except Exception as e:
+            results["subscriptions_error"] = str(e)
+
+    return results
+
+
 @app.get("/debug/parent-phones")
 async def debug_parent_phones():
     """Debug endpoint to verify parent phone data is loaded."""
