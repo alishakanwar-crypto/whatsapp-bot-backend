@@ -120,7 +120,18 @@ async def debug_parent_phones():
 
 @app.post("/api/send-email")
 async def api_send_email(request: Request):
-    """Send an email via the server's SMTP config (for admin use)."""
+    """Send an email via the server's SMTP config (for admin use).
+
+    Requires X-Agent-Secret header when AGENT_SECRET is configured.
+    """
+    import os
+    from fastapi import HTTPException
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
+
     from app.services.email_service import send_email_async
     body = await request.json()
     to = body.get("to", "")
