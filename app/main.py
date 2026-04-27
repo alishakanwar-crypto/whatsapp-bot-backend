@@ -118,6 +118,33 @@ async def debug_parent_phones():
         await db.close()
 
 
+@app.get("/debug/parent-search")
+async def debug_parent_search(phone: str = ""):
+    """Search for a parent by phone number (last 10 digits)."""
+    from app.database import get_db
+    if not phone:
+        return {"error": "Provide ?phone=DIGITS"}
+    digits = "".join(c for c in phone if c.isdigit())
+    last10 = digits[-10:] if len(digits) >= 10 else digits
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT student_name, grade, father_mobile, mother_mobile "
+            "FROM pi_sheet_students WHERE father_mobile LIKE ? OR mother_mobile LIKE ?",
+            (f"%{last10}%", f"%{last10}%"),
+        )
+        rows = await cursor.fetchall()
+        return {
+            "phone_searched": last10,
+            "results": [
+                {"name": r[0], "grade": r[1], "father": r[2], "mother": r[3]}
+                for r in rows
+            ],
+        }
+    finally:
+        await db.close()
+
+
 @app.post("/api/send-email")
 async def api_send_email(request: Request):
     """Send an email via the server's SMTP config (for admin use).
