@@ -752,6 +752,57 @@ async def generate_response(
         return generate_fallback_response(user_message)
 
 
+async def generate_vision_response(
+    image_bytes: bytes,
+    mime_type: str,
+    caption: str,
+    system_prompt: str,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> str:
+    """Generate a response for an image using GPT-4o-mini vision."""
+    import base64
+
+    ai_client = get_client()
+    if ai_client is None:
+        return (
+            "Thank you for sharing the image. "
+            "Our AI assistant is currently unavailable. "
+            "Please try again later or type your question."
+        )
+
+    try:
+        b64 = base64.b64encode(image_bytes).decode("utf-8")
+        data_uri = f"data:{mime_type};base64,{b64}"
+
+        user_text = caption.strip() if caption.strip() else "Please describe this image."
+
+        user_content: list[dict] = [
+            {"type": "text", "text": user_text},
+            {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
+        ]
+
+        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        if conversation_history:
+            messages.extend(conversation_history[-6:])
+        messages.append({"role": "user", "content": user_content})
+
+        response = await ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=500,
+            temperature=0.7,
+        )
+
+        reply = response.choices[0].message.content
+        if reply is None:
+            return "I received your image but could not generate a response."
+        return reply.strip()
+
+    except Exception as e:
+        logger.error(f"OpenAI Vision API error: {e}")
+        return "I received your image but encountered an error processing it. Please try again."
+
+
 async def _send_quota_alert() -> None:
     """Send a WhatsApp alert to the admin when OpenAI quota is exceeded."""
     global _QUOTA_ALERT_SENT

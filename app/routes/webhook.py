@@ -3145,6 +3145,23 @@ async def receive_cloud_api_message(request: Request):
 
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
+
+        # --- Image vision: if user sent an image, use GPT-4o-mini vision ---
+        if media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id"):
+            from app.services.whatsapp_service import download_cloud_media
+            from app.services.openai_service import generate_vision_response
+            img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
+            if img_bytes:
+                caption = media_info.get("caption", "")
+                ai_response = await generate_vision_response(
+                    img_bytes, img_mime, caption, system_prompt, history
+                )
+                del img_bytes
+                await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, ai_response)
+                await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)
+                return {"status": "ok"}
+
         ai_response = await generate_response(message_text, system_prompt, history)
 
         # Check if the bot couldn't answer
