@@ -173,7 +173,17 @@ async def set_whatsapp_creds(request: Request):
 
     Accepts JSON with any of: GREEN_API_ID_INSTANCE, GREEN_API_TOKEN,
     GREEN_API_URL, WHATSAPP_CLOUD_TOKEN, WHATSAPP_PHONE_ID.
+
+    Requires X-Agent-Secret header when AGENT_SECRET is configured.
     """
+    import os
+    from fastapi import HTTPException
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
+
     from app.database import get_db
     from app.services.whatsapp_service import refresh_creds_cache
 
