@@ -141,7 +141,7 @@ async def check_meta_webhook():
 
     results = {}
     async with httpx.AsyncClient(timeout=15) as client:
-        # Get WABA ID from phone number
+        # Get phone info
         try:
             r = await client.get(
                 "https://graph.facebook.com/v25.0/1143087072210203",
@@ -152,15 +152,33 @@ async def check_meta_webhook():
         except Exception as e:
             results["phone_info_error"] = str(e)
 
-        # Get app subscriptions
+        # Get WABA ID from phone number
         try:
             r2 = await client.get(
-                "https://graph.facebook.com/v25.0/app/subscriptions",
+                "https://graph.facebook.com/v25.0/1143087072210203",
+                params={"fields": "whatsapp_business_account"},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            results["subscriptions"] = r2.json()
+            waba_data = r2.json()
+            results["waba_info"] = waba_data
+            waba_id = waba_data.get("whatsapp_business_account", {}).get("id")
+            if waba_id:
+                # Check WABA subscribed apps
+                r3 = await client.get(
+                    f"https://graph.facebook.com/v25.0/{waba_id}/subscribed_apps",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                results["subscribed_apps"] = r3.json()
+
+                # Check WABA message templates
+                r4 = await client.get(
+                    f"https://graph.facebook.com/v25.0/{waba_id}",
+                    params={"fields": "name,timezone_id,message_template_namespace"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                results["waba_details"] = r4.json()
         except Exception as e:
-            results["subscriptions_error"] = str(e)
+            results["waba_error"] = str(e)
 
     return results
 
