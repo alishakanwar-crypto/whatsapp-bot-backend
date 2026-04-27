@@ -2969,6 +2969,120 @@ async def verify_cloud_webhook(request: Request):
     return Response(content="Forbidden", status_code=403)
 
 
+async def _try_register_child_face(
+    sender: str, reply_to: str, bot_phone: str,
+    media_info: dict,
+) -> bool:
+    """Auto-register a child's face when a parent sends a photo.
+
+    Flow:
+    1. Look up sender phone in pi_sheet_students (parent DB).
+    2. If parent found, download the image from Cloud API.
+    3. Store in agent_registered_faces linked to the child.
+    4. Confirm to parent.
+
+    Returns True if the image was handled as a face registration.
+    """
+    children = await _lookup_parent_child_class(sender)
+    if not children:
+        return False
+
+    cloud_media_id = media_info.get("cloud_media_id", "")
+    if not cloud_media_id:
+        return False
+
+    from app.services.whatsapp_service import download_cloud_media
+    img_bytes, img_mime = await download_cloud_media(cloud_media_id)
+    if not img_bytes:
+        logger.error(f"Face registration: failed to download image from {sender}")
+        return False
+
+    caption = (media_info.get("caption", "") or "").strip().lower()
+
+    # If parent has multiple children, check caption for a name hint
+    target_child = None
+    if len(children) == 1:
+        target_child = children[0]
+    else:
+        for child in children:
+            child_name_lower = child["student_name"].lower()
+            if child_name_lower in caption or caption in child_name_lower:
+                target_child = child
+                break
+
+        if not target_child:
+            # Ask parent which child
+            child_list = "\n".join(
+                f"{i+1}. {c['student_name']} ({c['grade']})"
+                for i, c in enumerate(children)
+            )
+            ask_msg = (
+                "Thank you for sharing the photo!\n\n"
+                "We found multiple children linked to your number:\n"
+                f"{child_list}\n\n"
+                "Please resend the photo with your child's name in the caption "
+                "(e.g. send the photo with caption \"Rahul\")."
+            )
+            await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
+            await send_whatsapp_message(reply_to, ask_msg)
+            return True
+
+    student_name = target_child["student_name"]
+    grade = target_child["grade"]
+    person_id = re.sub(r"[^a-zA-Z0-9]", "_", student_name.upper()) + "_" + re.sub(r"[^a-zA-Z0-9]", "", grade.upper())
+
+    # Store the face image in the cloud DB
+    db = await get_db()
+    try:
+        # Check how many photos are already registered for this child
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM agent_registered_faces WHERE person_id = ?",
+            (person_id,),
+        )
+        count_row = await cursor.fetchone()
+        existing_count = count_row[0] if count_row else 0
+
+        angle = "front" if existing_count == 0 else f"angle_{existing_count + 1}"
+
+        await db.execute(
+            "INSERT INTO agent_registered_faces "
+            "(person_id, name, role, phone, angle, image_data) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (person_id, student_name, "Student", sender, angle, img_bytes),
+        )
+        await db.commit()
+        photo_num = existing_count + 1
+
+        logger.info(
+            f"Face registered: {student_name} ({grade}) person_id={person_id} "
+            f"photo #{photo_num} from parent {sender}"
+        )
+    finally:
+        await db.close()
+
+    del img_bytes
+
+    if photo_num == 1:
+        confirm_msg = (
+            f"Thank you! Your ward *{student_name}* ({grade}) has been "
+            f"registered for automatic attendance tracking.\n\n"
+            f"You will receive a WhatsApp notification whenever "
+            f"{student_name} arrives at school.\n\n"
+            f"You can send more photos from different angles to improve "
+            f"recognition accuracy."
+        )
+    else:
+        confirm_msg = (
+            f"Photo #{photo_num} for *{student_name}* ({grade}) has been "
+            f"added successfully.\n\n"
+            f"More photos from different angles help improve recognition accuracy."
+        )
+
+    await save_message(bot_phone, sender, confirm_msg, "whatsapp", "outgoing")
+    await send_whatsapp_message(reply_to, confirm_msg)
+    return True
+
+
 @router.post("/webhook/cloud")
 async def receive_cloud_api_message(request: Request):
     """Handle incoming WhatsApp messages from Meta Cloud API webhook."""
@@ -3146,8 +3260,15 @@ async def receive_cloud_api_message(request: Request):
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
 
-        # --- Image vision: if user sent an image, use GPT-4o-mini vision ---
+        # --- Parent photo → auto-register child for face recognition ---
         if media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id"):
+            face_reg_handled = await _try_register_child_face(
+                sender, reply_to, bot_phone, media_info,
+            )
+            if face_reg_handled:
+                return {"status": "ok"}
+
+            # --- Image vision fallback: describe the image via GPT ---
             from app.services.whatsapp_service import download_cloud_media
             from app.services.openai_service import generate_vision_response
             img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
