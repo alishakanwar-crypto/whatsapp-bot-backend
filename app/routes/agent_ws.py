@@ -22,6 +22,7 @@ import os
 import time
 import uuid
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketState
@@ -39,6 +40,15 @@ _pending_requests: dict[str, asyncio.Future] = {}
 _pending_images: dict[str, list] = {}
 
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
+
+# ---------------------------------------------------------------------------
+# Fallback proxy: when the agent isn't connected locally, proxy snapshot
+# requests to the app where the agent IS connected.  This handles the
+# migration period where webhook → new app but agent → old app.
+# ---------------------------------------------------------------------------
+AGENT_PROXY_URLS = [
+    "https://app-itszlsnn.fly.dev",  # Old app where agent may still be connected
+]
 
 
 async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
@@ -78,6 +88,57 @@ async def wait_for_agent(max_wait: float = 30.0) -> bool:
     return False
 
 
+async def _proxy_snapshot_request(classroom: str, timeout: float = 55.0) -> dict | None:
+    """Try to proxy a snapshot request to another app where the agent IS connected.
+
+    Returns the snapshot result dict if a proxy app has the agent connected
+    and returns a successful result, or None if no proxy is available.
+    """
+    for proxy_url in AGENT_PROXY_URLS:
+        try:
+            # First check if the agent is connected on the proxy app
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                status_resp = await client.get(f"{proxy_url}/api/agent/status")
+                if status_resp.status_code != 200:
+                    continue
+                status = status_resp.json()
+                if not status.get("connected"):
+                    logger.info(f"Proxy {proxy_url}: agent not connected, skipping")
+                    continue
+
+            # Agent is connected on the proxy app — send the snapshot request
+            logger.info(
+                f"Proxying snapshot request for '{classroom}' to {proxy_url}"
+            )
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{proxy_url}/api/agent/snapshot",
+                    json={"classroom": classroom},
+                    headers={"x-agent-secret": AGENT_SECRET} if AGENT_SECRET else {},
+                )
+                if resp.status_code == 200:
+                    result = resp.json()
+                    if result.get("success"):
+                        logger.info(
+                            f"Proxy snapshot via {proxy_url} succeeded: "
+                            f"{result.get('image_count', 0)} images"
+                        )
+                        return result
+                    else:
+                        logger.warning(
+                            f"Proxy snapshot via {proxy_url} returned failure: "
+                            f"{result.get('error', 'unknown')}"
+                        )
+                else:
+                    logger.warning(
+                        f"Proxy snapshot via {proxy_url} HTTP {resp.status_code}"
+                    )
+        except Exception as exc:
+            logger.warning(f"Proxy snapshot via {proxy_url} failed: {exc}")
+
+    return None  # No proxy available
+
+
 async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     """Request a snapshot from the campus agent.
 
@@ -93,6 +154,11 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     if _agent_ws is None:
         connected = await wait_for_agent(max_wait=30.0)
         if not connected:
+            # ---- Fallback: proxy through another app where agent IS connected ----
+            logger.info("Agent not connected locally — trying proxy fallback")
+            proxy_result = await _proxy_snapshot_request(classroom)
+            if proxy_result is not None:
+                return proxy_result
             return {"success": False, "error": "Campus agent is not connected"}
 
     request_id = str(uuid.uuid4())
@@ -335,4 +401,42 @@ async def push_mapping_endpoint(request: Request):
     if not mapping:
         return JSONResponse({"error": "No camera_mapping provided"}, status_code=400)
     result = await push_camera_mapping(mapping)
+    return result
+
+
+@router.post("/api/agent/snapshot")
+async def snapshot_endpoint(request: Request):
+    """REST endpoint for requesting a snapshot from the campus agent.
+
+    Used by the proxy mechanism: new app proxies to this endpoint on the
+    old app (where the agent IS connected) during the migration period.
+    Also usable directly for testing.
+    """
+    # Optional auth check
+    secret = request.headers.get("x-agent-secret", "")
+    if AGENT_SECRET and secret != AGENT_SECRET:
+        return JSONResponse(
+            {"error": "Unauthorized"}, status_code=401
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            {"error": "Invalid JSON body"}, status_code=400
+        )
+
+    classroom = body.get("classroom", "")
+    if not classroom:
+        return JSONResponse(
+            {"error": "No classroom specified"}, status_code=400
+        )
+
+    if not is_agent_connected():
+        return JSONResponse(
+            {"success": False, "error": "Agent not connected on this app"},
+            status_code=503,
+        )
+
+    result = await request_snapshot(classroom, timeout=55.0)
     return result
