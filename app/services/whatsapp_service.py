@@ -16,7 +16,9 @@ def _load_db_creds():
     """Load WhatsApp credentials from the settings table (sync, cached)."""
     if _db_creds_cache:
         return
-    db_path = os.getenv("DATABASE_PATH", "ppis_bot.db")
+    db_path = os.getenv("DB_PATH", "/data/app.db")
+    if not os.path.exists(os.path.dirname(db_path) if os.path.dirname(db_path) else "."):
+        db_path = os.path.join(os.path.dirname(__file__), "..", "..", "app.db")
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.execute(
