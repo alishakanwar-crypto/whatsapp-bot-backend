@@ -3164,6 +3164,37 @@ async def receive_cloud_api_message(request: Request):
 
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
+
+        # --- Parent photo / image handling (MUST run BEFORE text handlers) ---
+        if media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id"):
+            logger.info(f"Image message detected from {sender}, cloud_media_id={media_info.get('cloud_media_id')}")
+            face_reg_handled = await _try_register_child_face(
+                sender, reply_to, bot_phone, media_info,
+            )
+            if face_reg_handled:
+                return {"status": "ok"}
+
+            # --- Image vision fallback: describe the image via GPT ---
+            system_prompt = await get_system_prompt()
+            history = await get_conversation_history(sender)
+            from app.services.whatsapp_service import download_cloud_media
+            from app.services.openai_service import generate_vision_response
+            img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
+            if img_bytes:
+                caption = media_info.get("caption", "")
+                img_sender_name = media_info.get("sender_name", "")
+                ai_response = await generate_vision_response(
+                    img_bytes, img_mime, caption, system_prompt, history,
+                    sender_name=img_sender_name,
+                )
+                del img_bytes
+                await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, ai_response)
+                await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)
+                return {"status": "ok"}
+            else:
+                logger.error(f"Failed to download image from Cloud API for {sender}")
+
         # Check if a teacher is broadcasting homework to parents of their class
         # NOTE: This MUST run before try_relay_teacher_reply() so broadcast
         # messages ("Summary Sheet - Class 3A", homework, etc.) don't get
@@ -3269,31 +3300,6 @@ async def receive_cloud_api_message(request: Request):
 
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
-
-        # --- Parent photo → auto-register child for face recognition ---
-        if media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id"):
-            face_reg_handled = await _try_register_child_face(
-                sender, reply_to, bot_phone, media_info,
-            )
-            if face_reg_handled:
-                return {"status": "ok"}
-
-            # --- Image vision fallback: describe the image via GPT ---
-            from app.services.whatsapp_service import download_cloud_media
-            from app.services.openai_service import generate_vision_response
-            img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
-            if img_bytes:
-                caption = media_info.get("caption", "")
-                img_sender_name = media_info.get("sender_name", "")
-                ai_response = await generate_vision_response(
-                    img_bytes, img_mime, caption, system_prompt, history,
-                    sender_name=img_sender_name,
-                )
-                del img_bytes
-                await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                await send_whatsapp_message(reply_to, ai_response)
-                await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)
-                return {"status": "ok"}
 
         ai_response = await generate_response(message_text, system_prompt, history)
 
