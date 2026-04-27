@@ -758,14 +758,16 @@ async def generate_vision_response(
     caption: str,
     system_prompt: str,
     conversation_history: list[dict[str, str]] | None = None,
+    sender_name: str = "",
 ) -> str:
     """Generate a response for an image using GPT-4o-mini vision."""
     import base64
 
     ai_client = get_client()
     if ai_client is None:
+        name_part = f" {sender_name}" if sender_name else ""
         return (
-            "Thank you for sharing the image. "
+            f"Thank you{name_part} for sharing the image! "
             "Our AI assistant is currently unavailable. "
             "Please try again later or type your question."
         )
@@ -774,10 +776,23 @@ async def generate_vision_response(
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         data_uri = f"data:{mime_type};base64,{b64}"
 
-        user_text = caption.strip() if caption.strip() else "Please describe this image."
+        user_text = caption.strip() if caption.strip() else ""
+        name_hint = f" Their name is {sender_name}." if sender_name else ""
+
+        vision_instruction = (
+            "The user has shared an image with you."
+            f"{name_hint} "
+            f"First, thank them by name if known (e.g. 'Thank you {sender_name or 'for sharing'}!'). "
+            "Then briefly describe what you see in the image. "
+            "If the image has a caption, address the caption too. "
+            "If you're not sure what the image is about or why they sent it, politely ask "
+            "'Could you tell me what this image is about?' "
+            "Keep your response concise, warm and friendly."
+        )
+        prompt_text = f"{vision_instruction}\n\nUser caption: {user_text}" if user_text else vision_instruction
 
         user_content: list[dict] = [
-            {"type": "text", "text": user_text},
+            {"type": "text", "text": prompt_text},
             {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
         ]
 

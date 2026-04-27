@@ -486,6 +486,12 @@ def parse_cloud_api_message(body: dict) -> ParsedMessage | None:
         msg_type = msg.get("type", "")
         message_id = msg.get("id", "")
 
+        # Extract sender's WhatsApp display name from contacts array
+        contacts = value.get("contacts", [])
+        sender_name = ""
+        if contacts:
+            sender_name = contacts[0].get("profile", {}).get("name", "")
+
         # For Cloud API, reply_to is just the sender phone (no @c.us suffix)
         reply_to = sender
 
@@ -501,6 +507,7 @@ def parse_cloud_api_message(body: dict) -> ParsedMessage | None:
                 "caption": img.get("caption", ""),
                 "url": "",  # Need to fetch via media endpoint
                 "filename": "image.jpg",
+                "sender_name": sender_name,
             }
             text = img.get("caption", "") or "[Image shared]"
             return (sender, text, reply_to, media_info)

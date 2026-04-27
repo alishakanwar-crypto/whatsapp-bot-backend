@@ -3153,8 +3153,10 @@ async def receive_cloud_api_message(request: Request):
             img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
             if img_bytes:
                 caption = media_info.get("caption", "")
+                img_sender_name = media_info.get("sender_name", "")
                 ai_response = await generate_vision_response(
-                    img_bytes, img_mime, caption, system_prompt, history
+                    img_bytes, img_mime, caption, system_prompt, history,
+                    sender_name=img_sender_name,
                 )
                 del img_bytes
                 await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
