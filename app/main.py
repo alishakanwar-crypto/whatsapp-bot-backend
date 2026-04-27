@@ -201,7 +201,7 @@ async def set_whatsapp_creds(request: Request):
 
     allowed_keys = {
         "GREEN_API_ID_INSTANCE", "GREEN_API_TOKEN", "GREEN_API_URL",
-        "WHATSAPP_CLOUD_TOKEN", "WHATSAPP_PHONE_ID",
+        "WHATSAPP_CLOUD_TOKEN", "WHATSAPP_PHONE_ID", "system_prompt",
     }
     body = await request.json()
     db = await get_db()
