@@ -2994,17 +2994,20 @@ async def _try_register_child_face(
     Returns True if the image was handled as a face registration.
     """
     children = await _lookup_parent_child_class(sender)
+    logger.info(f"Face registration: parent lookup for {sender} found {len(children)} children: {[c['student_name'] for c in children]}")
     if not children:
         return False
 
     cloud_media_id = media_info.get("cloud_media_id", "")
     if not cloud_media_id:
+        logger.warning(f"Face registration: no cloud_media_id for {sender}")
         return False
 
     from app.services.whatsapp_service import download_cloud_media
+    logger.info(f"Face registration: downloading image {cloud_media_id} from {sender}")
     img_bytes, img_mime = await download_cloud_media(cloud_media_id)
     if not img_bytes:
-        logger.error(f"Face registration: failed to download image from {sender}")
+        logger.error(f"Face registration: failed to download image {cloud_media_id} from {sender}")
         return False
 
     caption = (media_info.get("caption", "") or "").strip().lower()
@@ -3194,6 +3197,14 @@ async def receive_cloud_api_message(request: Request):
                 return {"status": "ok"}
             else:
                 logger.error(f"Failed to download image from Cloud API for {sender}")
+                # Don't fall through to text handlers — acknowledge the image
+                err_msg = (
+                    "Your image has been received but we encountered an issue processing it. "
+                    "Please try sending the photo again."
+                )
+                await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, err_msg)
+                return {"status": "ok"}
 
         # Check if a teacher is broadcasting homework to parents of their class
         # NOTE: This MUST run before try_relay_teacher_reply() so broadcast
