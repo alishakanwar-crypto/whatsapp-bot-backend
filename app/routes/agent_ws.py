@@ -353,10 +353,22 @@ async def agent_websocket(websocket: WebSocket):
     finally:
         if _agent_ws is websocket:
             _agent_ws = None
-        # Cancel any pending requests
+        # Cancel any pending requests — resolve with partially-collected
+        # images when available (instead of blanket clear which races with
+        # the timeout handler in request_snapshot).
         for req_id, future in list(_pending_requests.items()):
             if not future.done():
-                future.set_result({"success": False, "error": "Agent disconnected"})
+                collected = _pending_images.pop(req_id, [])
+                if collected:
+                    future.set_result({
+                        "success": True,
+                        "classroom": "",
+                        "image_count": len(collected),
+                        "images": collected,
+                    })
+                else:
+                    future.set_result({"success": False, "error": "Agent disconnected"})
+        # Clean up any remaining orphaned image buffers
         _pending_images.clear()
 
 

@@ -1720,7 +1720,17 @@ async def _get_parents_by_grade_fuzzy(grade_fragment: str) -> tuple[str, list[st
     frag_lower = grade_fragment.lower().replace(" ", "")
     for g in all_grades:
         g_lower = g.lower().replace(" ", "")
-        if frag_lower == g_lower or frag_lower in g_lower:
+        if frag_lower == g_lower:
+            parents = await _get_parents_by_grade(g)
+            return g, parents
+
+    # Fallback: substring match but require the match to be followed by
+    # a non-digit (or end-of-string) so "grade1" doesn't match "grade10a".
+    import re
+    for g in all_grades:
+        g_lower = g.lower().replace(" ", "")
+        pattern = re.escape(frag_lower) + r"(?!\d)"
+        if re.search(pattern, g_lower):
             parents = await _get_parents_by_grade(g)
             return g, parents
 
@@ -2416,12 +2426,20 @@ async def detect_and_handle_snapshot_request(
     # Check if agent is connected — wait up to 30s for reconnection after OOM kills
     agent_ready = await wait_for_agent(max_wait=30.0)
     if not agent_ready:
-        # Only send one offline message per user within a 5-minute window
-        # to prevent spam when OOM restarts keep happening
-        dedup_key = f"offline_{sender}"
-        if await _is_duplicate(dedup_key):
-            logger.info(f"Suppressing duplicate offline message for {sender}")
+        # Only send one offline message per user within a short window
+        # to prevent spam when OOM restarts keep happening.
+        # Use a module-level dict with timestamps instead of _is_duplicate()
+        # which persists for 24 hours — too long for camera-offline notices.
+        import time as _time
+        _OFFLINE_DEDUP_WINDOW = 300  # 5 minutes
+        if not hasattr(detect_and_handle_snapshot_request, "_offline_sent"):
+            detect_and_handle_snapshot_request._offline_sent = {}  # type: ignore[attr-defined]
+        now = _time.time()
+        last_sent = detect_and_handle_snapshot_request._offline_sent.get(sender, 0)  # type: ignore[attr-defined]
+        if now - last_sent < _OFFLINE_DEDUP_WINDOW:
+            logger.info(f"Suppressing duplicate offline message for {sender} (sent {now - last_sent:.0f}s ago)")
             return True
+        detect_and_handle_snapshot_request._offline_sent[sender] = now  # type: ignore[attr-defined]
 
         greeting = _greeting(sender)
         addr = "Dear Admin" if is_admin else f"{greeting}"
