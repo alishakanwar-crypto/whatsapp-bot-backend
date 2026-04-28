@@ -10,11 +10,13 @@ logger = logging.getLogger(__name__)
 # Credential cache from DB (avoids async DB call on every message)
 # ---------------------------------------------------------------------------
 _db_creds_cache: dict[str, str] = {}
+_db_creds_loaded: bool = False
 
 
 def _load_db_creds():
     """Load WhatsApp credentials from the settings table (sync, cached)."""
-    if _db_creds_cache:
+    global _db_creds_loaded
+    if _db_creds_loaded:
         return
     db_path = os.getenv("DB_PATH", "/data/app.db")
     if not os.path.exists(os.path.dirname(db_path) if os.path.dirname(db_path) else "."):
@@ -31,6 +33,7 @@ def _load_db_creds():
         conn.close()
     except Exception:
         pass
+    _db_creds_loaded = True
 
 
 def _get_cred(env_key: str, default: str = "") -> str:
@@ -44,7 +47,9 @@ def _get_cred(env_key: str, default: str = "") -> str:
 
 def refresh_creds_cache():
     """Clear the cached credentials so they are re-read from DB."""
+    global _db_creds_loaded
     _db_creds_cache.clear()
+    _db_creds_loaded = False
 
 
 # ---------------------------------------------------------------------------

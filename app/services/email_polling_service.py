@@ -289,7 +289,7 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
 
     # Get Message-ID to avoid reprocessing (check in-memory cache + persistent DB)
     message_id = msg.get("Message-ID", "")
-    if message_id in _processed_message_ids:
+    if message_id and message_id in _processed_message_ids:
         return
     if message_id and _is_email_processed_in_db(message_id):
         _processed_message_ids[message_id] = None  # warm the in-memory cache
@@ -303,13 +303,15 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     # Check if sender is a known teacher
     teacher_entry = _match_teacher_by_email(from_addr)
     if teacher_entry is None:
-        _processed_message_ids[message_id] = None
+        if message_id:
+            _processed_message_ids[message_id] = None
         return
 
     # Check for homework keywords in subject or body
     combined_text = f"{subject}\n{body}"
     if not _HW_RE.search(combined_text):
-        _processed_message_ids[message_id] = None
+        if message_id:
+            _processed_message_ids[message_id] = None
         return
 
     teacher_name = teacher_entry["teacher"].split("/")[0].strip()
@@ -351,8 +353,8 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     finally:
         loop.close()
 
-    _processed_message_ids[message_id] = None
     if message_id:
+        _processed_message_ids[message_id] = None
         _mark_email_processed_in_db(message_id)
 
 
