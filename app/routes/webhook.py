@@ -3528,6 +3528,34 @@ _CAPTION_CLASS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Words that indicate a document/query/common English — NOT a student name
+_NON_NAME_WORDS = {
+    # Document keywords
+    "homework", "syllabus", "circular", "notice", "timetable", "schedule",
+    "report", "marks", "result", "fee", "payment", "receipt", "worksheet",
+    "assignment", "question", "paper", "exam", "test", "quiz", "screenshot",
+    "forwarded", "whatsapp", "chat", "map", "location", "menu", "list",
+    "form", "application", "attendance", "absent", "present", "leave",
+    # Action/request words
+    "please", "confirm", "check", "send", "share", "forward", "update",
+    "final", "teacher", "school", "student", "parent", "child", "ward",
+    "correct", "wrong", "right", "new", "old", "same", "other", "both",
+    "need", "want", "know", "see", "get", "give", "take", "make", "let",
+    "come", "tell", "ask", "say", "said", "done", "today", "tomorrow",
+    "yesterday", "daily", "weekly", "monthly", "yearly", "urgent", "asap",
+    # Common English words (not names)
+    "this", "that", "the", "for", "from", "with", "about", "what", "when",
+    "where", "how", "can", "will", "should", "would", "could", "have",
+    "has", "had", "been", "being", "are", "was", "were", "not", "but",
+    "and", "also", "any", "all", "our", "your", "his", "her", "its",
+    "if", "is", "it", "or", "an", "am", "do", "so", "no", "my", "we",
+    "me", "us", "at", "on", "in", "up", "by", "to", "of", "be", "he",
+    # Media/greeting words
+    "image", "photo", "file", "document", "video", "pdf", "attached",
+    "attachment", "dear", "hello", "sir", "maam", "madam", "good",
+    "morning", "evening", "thank", "thanks", "okay", "yes", "hi",
+}
+
 
 def _caption_has_name_and_class(caption: str) -> bool:
     """Check if the caption contains both a student name AND a class/section.
@@ -3537,7 +3565,8 @@ def _caption_has_name_and_class(caption: str) -> bool:
       "Aarav Sharma Grade 5A", "Grade 3C Nitya Gupta", "Suhaan 3C",
       "Suhaan 3 C", "Karman 1B", "Ishnoor Grade 7B"
     Examples that return False:
-      "homework", "screenshot", "", "hi", "check this"
+      "homework", "syllabus for 3 C", "confirm from teacher if final syllabus 3C",
+      "screenshot", "", "hi", "check this"
     """
     if not caption or len(caption.strip()) < 3:
         return False
@@ -3545,10 +3574,13 @@ def _caption_has_name_and_class(caption: str) -> bool:
     # Must contain a class/grade indicator
     has_class = bool(_CAPTION_CLASS_RE.search(caption))
 
-    # Must contain at least one alphabetic name (2+ letters)
+    # Must contain at least one proper name word (not a document keyword)
     name_part = _CAPTION_CLASS_RE.sub("", caption).strip()
     name_part = re.sub(r"[^\w\s]", "", name_part).strip()
-    name_words = [w for w in name_part.split() if len(w) >= 2 and w.isalpha()]
+    name_words = [
+        w for w in name_part.split()
+        if len(w) >= 2 and w.isalpha() and w.lower() not in _NON_NAME_WORDS
+    ]
     has_name = len(name_words) >= 1
 
     return has_class and has_name
@@ -3868,16 +3900,50 @@ async def receive_cloud_api_message(request: Request):
             else:
                 # No Name+Class in caption → general file/document
                 # Do NOT ask for student name/class, do NOT attempt registration
-                # Forward to class teacher if sender is a known parent
+                # Forward to class teacher based on context
                 logger.info(f"[IMAGE HANDLER] General file/document from {sender}")
                 caption = (media_info.get("caption", "") or "").strip()
                 forward_text = caption if caption else "Shared a file/image"
+
+                # Try parent→teacher routing first
                 routed = await try_route_parent_to_class_teacher(
                     sender, forward_text, reply_to, media_info,
                 )
                 if routed:
                     return {"status": "ok"}
-                # Not a known parent or routing failed — simple ack
+
+                # For admins/teachers: try to detect grade in caption and forward
+                if _is_admin_panel(sender) or _is_teacher_phone(sender):
+                    grade_teacher = find_teacher_by_grade(forward_text)
+                    if grade_teacher:
+                        teacher_name = grade_teacher["teacher"].split("/")[0].strip()
+                        teacher_phone = grade_teacher.get("whatsapp", "")
+                        if teacher_phone:
+                            chat_id = _teacher_chat_id(teacher_phone)
+                            admin_label = f"Admin ({sender[-4:]})"
+                            fwd_msg = (
+                                f"Dear {teacher_name},\n\n"
+                                f"{admin_label} has shared a file via the PPIS Bot:\n\n"
+                                f"\"{forward_text[:500]}\"\n\n"
+                                f"Warm regards,\nPP International School"
+                            )
+                            await send_whatsapp_message(chat_id, fwd_msg)
+                            # Forward the media too
+                            from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                            cloud_mid = media_info.get("cloud_media_id", "")
+                            if cloud_mid:
+                                await forward_cloud_media_to_recipient(
+                                    media_info, chat_id, caption=caption,
+                                )
+                            confirm = (
+                                f"Your file has been forwarded to *{teacher_name}* "
+                                f"({grade_teacher['grade']})."
+                            )
+                            await save_message(bot_phone, sender, confirm, "whatsapp", "outgoing")
+                            await send_whatsapp_message(reply_to, confirm)
+                            return {"status": "ok"}
+
+                # Fallback — simple ack
                 doc_msg = "File received successfully."
                 await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
                 await send_whatsapp_message(reply_to, doc_msg)
