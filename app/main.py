@@ -401,6 +401,8 @@ async def api_send_whatsapp(request: Request):
             continue
         results.append({"phone": digits, "status": "ok" if success else "error"})
 
+    if not results:
+        return {"status": "error", "error": "No valid phone numbers to send to", "results": []}
     all_ok = all(r["status"] == "ok" for r in results)
     return {"status": "ok" if all_ok else "partial", "results": results}
 
