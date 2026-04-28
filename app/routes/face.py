@@ -125,6 +125,22 @@ async def get_face_image(face_id: int):
         await db.close()
 
 
+@router.delete("/entry/{face_id}", dependencies=[Depends(verify_agent_secret)])
+async def delete_face_entry(face_id: int):
+    """Delete a single face entry by ID."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM agent_registered_faces WHERE id = ?", (face_id,),
+        )
+        await db.commit()
+        deleted = cursor.rowcount
+        logger.info(f"Deleted face entry id={face_id}, rows={deleted}")
+        return {"deleted": deleted, "face_id": face_id}
+    finally:
+        await db.close()
+
+
 @router.delete("/{person_id}", dependencies=[Depends(verify_agent_secret)])
 async def delete_person(person_id: str):
     """Delete all face images for a person."""
