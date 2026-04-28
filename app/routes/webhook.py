@@ -3905,26 +3905,53 @@ async def receive_cloud_api_message(request: Request):
                 caption = (media_info.get("caption", "") or "").strip()
                 forward_text = caption if caption else "Shared a file/image"
 
-                # Try parent→teacher routing first
+                # Try parent→teacher routing (works for non-admin parents)
                 routed = await try_route_parent_to_class_teacher(
                     sender, forward_text, reply_to, media_info,
                 )
                 if routed:
                     return {"status": "ok"}
 
-                # For admins/teachers: try to detect grade in caption and forward
-                if _is_admin_panel(sender) or _is_teacher_phone(sender):
+                # For admins who are also parents, or when routing skipped:
+                # Look up children directly and forward to class teacher
+                children = await _lookup_parent_child_class(sender)
+                if children:
+                    # If caption mentions a grade, route to that teacher
                     grade_teacher = find_teacher_by_grade(forward_text)
+                    if not grade_teacher and len(children) == 1:
+                        # Single child → auto-route to their class teacher
+                        grade_teacher = find_teacher_by_grade(children[0]["grade"])
+                    if not grade_teacher:
+                        # Try matching child name in caption
+                        msg_lower = forward_text.lower()
+                        for child in children:
+                            name_parts = child["student_name"].lower().split()
+                            if any(part in msg_lower for part in name_parts if len(part) > 2):
+                                grade_teacher = find_teacher_by_grade(child["grade"])
+                                break
+
                     if grade_teacher:
+                        child_for_label = children[0]
+                        if len(children) > 1:
+                            # Try to match the specific child
+                            for c in children:
+                                if c["grade"].lower().replace(" ", "") == grade_teacher["grade"].lower().replace(" ", ""):
+                                    child_for_label = c
+                                    break
+
                         teacher_name = grade_teacher["teacher"].split("/")[0].strip()
                         teacher_phone = grade_teacher.get("whatsapp", "")
+                        teacher_email = grade_teacher.get("email", "")
+                        parent_label = f"Parent of {child_for_label['student_name']} ({child_for_label['grade']})"
+
                         if teacher_phone:
                             chat_id = _teacher_chat_id(teacher_phone)
-                            admin_label = f"Admin ({sender[-4:]})"
                             fwd_msg = (
                                 f"Dear {teacher_name},\n\n"
-                                f"{admin_label} has shared a file via the PPIS Bot:\n\n"
+                                f"{parent_label} has shared a file via the PPIS Bot:\n\n"
                                 f"\"{forward_text[:500]}\"\n\n"
+                                f"Kindly reply to this message and your response "
+                                f"will be forwarded back to the parent.\n\n"
                                 f"Warm regards,\nPP International School"
                             )
                             await send_whatsapp_message(chat_id, fwd_msg)
@@ -3935,13 +3962,36 @@ async def receive_cloud_api_message(request: Request):
                                 await forward_cloud_media_to_recipient(
                                     media_info, chat_id, caption=caption,
                                 )
+                            # Save conversation for 2-way relay
+                            await save_forwarded_conversation(
+                                teacher_phone=teacher_phone,
+                                parent_phone=sender,
+                                parent_reply_to=reply_to,
+                                message_text=forward_text,
+                            )
                             confirm = (
                                 f"Your file has been forwarded to *{teacher_name}* "
-                                f"({grade_teacher['grade']})."
+                                f"({grade_teacher['grade']}). "
+                                f"You will receive a reply when the teacher responds."
                             )
                             await save_message(bot_phone, sender, confirm, "whatsapp", "outgoing")
                             await send_whatsapp_message(reply_to, confirm)
                             return {"status": "ok"}
+
+                    elif len(children) > 1:
+                        # Multiple children, can't determine which teacher
+                        child_list = "\n".join(
+                            f"- {c['student_name']} ({c['grade']})" for c in children
+                        )
+                        ask_msg = (
+                            "We have found multiple wards linked to your number:\n"
+                            f"{child_list}\n\n"
+                            "Kindly specify which ward this query is regarding "
+                            "by replying with their name or class."
+                        )
+                        await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
+                        await send_whatsapp_message(reply_to, ask_msg)
+                        return {"status": "ok"}
 
                 # Fallback — simple ack
                 doc_msg = "File received successfully."
