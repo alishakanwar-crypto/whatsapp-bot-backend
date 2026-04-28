@@ -405,6 +405,87 @@ async def api_send_whatsapp(request: Request):
     return {"status": "ok" if all_ok else "partial", "results": results}
 
 
+@app.post("/api/broadcast")
+async def api_broadcast(request: Request):
+    """Broadcast a message to all parent phone numbers in the school database.
+
+    Body JSON:
+      - message: The text message to send
+      - dry_run: If true, just return the phone list without sending (default false)
+      - batch_delay: Seconds between batches to avoid rate limits (default 1)
+    """
+    import os, asyncio, re
+    from fastapi import HTTPException
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
+
+    from app.database import get_db
+    from app.services.whatsapp_service import send_whatsapp_message
+
+    body = await request.json()
+    message = body.get("message", "")
+    dry_run = body.get("dry_run", False)
+    batch_delay = body.get("batch_delay", 1)
+
+    if not message:
+        return {"status": "error", "error": "Missing message"}
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT DISTINCT father_mobile, mother_mobile FROM pi_sheet_students"
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    # Collect unique normalized phone numbers
+    phones = set()
+    for row in rows:
+        for raw_phone in (row[0], row[1]):
+            if not raw_phone:
+                continue
+            digits = re.sub(r"\D", "", raw_phone)
+            if len(digits) >= 10:
+                normalized = f"91{digits[-10:]}"
+                phones.add(normalized)
+
+    phone_list = sorted(phones)
+
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "total_phones": len(phone_list),
+            "sample": phone_list[:10],
+        }
+
+    # Send in batches
+    results = {"sent": 0, "failed": 0, "errors": []}
+    for i, phone in enumerate(phone_list):
+        try:
+            success = await send_whatsapp_message(phone, message)
+            if success:
+                results["sent"] += 1
+            else:
+                results["failed"] += 1
+                if len(results["errors"]) < 20:
+                    results["errors"].append({"phone": phone, "error": "send_failed"})
+        except Exception as e:
+            results["failed"] += 1
+            if len(results["errors"]) < 20:
+                results["errors"].append({"phone": phone, "error": str(e)})
+
+        # Rate limiting: pause every 10 messages
+        if (i + 1) % 10 == 0:
+            await asyncio.sleep(batch_delay)
+
+    results["total"] = len(phone_list)
+    return {"status": "ok", "results": results}
+
+
 @app.post("/api/whatsapp-creds")
 async def set_whatsapp_creds(request: Request):
     """Save WhatsApp API credentials to the database.
