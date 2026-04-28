@@ -405,17 +405,50 @@ async def api_send_whatsapp(request: Request):
     return {"status": "ok" if all_ok else "partial", "results": results}
 
 
+_broadcast_status: dict = {}
+
+
+async def _run_broadcast(phone_list: list[str], message: str, batch_delay: float):
+    """Background task to send broadcast messages."""
+    import asyncio
+    from app.services.whatsapp_service import send_whatsapp_message
+
+    global _broadcast_status
+    _broadcast_status["running"] = True
+
+    for i, phone in enumerate(phone_list):
+        try:
+            success = await send_whatsapp_message(phone, message)
+            if success:
+                _broadcast_status["sent"] += 1
+            else:
+                _broadcast_status["failed"] += 1
+        except Exception:
+            _broadcast_status["failed"] += 1
+
+        _broadcast_status["progress"] = i + 1
+        # Rate limiting: pause every 10 messages
+        if (i + 1) % 10 == 0:
+            await asyncio.sleep(batch_delay)
+
+    _broadcast_status["running"] = False
+    _broadcast_status["done"] = True
+
+
 @app.post("/api/broadcast")
 async def api_broadcast(request: Request):
-    """Broadcast a message to all parent phone numbers in the school database.
+    """Broadcast a message to all parent phone numbers (runs in background).
 
     Body JSON:
       - message: The text message to send
-      - dry_run: If true, just return the phone list without sending (default false)
-      - batch_delay: Seconds between batches to avoid rate limits (default 1)
+      - dry_run: If true, just return the phone list without sending
+      - batch_delay: Seconds between batches (default 1)
     """
     import os, asyncio, re
     from fastapi import HTTPException
+
+    global _broadcast_status
+
     agent_secret = os.environ.get("AGENT_SECRET", "")
     if agent_secret:
         header_secret = request.headers.get("x-agent-secret", "")
@@ -423,7 +456,6 @@ async def api_broadcast(request: Request):
             raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
     from app.database import get_db
-    from app.services.whatsapp_service import send_whatsapp_message
 
     body = await request.json()
     message = body.get("message", "")
@@ -432,6 +464,16 @@ async def api_broadcast(request: Request):
 
     if not message:
         return {"status": "error", "error": "Missing message"}
+
+    # Check if a broadcast is already running
+    if _broadcast_status.get("running"):
+        return {
+            "status": "already_running",
+            "progress": _broadcast_status.get("progress", 0),
+            "total": _broadcast_status.get("total", 0),
+            "sent": _broadcast_status.get("sent", 0),
+            "failed": _broadcast_status.get("failed", 0),
+        }
 
     db = await get_db()
     try:
@@ -442,7 +484,6 @@ async def api_broadcast(request: Request):
     finally:
         await db.close()
 
-    # Collect unique normalized phone numbers
     phones = set()
     for row in rows:
         for raw_phone in (row[0], row[1]):
@@ -456,34 +497,25 @@ async def api_broadcast(request: Request):
     phone_list = sorted(phones)
 
     if dry_run:
-        return {
-            "status": "dry_run",
-            "total_phones": len(phone_list),
-            "sample": phone_list[:10],
-        }
+        return {"status": "dry_run", "total_phones": len(phone_list), "sample": phone_list[:10]}
 
-    # Send in batches
-    results = {"sent": 0, "failed": 0, "errors": []}
-    for i, phone in enumerate(phone_list):
-        try:
-            success = await send_whatsapp_message(phone, message)
-            if success:
-                results["sent"] += 1
-            else:
-                results["failed"] += 1
-                if len(results["errors"]) < 20:
-                    results["errors"].append({"phone": phone, "error": "send_failed"})
-        except Exception as e:
-            results["failed"] += 1
-            if len(results["errors"]) < 20:
-                results["errors"].append({"phone": phone, "error": str(e)})
+    # Initialize status and start background task
+    _broadcast_status = {
+        "running": True, "done": False,
+        "total": len(phone_list), "progress": 0,
+        "sent": 0, "failed": 0,
+    }
+    asyncio.create_task(_run_broadcast(phone_list, message, batch_delay))
 
-        # Rate limiting: pause every 10 messages
-        if (i + 1) % 10 == 0:
-            await asyncio.sleep(batch_delay)
+    return {"status": "started", "total": len(phone_list)}
 
-    results["total"] = len(phone_list)
-    return {"status": "ok", "results": results}
+
+@app.get("/api/broadcast/status")
+async def api_broadcast_status():
+    """Check the status of an ongoing broadcast."""
+    if not _broadcast_status:
+        return {"status": "no_broadcast"}
+    return _broadcast_status
 
 
 @app.post("/api/whatsapp-creds")
