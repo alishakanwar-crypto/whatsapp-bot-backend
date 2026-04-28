@@ -66,7 +66,7 @@ def _is_email_processed_in_db(message_id: str) -> bool:
     import sqlite3
     db_path = os.getenv("DB_PATH", "/data/app.db")
     if not os.path.exists(os.path.dirname(db_path) if os.path.dirname(db_path) else "."):
-        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.db")
+        db_path = os.path.join(os.path.dirname(__file__), "..", "..", "app.db")
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.execute(
@@ -85,7 +85,7 @@ def _mark_email_processed_in_db(message_id: str) -> None:
     import sqlite3
     db_path = os.getenv("DB_PATH", "/data/app.db")
     if not os.path.exists(os.path.dirname(db_path) if os.path.dirname(db_path) else "."):
-        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.db")
+        db_path = os.path.join(os.path.dirname(__file__), "..", "..", "app.db")
     try:
         conn = sqlite3.connect(db_path)
         conn.execute(

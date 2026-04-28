@@ -1238,7 +1238,7 @@ def _extract_subject(message_text: str) -> str:
 
 
 async def detect_and_handle_homework_query(
-    sender: str, message_text: str, reply_to: str
+    sender: str, message_text: str, reply_to: str, media_info: dict | None = None
 ) -> bool:
     """Detect homework-related queries and forward to the class/subject teacher.
 
@@ -1378,6 +1378,22 @@ async def detect_and_handle_homework_query(
         teacher_chat = _teacher_chat_id(teacher_phone)
         wa_success = await send_whatsapp_message(teacher_chat, forward_msg)
         if wa_success:
+            # Forward any attached media (document, image, etc.) to the teacher
+            if media_info:
+                from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                cloud_mid = media_info.get("cloud_media_id", "")
+                if cloud_mid:
+                    await forward_cloud_media_to_recipient(
+                        media_info, teacher_chat,
+                        caption=media_info.get("caption", ""),
+                    )
+                elif media_info.get("url"):
+                    await forward_file_by_url(
+                        teacher_chat,
+                        media_info["url"],
+                        media_info.get("filename", "file"),
+                        media_info.get("caption", ""),
+                    )
             await save_forwarded_conversation(
                 teacher_phone=teacher_phone,
                 teacher_name=teacher_name,
@@ -1460,7 +1476,7 @@ _LEAVE_DETAIL_RE = re.compile(
 
 
 async def detect_and_handle_leave_application(
-    sender: str, message_text: str, reply_to: str
+    sender: str, message_text: str, reply_to: str, media_info: dict | None = None
 ) -> bool:
     """Detect leave application messages and process them.
 
@@ -1577,6 +1593,22 @@ async def detect_and_handle_leave_application(
         teacher_chat = _teacher_chat_id(teacher_phone)
         wa_success = await send_whatsapp_message(teacher_chat, forward_msg)
         if wa_success:
+            # Forward any attached media (e.g. medical certificate) to the teacher
+            if media_info:
+                from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                cloud_mid = media_info.get("cloud_media_id", "")
+                if cloud_mid:
+                    await forward_cloud_media_to_recipient(
+                        media_info, teacher_chat,
+                        caption=media_info.get("caption", ""),
+                    )
+                elif media_info.get("url"):
+                    await forward_file_by_url(
+                        teacher_chat,
+                        media_info["url"],
+                        media_info.get("filename", "file"),
+                        media_info.get("caption", ""),
+                    )
             await save_forwarded_conversation(
                 teacher_phone=teacher_phone,
                 teacher_name=teacher_name,
@@ -3159,12 +3191,12 @@ async def receive_whatsapp_message(request: Request):
             return {"status": "ok"}
 
         # Check for homework query — forward to class teacher
-        hw_handled = await detect_and_handle_homework_query(sender, message_text, reply_to)
+        hw_handled = await detect_and_handle_homework_query(sender, message_text, reply_to, media_info)
         if hw_handled:
             return {"status": "ok"}
 
         # Check for leave application — forward to class teacher
-        leave_handled = await detect_and_handle_leave_application(sender, message_text, reply_to)
+        leave_handled = await detect_and_handle_leave_application(sender, message_text, reply_to, media_info)
         if leave_handled:
             return {"status": "ok"}
 
@@ -4052,12 +4084,12 @@ async def receive_cloud_api_message(request: Request):
             return {"status": "ok"}
 
         # Check for homework query — forward to class teacher
-        hw_handled = await detect_and_handle_homework_query(sender, message_text, reply_to)
+        hw_handled = await detect_and_handle_homework_query(sender, message_text, reply_to, media_info)
         if hw_handled:
             return {"status": "ok"}
 
         # Check for leave application — forward to class teacher
-        leave_handled = await detect_and_handle_leave_application(sender, message_text, reply_to)
+        leave_handled = await detect_and_handle_leave_application(sender, message_text, reply_to, media_info)
         if leave_handled:
             return {"status": "ok"}
 
