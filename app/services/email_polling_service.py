@@ -183,8 +183,20 @@ def _check_memory_ok() -> bool:
     that the core bot (WhatsApp replies + camera snapshots) stays alive.
     """
     try:
-        import resource
-        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # KB→B on Linux
+        # Read current RSS from /proc/self/status (VmRSS field).
+        # resource.getrusage().ru_maxrss is peak RSS (monotonically increasing)
+        # which would permanently disable polling after any transient spike.
+        rss_bytes = 0
+        try:
+            with open('/proc/self/status') as f:
+                for line in f:
+                    if line.startswith('VmRSS:'):
+                        rss_bytes = int(line.split()[1]) * 1024  # KB→B
+                        break
+        except Exception:
+            # Fallback to peak RSS if /proc not available (non-Linux)
+            import resource
+            rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
         rss_mb = rss_bytes / (1024 * 1024)
         if rss_mb > 100:
             logger.warning(f"Memory too high ({rss_mb:.0f} MB) — skipping email poll to prevent OOM")
