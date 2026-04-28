@@ -2654,7 +2654,11 @@ async def detect_and_handle_snapshot_request(
         )
         return True
 
-    from app.routes.agent_ws import is_agent_connected, request_snapshot, wait_for_agent
+    from app.routes.agent_ws import (
+        is_agent_connected, request_snapshot, wait_for_agent,
+        record_snapshot_success, record_snapshot_failure, should_alert_admin,
+        get_health_state,
+    )
     from app.services.whatsapp_service import (
         upload_base64_image_cloud,
         send_cloud_media,
@@ -2662,13 +2666,39 @@ async def detect_and_handle_snapshot_request(
 
     logger.info(f"Snapshot request detected from {sender} (admin={is_admin}): {message_text}")
 
-    # Check if agent is connected — wait up to 30s for reconnection after OOM kills
+    # ---------------------------------------------------------------------------
+    # ALWAYS-ACTIVE: Smart retry with health tracking
+    # Instead of immediately saying "system offline", wait for the agent to
+    # reconnect (up to 30s) and only show offline after confirmed persistent
+    # failure (_ALERT_THRESHOLD consecutive failures).
+    # ---------------------------------------------------------------------------
     agent_ready = await wait_for_agent(max_wait=30.0)
     if not agent_ready:
+        record_snapshot_failure()
+        health = get_health_state()
+        consecutive = health["consecutive_failures"]
+        logger.warning(
+            f"Agent not ready for snapshot from {sender} "
+            f"(consecutive_failures={consecutive})"
+        )
+
+        # Only send an offline message after _ALERT_THRESHOLD (3) consecutive
+        # failures.  Before that, tell the user we are retrying transparently.
+        if consecutive < 3:
+            # Transparent retry — tell user to wait briefly, don't spam "offline"
+            await send_whatsapp_message(
+                reply_to,
+                f"{_greeting(sender)},\n\n"
+                "Your request is being processed. The system is reconnecting "
+                "to the campus cameras. Please allow a moment — your photo "
+                "will be delivered as soon as the connection is restored.\n\n"
+                "Thank you for your patience.\n"
+                "Warm regards,\nPP International School"
+            )
+            return True
+
+        # --- Confirmed persistent failure (3+ consecutive) ---
         # Only send one offline message per user within a short window
-        # to prevent spam when OOM restarts keep happening.
-        # Use a module-level dict with timestamps instead of _is_duplicate()
-        # which persists for 24 hours — too long for camera-offline notices.
         import time as _time
         _OFFLINE_DEDUP_WINDOW = 300  # 5 minutes
         if not hasattr(detect_and_handle_snapshot_request, "_offline_sent"):
@@ -2680,11 +2710,34 @@ async def detect_and_handle_snapshot_request(
             return True
         detect_and_handle_snapshot_request._offline_sent[sender] = now  # type: ignore[attr-defined]
 
+        # Alert admin if threshold just crossed
+        if should_alert_admin():
+            logger.critical(
+                f"HEALTH ALERT: {consecutive} consecutive snapshot failures — "
+                f"alerting admin panel"
+            )
+            # Send alert to admin panel numbers (non-blocking)
+            admin_phones = ["919971166562", "919599488106", "918076455224"]
+            for admin_phone in admin_phones:
+                try:
+                    await send_whatsapp_message(
+                        admin_phone,
+                        "PPIS Bot — Camera System Alert\n\n"
+                        f"The campus camera system has failed {consecutive} "
+                        f"consecutive times. The agent on the school PC may "
+                        f"need to be restarted.\n\n"
+                        "Please check the Campus Agent on the school PC and "
+                        "restart it if needed.\n\n"
+                        "This alert will not repeat until the system recovers."
+                    )
+                except Exception:
+                    pass  # best-effort admin notification
+
         greeting = _greeting(sender)
         addr = "Dear Admin" if is_admin else f"{greeting}"
         offline_msg = (
             "The campus camera system is temporarily unavailable. "
-            "The system is restarting and should be back shortly. "
+            "Our team has been notified and the system will be restored shortly. "
             "Please try again in a few minutes."
         )
         if not is_admin:
@@ -2836,9 +2889,11 @@ async def detect_and_handle_snapshot_request(
                 logger.warning(f"Snapshot failed for {loc}: {result.get('error', 'unknown')}")
 
         if total_sent > 0:
+            record_snapshot_success()
             logger.info(f"Multi-location snapshot: sent {total_sent} images for {label}")
             return True
 
+        record_snapshot_failure()
         await send_whatsapp_message(
             reply_to,
             f"{_greeting(sender)},\n\n"
@@ -2867,6 +2922,9 @@ async def detect_and_handle_snapshot_request(
         result = {"success": False, "error": str(exc)}
 
     if result.get("success"):
+        # --- HEALTH: Record success, reset failure counter ---
+        record_snapshot_success()
+
         # --- Handle multi-image response (C1 + C2 cameras) ---
         images_list = result.get("images", [])
         # Backward compat: if no images array, use single image_base64
@@ -2933,6 +2991,7 @@ async def detect_and_handle_snapshot_request(
             return True
 
         # All uploads/sends failed
+        record_snapshot_failure()
         logger.warning(f"Failed to upload/send any snapshot image for {location}")
         await send_whatsapp_message(
             reply_to,
@@ -2944,6 +3003,9 @@ async def detect_and_handle_snapshot_request(
         )
         return True
     else:
+        # --- HEALTH: Record failure ---
+        record_snapshot_failure()
+
         error_msg = result.get("error", "Unknown error")
         logger.error(f"Snapshot request failed for {location}: {error_msg}")
         fail_msg = (

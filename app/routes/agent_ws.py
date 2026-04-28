@@ -42,6 +42,23 @@ _pending_images: dict[str, list] = {}
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
 
 # ---------------------------------------------------------------------------
+# Always-Active Health Monitoring
+# ---------------------------------------------------------------------------
+_health_state: dict = {
+    "last_connected_at": 0.0,        # timestamp of last successful connection
+    "last_disconnected_at": 0.0,     # timestamp of last disconnection
+    "consecutive_failures": 0,        # snapshot request failures in a row
+    "total_snapshots_served": 0,      # lifetime counter
+    "total_snapshots_failed": 0,      # lifetime counter
+    "last_snapshot_at": 0.0,         # timestamp of last successful snapshot
+    "admin_alerted": False,          # True if admin was alerted about persistent failure
+    "uptime_start": time.time(),     # when the server started
+}
+
+# Threshold: only alert admin after this many consecutive snapshot failures
+_ALERT_THRESHOLD = 3
+
+# ---------------------------------------------------------------------------
 # Fallback proxy: when the agent isn't connected locally, proxy snapshot
 # requests to the app where the agent IS connected.  This handles the
 # migration period where webhook → new app but agent → old app.
@@ -85,6 +102,57 @@ async def wait_for_agent(max_wait: float = 30.0) -> bool:
             logger.info("Agent reconnected after %.0fs wait", elapsed)
             return True
     logger.warning("Agent did not reconnect within %.0fs", max_wait)
+    return False
+
+
+def get_health_state() -> dict:
+    """Return the current health state of the agent connection.
+
+    Used by the /api/agent/health endpoint and the health monitor.
+    """
+    now = time.time()
+    connected = _agent_ws is not None
+    uptime_seconds = now - _health_state["uptime_start"]
+    last_connected_ago = (
+        now - _health_state["last_connected_at"]
+        if _health_state["last_connected_at"] > 0
+        else -1
+    )
+    return {
+        "connected": connected,
+        "consecutive_failures": _health_state["consecutive_failures"],
+        "total_snapshots_served": _health_state["total_snapshots_served"],
+        "total_snapshots_failed": _health_state["total_snapshots_failed"],
+        "last_snapshot_at": _health_state["last_snapshot_at"],
+        "last_connected_seconds_ago": round(last_connected_ago, 1),
+        "uptime_seconds": round(uptime_seconds, 1),
+        "admin_alerted": _health_state["admin_alerted"],
+        "pending_requests": len(_pending_requests),
+    }
+
+
+def record_snapshot_success() -> None:
+    """Record a successful snapshot delivery."""
+    _health_state["total_snapshots_served"] += 1
+    _health_state["last_snapshot_at"] = time.time()
+    _health_state["consecutive_failures"] = 0
+    _health_state["admin_alerted"] = False  # reset alert flag on success
+
+
+def record_snapshot_failure() -> None:
+    """Record a failed snapshot attempt."""
+    _health_state["total_snapshots_failed"] += 1
+    _health_state["consecutive_failures"] += 1
+
+
+def should_alert_admin() -> bool:
+    """Return True if admin should be alerted about persistent camera failure.
+
+    Only returns True once per failure streak (resets after success).
+    """
+    if _health_state["consecutive_failures"] >= _ALERT_THRESHOLD and not _health_state["admin_alerted"]:
+        _health_state["admin_alerted"] = True
+        return True
     return False
 
 
@@ -258,6 +326,9 @@ async def agent_websocket(websocket: WebSocket):
 
     await websocket.accept()
     _agent_ws = websocket
+    _health_state["last_connected_at"] = time.time()
+    _health_state["consecutive_failures"] = 0  # reset on fresh connection
+    _health_state["admin_alerted"] = False
     logger.info("Campus agent connected via WebSocket")
 
     try:
@@ -353,6 +424,7 @@ async def agent_websocket(websocket: WebSocket):
     finally:
         if _agent_ws is websocket:
             _agent_ws = None
+            _health_state["last_disconnected_at"] = time.time()
         # Cancel any pending requests — resolve with partially-collected
         # images when available (instead of blanket clear which races with
         # the timeout handler in request_snapshot).
@@ -382,6 +454,16 @@ async def agent_status():
         "connected": is_agent_connected(),
         "pending_requests": len(_pending_requests),
     }
+
+
+@router.get("/api/agent/health")
+async def agent_health():
+    """Detailed health status for the always-active monitoring system.
+
+    Returns connection state, failure counts, uptime, and alert status.
+    Used by the health monitor and admin dashboard.
+    """
+    return get_health_state()
 
 
 async def push_camera_mapping(mapping: dict) -> dict:

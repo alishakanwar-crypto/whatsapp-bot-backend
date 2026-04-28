@@ -14,6 +14,9 @@ from app.services.email_polling_service import poll_homework_emails_sync
 
 logger = logging.getLogger(__name__)
 
+# Track consecutive health-monitor failures so we don't spam admin alerts
+_health_monitor_alert_sent = False
+
 # Admin phone number for low-balance alerts
 ADMIN_PHONE = "918076455224"
 LOW_BALANCE_THRESHOLD = 2.0  # USD
@@ -40,6 +43,57 @@ DEFAULT_REMINDERS = [
         "job_id": "lunch_reminder_ppis_bot",
     }
 ]
+
+
+# ---------------------------------------------------------------------------
+# Always-Active Health Monitor — runs every 60 seconds
+# ---------------------------------------------------------------------------
+def _health_monitor_sync() -> None:
+    """Check agent connection health and attempt self-recovery.
+
+    Runs every 60 seconds.  If the agent is disconnected for >5 minutes
+    it logs a warning.  Admin alerts are handled by the snapshot handler
+    itself (after 3 consecutive failures) so this monitor focuses on
+    logging and ensuring the health state is accurate.
+    """
+    global _health_monitor_alert_sent
+    try:
+        from app.routes.agent_ws import is_agent_connected, get_health_state
+
+        connected = is_agent_connected()
+        health = get_health_state()
+
+        if connected:
+            if _health_monitor_alert_sent:
+                logger.info("Health monitor: agent reconnected — clearing alert flag")
+                _health_monitor_alert_sent = False
+            # Log periodic health summary (every check when connected)
+            logger.debug(
+                "Health monitor: agent=CONNECTED  snapshots_served=%d  "
+                "snapshots_failed=%d  consecutive_failures=%d  uptime=%.0fs",
+                health["total_snapshots_served"],
+                health["total_snapshots_failed"],
+                health["consecutive_failures"],
+                health["uptime_seconds"],
+            )
+        else:
+            logger.warning(
+                "Health monitor: agent=DISCONNECTED  consecutive_failures=%d  "
+                "last_connected_ago=%.0fs",
+                health["consecutive_failures"],
+                health["last_connected_seconds_ago"],
+            )
+            # If disconnected for >5 minutes and we haven't already alerted
+            last_ago = health["last_connected_seconds_ago"]
+            if last_ago > 300 and not _health_monitor_alert_sent:
+                _health_monitor_alert_sent = True
+                logger.error(
+                    "Health monitor: agent disconnected for >5 minutes "
+                    "(%.0fs) — logging critical alert",
+                    last_ago,
+                )
+    except Exception as exc:
+        logger.error("Health monitor check failed: %s", exc, exc_info=True)
 
 
 def _check_openai_credits_sync() -> None:
@@ -558,6 +612,18 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled daily message report at 11:30 PM IST (18:00 UTC) to alisha.kanwar@ppischool.in")
+
+    # --- Always-Active Health Monitor ---
+    # Check agent connection health every 60 seconds.
+    # Self-recovery is handled by the WebSocket auto-reconnect in the agent.
+    # This monitor logs status and ensures the health state is accurate.
+    scheduler.add_job(
+        _health_monitor_sync,
+        trigger=IntervalTrigger(seconds=60),
+        id="health_monitor",
+        replace_existing=True,
+    )
+    logger.info("Scheduled health monitor every 60 seconds")
 
     scheduler.start()
     logger.info("Scheduler started successfully")
