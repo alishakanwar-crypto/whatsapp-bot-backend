@@ -276,16 +276,42 @@ async def save_message(
     content: str,
     channel: str,
     direction: str,
+    wa_message_id: str = "",
 ) -> None:
     """Save a message to the database."""
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO messages (sender, receiver, content, channel, direction)
-               VALUES (?, ?, ?, ?, ?)""",
-            (sender, receiver, content, channel, direction),
+            """INSERT INTO messages (sender, receiver, content, channel, direction, wa_message_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (sender, receiver, content, channel, direction, wa_message_id),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_message_by_wa_id(wa_message_id: str) -> dict | None:
+    """Look up a message by its WhatsApp message ID."""
+    if not wa_message_id:
+        return None
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT content, sender, receiver, direction, timestamp
+               FROM messages WHERE wa_message_id = ? LIMIT 1""",
+            (wa_message_id,),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return {
+                "content": row[0],
+                "sender": row[1],
+                "receiver": row[2],
+                "direction": row[3],
+                "timestamp": row[4],
+            }
+        return None
     finally:
         await db.close()
 
@@ -3823,10 +3849,26 @@ async def receive_cloud_api_message(request: Request):
     changes = entry.get("changes", [{}])[0]
     value = changes.get("value", {})
     msgs = value.get("messages", [{}])
-    msg_id = msgs[0].get("id", "") if msgs else ""
+    msg_obj = msgs[0] if msgs else {}
+    msg_id = msg_obj.get("id", "")
     if msg_id and await _is_duplicate(msg_id):
         logger.info(f"Duplicate Cloud API webhook for id={msg_id}, skipping.")
         return {"status": "ok"}
+
+    # --- Extract quoted/reply context ---
+    # WhatsApp Cloud API includes 'context.id' when user replies to a message
+    quoted_msg_id = msg_obj.get("context", {}).get("id", "")
+    quoted_context_text = ""
+    if quoted_msg_id:
+        quoted_msg = await get_message_by_wa_id(quoted_msg_id)
+        if quoted_msg:
+            quoted_context_text = quoted_msg["content"]
+            logger.info(
+                f"[REPLY CONTEXT] User replied to msg {quoted_msg_id}: "
+                f"{quoted_context_text[:100]}"
+            )
+        else:
+            logger.info(f"[REPLY CONTEXT] Quoted msg {quoted_msg_id} not found in DB")
 
     logger.info(f"Cloud API message from {sender}: {message_text} | media: {media_info is not None}")
 
@@ -3867,7 +3909,7 @@ async def receive_cloud_api_message(request: Request):
         await pause_for_bot_reply()
 
         bot_phone = "bot"
-        await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
+        await save_message(sender, bot_phone, message_text, "whatsapp", "incoming", wa_message_id=msg_id)
 
         # --- Image/media handling with strict content classification ---
         # RULE: Only treat as student photo if caption has Name + Class.
@@ -4107,8 +4149,15 @@ async def receive_cloud_api_message(request: Request):
         # respective class teacher (based on child's grade in PI sheet).
         # This ensures controlled parent–teacher communication with strict
         # class-wise boundaries.
+        # Include quoted message context so teacher sees the full conversation
+        routed_text = message_text
+        if quoted_context_text:
+            routed_text = (
+                f"[Replying to: \"{quoted_context_text[:300]}\"]\n\n"
+                f"{message_text}"
+            )
         parent_routed = await try_route_parent_to_class_teacher(
-            sender, message_text, reply_to, media_info,
+            sender, routed_text, reply_to, media_info,
         )
         if parent_routed:
             return {"status": "ok"}
@@ -4117,7 +4166,16 @@ async def receive_cloud_api_message(request: Request):
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
 
-        ai_response = await generate_response(message_text, system_prompt, history)
+        # If user replied to a specific message, prepend that context
+        gpt_query = message_text
+        if quoted_context_text:
+            gpt_query = (
+                f"[The user is replying to this previous message: "
+                f"\"{quoted_context_text[:500]}\"]\n\n"
+                f"User's reply: {message_text}"
+            )
+
+        ai_response = await generate_response(gpt_query, system_prompt, history)
 
         # Check if the bot couldn't answer
         if _is_unknown_response(ai_response):
@@ -4151,12 +4209,14 @@ async def receive_cloud_api_message(request: Request):
                     "to the class teacher via WhatsApp and email?"
                     + escalation_contacts
                 )
-            await save_message(bot_phone, sender, ask_class_msg, "whatsapp", "outgoing")
             await send_whatsapp_message(reply_to, ask_class_msg)
+            esc_wa_id = getattr(send_whatsapp_message, "last_wa_id", "") or ""
+            await save_message(bot_phone, sender, ask_class_msg, "whatsapp", "outgoing", wa_message_id=esc_wa_id)
             return {"status": "ok"}
 
-        await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
         await send_whatsapp_message(reply_to, ai_response)
+        sent_wa_id = getattr(send_whatsapp_message, "last_wa_id", "") or ""
+        await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing", wa_message_id=sent_wa_id)
 
         # Forward to teachers if mentioned
         await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)

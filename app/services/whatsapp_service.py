@@ -318,15 +318,24 @@ async def send_cloud_template_message(
 
 
 async def send_whatsapp_message(to: str, message: str) -> bool:
-    """Send a WhatsApp message via the active provider (Cloud API or Green API)."""
+    """Send a WhatsApp message via the active provider (Cloud API or Green API).
+
+    Returns True on success. The sent message's WhatsApp ID (if available)
+    is stored in send_whatsapp_message.last_wa_id after each call.
+    """
     provider = get_whatsapp_provider()
     if provider == "cloud":
         return await _send_cloud_text(to, message)
     return await _send_green_text(to, message)
 
 
+# Attribute to store the last sent message ID (set by _send_cloud_text)
+send_whatsapp_message.last_wa_id = ""  # type: ignore[attr-defined]
+
+
 async def _send_cloud_text(to: str, message: str) -> bool:
     """Send a text message via Meta Cloud API."""
+    send_whatsapp_message.last_wa_id = ""  # type: ignore[attr-defined]
     token = get_cloud_token()
     phone_id = get_cloud_phone_id()
     if not token or not phone_id:
@@ -352,7 +361,9 @@ async def _send_cloud_text(to: str, message: str) -> bool:
             response = await client.post(url, headers=headers, json=payload, timeout=30.0)
             data = response.json()
             if "messages" in data:
-                logger.info(f"Cloud API message sent to {recipient}, id: {data['messages'][0]['id'][:30]}")
+                wa_id = data["messages"][0]["id"]
+                send_whatsapp_message.last_wa_id = wa_id  # type: ignore[attr-defined]
+                logger.info(f"Cloud API message sent to {recipient}, id: {wa_id[:30]}")
                 return True
             logger.error(f"Cloud API send failed: {data}")
             return False

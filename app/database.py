@@ -38,6 +38,7 @@ async def init_db():
                 content TEXT NOT NULL,
                 channel TEXT NOT NULL DEFAULT 'whatsapp',
                 direction TEXT NOT NULL DEFAULT 'incoming',
+                wa_message_id TEXT DEFAULT '',
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -157,6 +158,13 @@ async def init_db():
         try:
             await db.execute(
                 "ALTER TABLE pi_sheet_students ADD COLUMN class_teacher TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE messages ADD COLUMN wa_message_id TEXT DEFAULT ''"
             )
         except Exception:
             pass  # column already exists
