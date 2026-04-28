@@ -3868,7 +3868,16 @@ async def receive_cloud_api_message(request: Request):
             else:
                 # No Name+Class in caption → general file/document
                 # Do NOT ask for student name/class, do NOT attempt registration
+                # Forward to class teacher if sender is a known parent
                 logger.info(f"[IMAGE HANDLER] General file/document from {sender}")
+                caption = (media_info.get("caption", "") or "").strip()
+                forward_text = caption if caption else "Shared a file/image"
+                routed = await try_route_parent_to_class_teacher(
+                    sender, forward_text, reply_to, media_info,
+                )
+                if routed:
+                    return {"status": "ok"}
+                # Not a known parent or routing failed — simple ack
                 doc_msg = "File received successfully."
                 await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
                 await send_whatsapp_message(reply_to, doc_msg)
