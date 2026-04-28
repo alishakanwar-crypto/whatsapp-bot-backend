@@ -1637,6 +1637,245 @@ async def detect_and_handle_leave_application(
 
 
 # ---------------------------------------------------------------------------
+# Parent-to-Class-Teacher Routing — auto-route parent queries to the
+# assigned class teacher based on student mapping.
+# ---------------------------------------------------------------------------
+
+# Messages that should NOT be forwarded to the teacher (greetings, thanks, etc.)
+_SKIP_FORWARD_RE = re.compile(
+    r"^(?:hi|hello|hey|ok|okay|thanks|thank you|thankyou|thank u|good morning|"
+    r"good evening|good night|bye|haan|ji|theek hai|shukriya|dhanyavaad|namaste|"
+    r"hmm|yes|no|nahi|haa|accha|👍|🙏|❤️|😊)\s*[.!?]*$",
+    re.IGNORECASE,
+)
+
+
+async def try_route_parent_to_class_teacher(
+    sender: str, message_text: str, reply_to: str, media_info: dict | None = None,
+) -> bool:
+    """Auto-route a parent's query to the respective class teacher.
+
+    Flow:
+    1. Skip if sender is admin, teacher, or message is trivial.
+    2. Look up parent's children from PI sheet.
+    3. If one child → find class teacher → forward.
+    4. If multiple children → ask which child the query is about.
+    5. If unknown parent → return False (fall through to GPT).
+    6. Save conversation for two-way reply relay.
+    Returns True if handled, False otherwise.
+    """
+    # Skip admin panel numbers — they should use GPT / direct message flow
+    if _is_admin_panel(sender):
+        return False
+
+    # Skip if the sender IS a teacher (their messages go through broadcast/relay)
+    if _is_teacher_phone(sender):
+        return False
+
+    # Skip trivial / greeting messages
+    stripped = message_text.strip()
+    if not stripped or len(stripped) < 3:
+        return False
+    if _SKIP_FORWARD_RE.match(stripped):
+        return False
+
+    # Look up children linked to this phone number
+    children = await _lookup_parent_child_class(sender)
+    if not children:
+        return False  # Not a known parent — fall through to GPT
+
+    logger.info(
+        f"[PARENT→TEACHER] Parent {sender} has {len(children)} child(ren), "
+        f"routing query: {message_text[:80]}"
+    )
+
+    # --- Multiple children: ask which child the query is about ---
+    if len(children) > 1:
+        # Check if message mentions a specific grade — use it
+        grade_teacher = find_teacher_by_grade(message_text)
+        if grade_teacher:
+            # Message mentions a grade — find the matching child
+            matching_child = next(
+                (c for c in children
+                 if c["grade"].lower().replace(" ", "")
+                 == grade_teacher["grade"].lower().replace(" ", "")),
+                None,
+            )
+            if matching_child:
+                return await _forward_query_to_class_teacher(
+                    sender, message_text, reply_to, matching_child,
+                    grade_teacher, media_info,
+                )
+
+        # Check if message mentions a child's name
+        msg_lower = message_text.lower()
+        for child in children:
+            name_parts = child["student_name"].lower().split()
+            if any(part in msg_lower for part in name_parts if len(part) > 2):
+                teacher_entry = find_teacher_by_grade(child["grade"])
+                if teacher_entry:
+                    return await _forward_query_to_class_teacher(
+                        sender, message_text, reply_to, child,
+                        teacher_entry, media_info,
+                    )
+
+        # Can't determine which child — ask the parent
+        await save_pending_query(sender, reply_to, message_text)
+        child_list = "\n".join(
+            f"- {c['student_name']} ({c['grade']})" for c in children
+        )
+        ask_msg = (
+            f"{_greeting(sender)},\n\n"
+            "We have found multiple wards linked to your number:\n"
+            f"{child_list}\n\n"
+            "Kindly specify which ward this query is regarding "
+            "by replying with their name or class.\n\n"
+            "Thank you for your cooperation.\n"
+            "Warm regards,\nPP International School"
+        )
+        await send_whatsapp_message(reply_to, ask_msg)
+        return True
+
+    # --- Single child: auto-route to class teacher ---
+    child = children[0]
+    teacher_entry = find_teacher_by_grade(child["grade"])
+    if not teacher_entry:
+        # Try fuzzy match
+        for entry in TEACHER_DATA:
+            entry_grade_low = entry["grade"].lower().replace(" ", "")
+            child_grade_low = child["grade"].lower().replace(" ", "")
+            if child_grade_low == entry_grade_low or child_grade_low in entry_grade_low:
+                teacher_entry = entry
+                break
+
+    if not teacher_entry:
+        logger.warning(f"[PARENT→TEACHER] No teacher found for grade {child['grade']}")
+        return False  # Fall through to GPT
+
+    return await _forward_query_to_class_teacher(
+        sender, message_text, reply_to, child, teacher_entry, media_info,
+    )
+
+
+async def _forward_query_to_class_teacher(
+    sender: str,
+    message_text: str,
+    reply_to: str,
+    child: dict,
+    teacher_entry: dict,
+    media_info: dict | None = None,
+) -> bool:
+    """Forward a parent's query to the class teacher with full context.
+
+    Sends via WhatsApp and email. Saves conversation for reply relay.
+    Returns True on success.
+    """
+    teacher_name = teacher_entry["teacher"].split("/")[0].strip()
+    teacher_grade = teacher_entry["grade"]
+    teacher_email = teacher_entry.get("email", "")
+    teacher_phone = teacher_entry.get("whatsapp", "")
+
+    if not teacher_email and not teacher_phone:
+        logger.warning(f"[PARENT→TEACHER] No contact for teacher of {teacher_grade}")
+        msg = (
+            f"{_greeting(sender)},\n\n"
+            f"The class teacher for *{teacher_grade}* is *{teacher_name}*, "
+            f"but we don't have their contact details on file. "
+            f"Please contact the school office for assistance.\n\n"
+            f"Phone: 011-45161066 / 64 / 63\n"
+            f"Email: info@ppischool.in\n\n"
+            f"Warm regards,\nPP International School"
+        )
+        await send_whatsapp_message(reply_to, msg)
+        return True
+
+    parent_label = f"Parent of {child['student_name']} ({child['grade']})"
+
+    # Build forwarded message for the teacher
+    notification = (
+        f"Dear {teacher_name},\n\n"
+        f"{parent_label} has sent the following query via the *PPIS Bot*:\n\n"
+        f"\U0001f4e9 \"{message_text[:500]}\"\n\n"
+        f"Kindly reply to this message and your response will be "
+        f"forwarded back to the parent.\n\n"
+        f"Thank you for your cooperation.\n"
+        f"Warm regards,\nPP International School"
+    )
+
+    wa_success = False
+    email_success = False
+
+    # Forward via WhatsApp
+    if teacher_phone:
+        chat_id = _teacher_chat_id(teacher_phone)
+        wa_success = await send_whatsapp_message(chat_id, notification)
+        if wa_success:
+            logger.info(
+                f"[PARENT→TEACHER] Forwarded to {teacher_name} ({teacher_phone}) via WhatsApp"
+            )
+            # Forward media if present
+            if media_info and media_info.get("cloud_media_id"):
+                from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                await forward_cloud_media_to_recipient(
+                    media_info, chat_id, caption=media_info.get("caption", "")
+                )
+            # Save conversation for reply relay
+            await save_forwarded_conversation(
+                teacher_phone=teacher_phone,
+                teacher_name=teacher_name,
+                teacher_grade=teacher_grade,
+                original_chat_id=reply_to,
+                sender_phone=sender,
+                original_message=message_text[:500],
+            )
+
+    # Forward via email
+    if teacher_email:
+        email_body = (
+            f"Dear {teacher_name},\n\n"
+            f"{parent_label} has sent the following query via the PPIS Bot:\n\n"
+            f"\"{message_text[:500]}\"\n\n"
+            f"Kindly reply to this email and your response will be "
+            f"forwarded back to the parent.\n\n"
+            f"Regards,\nPPIS Bot"
+        )
+        email_success = await send_email_async(
+            teacher_email,
+            f"PPIS Bot: Query from {parent_label}",
+            email_body,
+            "PP International School",
+        )
+        if email_success:
+            logger.info(
+                f"[PARENT→TEACHER] Forwarded to {teacher_name} ({teacher_email}) via email"
+            )
+
+    # Confirm to the parent
+    methods = []
+    if wa_success:
+        methods.append("WhatsApp")
+    if email_success:
+        methods.append("email")
+    method_str = " and ".join(methods) if methods else "the school"
+
+    confirm_msg = (
+        f"{_greeting(sender)},\n\n"
+        f"Your query has been forwarded to *{teacher_name}* "
+        f"(Class Teacher, {teacher_grade}) via {method_str}.\n\n"
+        f"You will receive the response as soon as the teacher replies.\n\n"
+        f"Thank you for your cooperation.\n"
+        f"Warm regards,\nPP International School"
+    )
+    await send_whatsapp_message(reply_to, confirm_msg)
+
+    logger.info(
+        f"[PARENT→TEACHER] Query from {sender} ({parent_label}) → "
+        f"{teacher_name} ({teacher_grade}) via {method_str}"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Teacher Homework Broadcast — teacher sends homework, bot relays to parents
 # ---------------------------------------------------------------------------
 
@@ -3570,6 +3809,18 @@ async def receive_cloud_api_message(request: Request):
             await send_whatsapp_message(reply_to, _act_msg)
             return {"status": "ok"}
 
+        # --- Parent → Class Teacher routing ---
+        # If the sender is a known parent, auto-route their query to the
+        # respective class teacher (based on child's grade in PI sheet).
+        # This ensures controlled parent–teacher communication with strict
+        # class-wise boundaries.
+        parent_routed = await try_route_parent_to_class_teacher(
+            sender, message_text, reply_to, media_info,
+        )
+        if parent_routed:
+            return {"status": "ok"}
+
+        # --- GPT fallback (for admins, teachers, or unknown senders) ---
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
 
