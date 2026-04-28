@@ -166,6 +166,12 @@ BOT_ENABLED = True  # Re-enabled per user request
 
 @router.post("/webhook/bot-enabled")
 async def set_bot_enabled(request: Request):
+    # Auth check — admin-only endpoint
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            return {"error": "Unauthorized"}
     global BOT_ENABLED
     body = await request.json()
     BOT_ENABLED = bool(body.get("enabled", False))
@@ -3469,6 +3475,12 @@ async def receive_cloud_api_message(request: Request):
 @router.post("/webhook/send-notification-email")
 async def send_notification_email(request: Request):
     """Send a notification email via the server's SMTP (used when caller VM has no SMTP access)."""
+    # Auth check — prevent unauthenticated arbitrary email sending
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            return {"success": False, "error": "Unauthorized"}
     body = await request.json()
     to = body.get("to", "")
     subject = body.get("subject", "")
