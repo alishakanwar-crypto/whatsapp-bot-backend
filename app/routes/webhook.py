@@ -3400,16 +3400,31 @@ async def _find_student_by_caption(caption: str) -> dict | None:
     if not caption_clean:
         return None
 
-    # Try to extract grade from caption (e.g. "Grade 3C", "5A", "NUR-1")
+    # Try to extract grade from caption (e.g. "Grade 3C", "5A", "3 C", "NUR-1")
     grade_match = _GRADE_EXTRACT_RE.search(caption_clean)
     caption_grade = None
     name_part = caption_clean
+
     if grade_match:
-        # Remove the grade portion to get just the name
         caption_grade = _extract_classroom_from_message(caption_clean)
         name_part = caption_clean[:grade_match.start()].strip()
         if not name_part:
             name_part = caption_clean[grade_match.end():].strip()
+
+    # Fallback: try flexible regex for "3C", "3 C", "5A" without Grade/Class prefix
+    if not caption_grade:
+        flex_match = _CAPTION_CLASS_RE.search(caption_clean)
+        if flex_match:
+            # Extract grade number + section from flexible match
+            g5, g6 = flex_match.group(5), flex_match.group(6)  # bare "3C" groups
+            if g5 and g6:
+                caption_grade = f"Grade {g5}{g6.upper()}"
+            elif not caption_grade:
+                # Try standard extraction
+                caption_grade = _extract_classroom_from_message(caption_clean)
+            name_part = caption_clean[:flex_match.start()].strip()
+            if not name_part:
+                name_part = caption_clean[flex_match.end():].strip()
 
     # Clean name: remove common prefixes/suffixes
     name_part = re.sub(r"(?i)^(photo\s*(of)?|pic\s*(of)?|image\s*(of)?)\s*", "", name_part).strip()
@@ -3496,23 +3511,42 @@ async def _find_student_by_caption(caption: str) -> dict | None:
 #       Student Name + Class/Section. Otherwise it's a general document.
 # ---------------------------------------------------------------------------
 
+# Flexible regex for detecting class/grade in captions — handles formats like:
+# "Grade 3C", "Class 5A", "3C", "3 C", "NUR", "Nursery", "Prep 1", "Popsicle"
+_CAPTION_CLASS_RE = re.compile(
+    r"(?:"
+    r"(?:grade|class|कक्षा|क्लास)\s*(\d{1,2})\s*([a-cA-C])?"  # "Grade 3C"
+    r"|"
+    r"(?:nur(?:sery)?)\s*(\d)?"  # "Nursery", "NUR 1"
+    r"|"
+    r"(?:prep)\s*(\d)?"  # "Prep 1"
+    r"|"
+    r"(?:popsicle)"  # "Popsicle"
+    r"|"
+    r"\b(\d{1,2})\s*([a-cA-C])\b"  # "3C", "3 C", "5A", "10B"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def _caption_has_name_and_class(caption: str) -> bool:
     """Check if the caption contains both a student name AND a class/section.
 
     Returns True only when both are clearly present.
     Examples that return True:
-      "Aarav Sharma Grade 5A", "Grade 3C Nitya Gupta", "Suhaan Ahuja 3C"
+      "Aarav Sharma Grade 5A", "Grade 3C Nitya Gupta", "Suhaan 3C",
+      "Suhaan 3 C", "Karman 1B", "Ishnoor Grade 7B"
     Examples that return False:
-      "homework", "screenshot", "", "hi", "check this", "5A"
+      "homework", "screenshot", "", "hi", "check this"
     """
     if not caption or len(caption.strip()) < 3:
         return False
 
     # Must contain a class/grade indicator
-    has_class = bool(_GRADE_EXTRACT_RE.search(caption))
+    has_class = bool(_CAPTION_CLASS_RE.search(caption))
 
-    # Must contain at least one alphabetic name (2+ letters, not a grade keyword)
-    name_part = _GRADE_EXTRACT_RE.sub("", caption).strip()
+    # Must contain at least one alphabetic name (2+ letters)
+    name_part = _CAPTION_CLASS_RE.sub("", caption).strip()
     name_part = re.sub(r"[^\w\s]", "", name_part).strip()
     name_words = [w for w in name_part.split() if len(w) >= 2 and w.isalpha()]
     has_name = len(name_words) >= 1
