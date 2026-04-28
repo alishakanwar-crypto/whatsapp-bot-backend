@@ -3489,136 +3489,57 @@ async def _find_student_by_caption(caption: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Image/Media Content Classification — intelligently differentiate between
+# Image/Media Content Classification — strictly differentiate between
 # student registration photos and general files/documents.
+#
+# RULE: A file/image is a student photo ONLY IF the caption contains
+#       Student Name + Class/Section. Otherwise it's a general document.
 # ---------------------------------------------------------------------------
 
-# Caption patterns that strongly indicate a student registration photo
-_STUDENT_PHOTO_CAPTION_RE = re.compile(
-    r"(?i)(?:"
-    # Name followed by grade pattern (e.g., "Aarav Sharma Grade 5A")
-    r"[A-Za-z]{2,}\s+[A-Za-z]{2,}.*?(?:grade|class|nursery|prep|nur|popsicle)"
-    r"|"
-    # Grade followed by name (e.g., "Grade 5A Aarav Sharma")
-    r"(?:grade|class|nursery|prep|nur|popsicle)\s*\d*\s*[a-zA-Z]?\s+[A-Za-z]{2,}"
-    r"|"
-    # Just a name (2+ words, no document/screenshot keywords)
-    r"^[A-Za-z]{2,}\s+[A-Za-z]{2,}(?:\s+[A-Za-z]+)?$"
-    r")"
-)
+def _caption_has_name_and_class(caption: str) -> bool:
+    """Check if the caption contains both a student name AND a class/section.
 
-# Keywords that indicate a document/screenshot (NOT a student photo)
-_DOCUMENT_KEYWORDS_RE = re.compile(
-    r"(?i)\b(?:homework|syllabus|circular|notice|timetable|time table|"
-    r"schedule|report card|marks|result|fee|payment|receipt|"
-    r"worksheet|assignment|question paper|exam|test|quiz|"
-    r"screenshot|screen shot|forwarded|fwd|whatsapp|chat|"
-    r"map|location|menu|list|form|application)\b"
-)
+    Returns True only when both are clearly present.
+    Examples that return True:
+      "Aarav Sharma Grade 5A", "Grade 3C Nitya Gupta", "Suhaan Ahuja 3C"
+    Examples that return False:
+      "homework", "screenshot", "", "hi", "check this", "5A"
+    """
+    if not caption or len(caption.strip()) < 3:
+        return False
+
+    # Must contain a class/grade indicator
+    has_class = bool(_GRADE_EXTRACT_RE.search(caption))
+
+    # Must contain at least one alphabetic name (2+ letters, not a grade keyword)
+    name_part = _GRADE_EXTRACT_RE.sub("", caption).strip()
+    name_part = re.sub(r"[^\w\s]", "", name_part).strip()
+    name_words = [w for w in name_part.split() if len(w) >= 2 and w.isalpha()]
+    has_name = len(name_words) >= 1
+
+    return has_class and has_name
 
 
-def _classify_media_content(media_info: dict, sender_is_parent: bool) -> str:
-    """Classify incoming media into: 'student_photo', 'document', or 'unknown'.
+def _classify_media_content(media_info: dict) -> str:
+    """Classify incoming media into: 'student_photo' or 'document'.
 
-    Classification rules:
-    - Documents (PDF, docx, etc.) → always 'document'
-    - Images with student-name + grade caption → 'student_photo'
-    - Images with document keywords in caption → 'document'
-    - Images with no caption from a parent → 'unknown' (needs further check)
-    - Images from non-parents → 'document'
+    Strict rule:
+    - student_photo ONLY if caption has Name + Class/Section
+    - Everything else is 'document' (no GPT, no guessing)
     """
     media_type = media_info.get("type", "")
-    mime_type = media_info.get("mime_type", "")
     caption = (media_info.get("caption", "") or "").strip()
-    filename = (media_info.get("filename", "") or "").lower()
 
-    # Rule 1: Non-image media types are always documents
+    # Non-image media types are always documents
     if media_type in ("documentMessage", "videoMessage"):
         return "document"
 
-    # Rule 2: Non-image MIME types (PDF, Word, etc.)
-    if mime_type and not mime_type.startswith("image/"):
-        return "document"
-
-    # Rule 3: File extension check
-    doc_extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv")
-    if any(filename.endswith(ext) for ext in doc_extensions):
-        return "document"
-
-    # Rule 4: Caption contains document-related keywords
-    if caption and _DOCUMENT_KEYWORDS_RE.search(caption):
-        return "document"
-
-    # Rule 5: Caption matches student photo pattern (name + grade)
-    if caption and _STUDENT_PHOTO_CAPTION_RE.search(caption):
+    # Check caption for Name + Class
+    if caption and _caption_has_name_and_class(caption):
         return "student_photo"
 
-    # Rule 6: Caption is present but doesn't match student pattern
-    # and doesn't match document pattern — check if it looks like a name
-    if caption:
-        # If caption is just 1-3 words with only letters/spaces, could be a name
-        caption_clean = re.sub(r"[^\w\s]", "", caption).strip()
-        words = caption_clean.split()
-        if 1 <= len(words) <= 4 and all(w.isalpha() for w in words):
-            # Looks like a person's name — treat as potential student photo
-            return "student_photo"
-        # Otherwise it's probably a description/document
-        return "document"
-
-    # Rule 7: No caption — depends on context
-    if sender_is_parent:
-        return "unknown"  # Could be student photo or general — needs clarification
+    # Everything else: no name+class = document/general file
     return "document"
-
-
-async def _classify_image_with_vision(
-    media_info: dict, img_bytes: bytes, img_mime: str,
-) -> str:
-    """Use GPT-4o-mini vision to classify an ambiguous image.
-
-    Returns 'student_photo' or 'document'.
-    """
-    try:
-        from app.services.openai_service import get_client
-        import base64
-
-        ai_client = get_client()
-        if ai_client is None:
-            return "unknown"
-
-        b64 = base64.b64encode(img_bytes).decode("utf-8")
-        data_uri = f"data:{img_mime};base64,{b64}"
-
-        classification_prompt = (
-            "Classify this image into ONE of these categories:\n"
-            "1. STUDENT_PHOTO - A clear photograph of a child/student's face "
-            "(passport-style, selfie, or posed photo suitable for face recognition)\n"
-            "2. DOCUMENT - A screenshot, text document, circular, notice, homework, "
-            "timetable, receipt, chat screenshot, or any non-portrait image\n\n"
-            "Respond with ONLY one word: STUDENT_PHOTO or DOCUMENT"
-        )
-
-        response = await ai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": classification_prompt},
-                    {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
-                ],
-            }],
-            max_tokens=20,
-            temperature=0.1,
-        )
-
-        result = (response.choices[0].message.content or "").strip().upper()
-        if "STUDENT" in result:
-            return "student_photo"
-        return "document"
-
-    except Exception as e:
-        logger.error(f"Image classification via vision failed: {e}")
-        return "unknown"
 
 
 async def _try_register_child_face(
@@ -3680,29 +3601,26 @@ async def _try_register_child_face(
                     break
 
         if not target_child:
-            if len(children) == 1 and not caption_raw:
-                # Single child, no caption — auto-assign only if no caption
-                target_child = children[0]
-            else:
-                # Multiple children or caption didn't match any — ask for clarity
-                if len(children) == 1:
-                    child_list = f"1. {children[0]['student_name']} ({children[0]['grade']})"
-                else:
-                    child_list = "\n".join(
-                        f"{i+1}. {c['student_name']} ({c['grade']})"
-                        for i, c in enumerate(children)
-                    )
-                ask_msg = (
-                    "Thank you for sharing the photo!\n\n"
-                    "Please confirm the student's name and class for this photo.\n"
-                    "Send the photo again with the caption in this format:\n"
-                    "*Student Name Grade/Class*\n\n"
-                    "Example: *Aarav Sharma Grade 5A*\n\n"
-                    f"Children linked to your number:\n{child_list}"
+            # Caption had name+class but didn't match any student in DB.
+            # Ask parent to resend with correct details.
+            if children:
+                child_list = "\n".join(
+                    f"{i+1}. {c['student_name']} ({c['grade']})"
+                    for i, c in enumerate(children)
                 )
-                await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
-                await send_whatsapp_message(reply_to, ask_msg)
-                return True
+            else:
+                child_list = "(No children found linked to your number)"
+            ask_msg = (
+                "Thank you for sharing the photo!\n\n"
+                "We could not match the name/class in your caption to a student in our records.\n"
+                "Please resend the photo with the correct caption in this format:\n"
+                "*Student Name Grade/Class*\n\n"
+                "Example: *Aarav Sharma Grade 5A*\n\n"
+                f"Children linked to your number:\n{child_list}"
+            )
+            await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
+            await send_whatsapp_message(reply_to, ask_msg)
+            return True
 
     # Download image — supports both Cloud API (cloud_media_id) and Green API (direct url)
     cloud_media_id = media_info.get("cloud_media_id", "")
@@ -3885,170 +3803,42 @@ async def receive_cloud_api_message(request: Request):
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
 
-        # --- Intelligent image/media handling with content classification ---
+        # --- Image/media handling with strict content classification ---
+        # RULE: Only treat as student photo if caption has Name + Class.
+        #       Everything else → "File received" or forward to teacher.
+        has_media = media_info and media_info.get("type") in ("imageMessage", "documentMessage", "videoMessage")
         has_image = media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id")
-        has_document = media_info and media_info.get("type") in ("documentMessage", "videoMessage")
-        logger.info(f"[IMAGE CHECK] sender={sender} has_image={has_image} has_document={has_document} media_info_type={media_info.get('type') if media_info else 'None'}")
+        logger.info(f"[IMAGE CHECK] sender={sender} has_media={has_media} has_image={has_image}")
 
-        if has_image or has_document:
-            # Step 1: Classify the content BEFORE attempting face registration
-            children = await _lookup_parent_child_class(sender)
-            sender_is_parent = len(children) > 0
-            content_class = _classify_media_content(media_info, sender_is_parent)
-            logger.info(
-                f"[IMAGE HANDLER] Content classified as '{content_class}' for {sender} "
-                f"(is_parent={sender_is_parent})"
-            )
+        if has_media:
+            content_class = _classify_media_content(media_info)
+            logger.info(f"[IMAGE HANDLER] Content classified as '{content_class}' for {sender}")
 
-            # Step 2A: Clearly a DOCUMENT — do NOT attempt face registration
-            if content_class == "document":
-                if has_document:
-                    # PDF/document file — forward to teacher if parent, else acknowledge
-                    if sender_is_parent:
-                        # Route document to class teacher as part of communication flow
-                        pass  # Fall through to text handlers (teacher routing, etc.)
-                    else:
-                        doc_msg = "File received successfully."
-                        await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
-                        await send_whatsapp_message(reply_to, doc_msg)
-                        return {"status": "ok"}
-                else:
-                    # Image classified as document (screenshot, circular, etc.)
-                    # Use GPT vision to describe it contextually
-                    try:
-                        system_prompt = await get_system_prompt()
-                        history = await get_conversation_history(sender)
-                        from app.services.whatsapp_service import download_cloud_media
-                        from app.services.openai_service import generate_vision_response
-                        img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
-                        if img_bytes:
-                            caption = media_info.get("caption", "")
-                            img_sender_name = media_info.get("sender_name", "")
-                            ai_response = await generate_vision_response(
-                                img_bytes, img_mime, caption, system_prompt, history,
-                                sender_name=img_sender_name,
-                            )
-                            del img_bytes
-                            await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, ai_response)
-                            return {"status": "ok"}
-                        else:
-                            doc_msg = "File received successfully."
-                            await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, doc_msg)
-                            return {"status": "ok"}
-                    except Exception as vis_exc:
-                        logger.error(f"[IMAGE HANDLER] Vision error for document: {vis_exc}", exc_info=True)
-                        doc_msg = "File received successfully."
-                        await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
-                        await send_whatsapp_message(reply_to, doc_msg)
-                        return {"status": "ok"}
-
-            # Step 2B: Clearly a STUDENT PHOTO — proceed with face registration
-            elif content_class == "student_photo":
-                logger.info(f"[IMAGE HANDLER] Processing as student photo from {sender}")
+            if content_class == "student_photo":
+                # Caption has Name + Class → attempt face registration
+                logger.info(f"[IMAGE HANDLER] Student photo with name+class from {sender}")
                 try:
                     face_reg_handled = await _try_register_child_face(
                         sender, reply_to, bot_phone, media_info,
                     )
-                    logger.info(f"[IMAGE HANDLER] face_reg_handled={face_reg_handled} for {sender}")
                     if face_reg_handled:
                         return {"status": "ok"}
                 except Exception as img_exc:
-                    logger.error(f"[IMAGE HANDLER] Exception in face registration for {sender}: {img_exc}", exc_info=True)
+                    logger.error(f"[IMAGE HANDLER] Face registration error: {img_exc}", exc_info=True)
+                # If face reg failed, respond with generic ack
+                doc_msg = "File received successfully."
+                await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, doc_msg)
+                return {"status": "ok"}
 
-                # If face registration didn't handle it, fall through to vision
-                try:
-                    system_prompt = await get_system_prompt()
-                    history = await get_conversation_history(sender)
-                    from app.services.whatsapp_service import download_cloud_media
-                    from app.services.openai_service import generate_vision_response
-                    img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
-                    if img_bytes:
-                        caption = media_info.get("caption", "")
-                        img_sender_name = media_info.get("sender_name", "")
-                        ai_response = await generate_vision_response(
-                            img_bytes, img_mime, caption, system_prompt, history,
-                            sender_name=img_sender_name,
-                        )
-                        del img_bytes
-                        await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                        await send_whatsapp_message(reply_to, ai_response)
-                        return {"status": "ok"}
-                except Exception as vis_exc:
-                    logger.error(f"[IMAGE HANDLER] Vision fallback error: {vis_exc}", exc_info=True)
-                    err_msg = "Your image has been received. Please try again if needed."
-                    await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
-                    await send_whatsapp_message(reply_to, err_msg)
-                    return {"status": "ok"}
-
-            # Step 2C: UNKNOWN — ambiguous image, use GPT vision to classify
-            else:  # content_class == "unknown"
-                logger.info(f"[IMAGE HANDLER] Ambiguous image from {sender}, using vision to classify")
-                try:
-                    from app.services.whatsapp_service import download_cloud_media
-                    img_bytes, img_mime = await download_cloud_media(media_info["cloud_media_id"])
-                    if img_bytes:
-                        # Use GPT vision to determine if it's a student photo
-                        vision_class = await _classify_image_with_vision(
-                            media_info, img_bytes, img_mime,
-                        )
-                        logger.info(f"[IMAGE HANDLER] Vision classified as '{vision_class}' for {sender}")
-
-                        if vision_class == "student_photo":
-                            # Ask for name/class since we don't have a caption
-                            if len(children) == 1:
-                                child_info = f"Your ward: {children[0]['student_name']} ({children[0]['grade']})"
-                            else:
-                                child_info = "\n".join(
-                                    f"- {c['student_name']} ({c['grade']})" for c in children
-                                )
-                            ask_msg = (
-                                "Thank you for sharing the photo!\n\n"
-                                "To register this for attendance, please resend it with "
-                                "your child's *name and class* as the caption.\n\n"
-                                "Example: *Aarav Sharma Grade 5A*\n\n"
-                                f"Children linked to your number:\n{child_info}"
-                            )
-                            del img_bytes
-                            await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, ask_msg)
-                            return {"status": "ok"}
-                        else:
-                            # It's a general image — describe it with GPT vision
-                            from app.services.openai_service import generate_vision_response
-                            system_prompt = await get_system_prompt()
-                            history = await get_conversation_history(sender)
-                            caption = media_info.get("caption", "")
-                            img_sender_name = media_info.get("sender_name", "")
-                            ai_response = await generate_vision_response(
-                                img_bytes, img_mime, caption, system_prompt, history,
-                                sender_name=img_sender_name,
-                            )
-                            del img_bytes
-                            await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, ai_response)
-                            return {"status": "ok"}
-                    else:
-                        err_msg = (
-                            "Your image has been received but we encountered an issue processing it. "
-                            "Please try sending again."
-                        )
-                        await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
-                        await send_whatsapp_message(reply_to, err_msg)
-                        return {"status": "ok"}
-                except Exception as vis_exc:
-                    logger.error(f"[IMAGE HANDLER] Vision classification error for {sender}: {vis_exc}", exc_info=True)
-                    # Neutral clarification as fallback
-                    ask_msg = (
-                        "Is this a student photo for attendance registration "
-                        "or a general document/file?\n\n"
-                        "If it's for registration, please resend with the student's "
-                        "*name and class* as the caption (e.g. *Aarav Sharma Grade 5A*)."
-                    )
-                    await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
-                    await send_whatsapp_message(reply_to, ask_msg)
-                    return {"status": "ok"}
+            else:
+                # No Name+Class in caption → general file/document
+                # Do NOT ask for student name/class, do NOT attempt registration
+                logger.info(f"[IMAGE HANDLER] General file/document from {sender}")
+                doc_msg = "File received successfully."
+                await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, doc_msg)
+                return {"status": "ok"}
 
         # Check if a teacher is broadcasting homework to parents of their class
         # NOTE: This MUST run before try_relay_teacher_reply() so broadcast
