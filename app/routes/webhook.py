@@ -3144,9 +3144,12 @@ async def receive_whatsapp_message(request: Request):
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
 
         # --- Parent photo / image handling (MUST run BEFORE text handlers) ---
+        # IMPORTANT: Skip for teachers — their images must reach the homework
+        # broadcast and teacher reply relay handlers below.
         has_image_green = media_info and media_info.get("type") == "imageMessage"
-        logger.info(f"[GREEN IMAGE CHECK] sender={sender} has_image={has_image_green} media_type={media_info.get('type') if media_info else 'None'}")
-        if has_image_green:
+        is_teacher_green = _is_teacher_phone(sender)
+        logger.info(f"[GREEN IMAGE CHECK] sender={sender} has_image={has_image_green} is_teacher={is_teacher_green} media_type={media_info.get('type') if media_info else 'None'}")
+        if has_image_green and not is_teacher_green:
             logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, url={media_info.get('url', '')[:80]}")
             try:
                 face_reg_handled = await _try_register_child_face(
@@ -3974,9 +3977,10 @@ async def receive_cloud_api_message(request: Request):
         is_non_image_media = media_info and media_info.get("type") in ("documentMessage", "videoMessage")
         logger.info(f"[IMAGE CHECK] sender={sender} has_media={has_media} has_image={has_image} is_teacher={is_teacher} is_non_image={is_non_image_media}")
 
-        # Skip early media interception for teachers sending documents/videos.
-        # These must reach the homework broadcast and teacher reply relay handlers below.
-        if has_media and not (is_teacher and is_non_image_media):
+        # Skip early media interception for ALL teacher media (images, docs, videos).
+        # Teacher media must reach the homework broadcast and teacher reply relay
+        # handlers below, which handle forwarding to parents correctly.
+        if has_media and not is_teacher:
             content_class = _classify_media_content(media_info)
             logger.info(f"[IMAGE HANDLER] Content classified as '{content_class}' for {sender}")
 
