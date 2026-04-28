@@ -378,16 +378,31 @@ async def api_send_whatsapp(request: Request):
     if not phone:
         return {"status": "error", "error": "Missing phone"}
 
-    if template_name:
-        success = await send_cloud_template_message(
-            phone, template_name, body_params=template_params or None,
-        )
-    elif message:
-        success = await send_whatsapp_message(phone, message)
-    else:
-        return {"status": "error", "error": "Missing message or template_name"}
+    # Handle comma-separated phone numbers (e.g. "91XXXXXXXXXX,91YYYYYYYYYY")
+    phone_list = [p.strip() for p in phone.split(",") if p.strip()]
+    results = []
+    for single_phone in phone_list:
+        # Normalize: strip non-digits, ensure country code
+        digits = "".join(c for c in single_phone if c.isdigit())
+        if len(digits) == 10:
+            digits = "91" + digits
+        elif len(digits) < 10:
+            results.append({"phone": single_phone, "status": "error", "error": "too short"})
+            continue
 
-    return {"status": "ok" if success else "error", "sent_to": phone}
+        if template_name:
+            success = await send_cloud_template_message(
+                digits, template_name, body_params=template_params or None,
+            )
+        elif message:
+            success = await send_whatsapp_message(digits, message)
+        else:
+            results.append({"phone": digits, "status": "error", "error": "no message"})
+            continue
+        results.append({"phone": digits, "status": "ok" if success else "error"})
+
+    all_ok = all(r["status"] == "ok" for r in results)
+    return {"status": "ok" if all_ok else "partial", "results": results}
 
 
 @app.post("/api/whatsapp-creds")
