@@ -3618,6 +3618,11 @@ def _classify_media_content(media_info: dict) -> str:
     Strict rule:
     - student_photo ONLY if caption has Name + Class/Section
     - Everything else is 'document' (no GPT, no guessing)
+
+    NOTE: This function does NOT check sender context (teacher vs parent).
+    The caller (Cloud API handler) is responsible for skipping early
+    media interception when the sender is a teacher, so that documents
+    from teachers reach the homework broadcast and relay handlers.
     """
     media_type = media_info.get("type", "")
     caption = (media_info.get("caption", "") or "").strip()
@@ -3960,11 +3965,18 @@ async def receive_cloud_api_message(request: Request):
         # --- Image/media handling with strict content classification ---
         # RULE: Only treat as student photo if caption has Name + Class.
         #       Everything else → "File received" or forward to teacher.
+        # IMPORTANT: Documents/videos from teachers must NOT be intercepted here.
+        #       They must fall through to detect_and_handle_teacher_homework_broadcast()
+        #       and try_relay_teacher_reply() which handle media forwarding correctly.
         has_media = media_info and media_info.get("type") in ("imageMessage", "documentMessage", "videoMessage")
         has_image = media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id")
-        logger.info(f"[IMAGE CHECK] sender={sender} has_media={has_media} has_image={has_image}")
+        is_teacher = _is_teacher_phone(sender)
+        is_non_image_media = media_info and media_info.get("type") in ("documentMessage", "videoMessage")
+        logger.info(f"[IMAGE CHECK] sender={sender} has_media={has_media} has_image={has_image} is_teacher={is_teacher} is_non_image={is_non_image_media}")
 
-        if has_media:
+        # Skip early media interception for teachers sending documents/videos.
+        # These must reach the homework broadcast and teacher reply relay handlers below.
+        if has_media and not (is_teacher and is_non_image_media):
             content_class = _classify_media_content(media_info)
             logger.info(f"[IMAGE HANDLER] Content classified as '{content_class}' for {sender}")
 
