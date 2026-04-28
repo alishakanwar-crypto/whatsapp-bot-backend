@@ -323,10 +323,36 @@ def lookup_person_by_name_or_phone(query: str) -> dict | None:
     return None
 
 
+def _get_openai_key() -> str:
+    """Read OpenAI API key from env var first, then fall back to settings DB."""
+    key = os.getenv("OPENAI_API_KEY", "")
+    if key and key != "placeholder":
+        return key
+    # Fallback: read from settings table in the database
+    import sqlite3
+    db_path = os.getenv("DB_PATH", "/data/app.db")
+    if not os.path.exists(db_path):
+        alt = os.path.join(os.path.dirname(__file__), "..", "..", "app.db")
+        if os.path.exists(alt):
+            db_path = alt
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.execute(
+            "SELECT value FROM settings WHERE key = 'OPENAI_API_KEY'"
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        pass
+    return ""
+
+
 def get_client() -> AsyncOpenAI | None:
     global client
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key or api_key == "placeholder":
+    api_key = _get_openai_key()
+    if not api_key:
         return None
     if client is None:
         client = AsyncOpenAI(api_key=api_key)

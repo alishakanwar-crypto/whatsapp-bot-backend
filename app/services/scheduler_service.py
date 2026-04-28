@@ -103,7 +103,8 @@ def _check_openai_credits_sync() -> None:
     This is more reliable than polling billing endpoints (which require special scopes).
     """
     global _last_low_balance_alert_sent
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    from app.services.openai_service import _get_openai_key
+    api_key = _get_openai_key()
     if not api_key:
         return
 
