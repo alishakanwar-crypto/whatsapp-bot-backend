@@ -3038,24 +3038,186 @@ async def verify_cloud_webhook(request: Request):
     return Response(content="Forbidden", status_code=403)
 
 
+async def _find_student_by_caption(caption: str) -> dict | None:
+    """Search the school DB for a student matching the caption text.
+
+    Parses caption for a student name (and optionally grade/class).
+    Returns the matched student dict with student_name, grade, parent_phones
+    or None if no match found.
+    """
+    caption_clean = caption.strip()
+    if not caption_clean:
+        return None
+
+    # Try to extract grade from caption (e.g. "Grade 3C", "5A", "NUR-1")
+    grade_match = _GRADE_EXTRACT_RE.search(caption_clean)
+    caption_grade = None
+    name_part = caption_clean
+    if grade_match:
+        # Remove the grade portion to get just the name
+        caption_grade = _extract_classroom_from_message(caption_clean)
+        name_part = caption_clean[:grade_match.start()].strip()
+        if not name_part:
+            name_part = caption_clean[grade_match.end():].strip()
+
+    # Clean name: remove common prefixes/suffixes
+    name_part = re.sub(r"(?i)^(photo\s*(of)?|pic\s*(of)?|image\s*(of)?)\s*", "", name_part).strip()
+    name_part = re.sub(r"[^\w\s]", "", name_part).strip()
+
+    if not name_part or len(name_part) < 2:
+        return None
+
+    db = await get_db()
+    try:
+        # Search by name (case-insensitive LIKE match)
+        name_words = name_part.lower().split()
+        # Build search: all name words must appear in student_name
+        conditions = []
+        params = []
+        for word in name_words:
+            if len(word) > 1:
+                conditions.append("LOWER(student_name) LIKE ?")
+                params.append(f"%{word}%")
+
+        if not conditions:
+            return None
+
+        where_clause = " AND ".join(conditions)
+        query = (
+            f"SELECT student_name, grade, father_mobile, mother_mobile "
+            f"FROM pi_sheet_students WHERE {where_clause}"
+        )
+        if caption_grade:
+            query += " AND UPPER(grade) = ?"
+            params.append(caption_grade.upper())
+
+        cursor = await db.execute(query, params)
+        rows = await cursor.fetchall()
+
+        if not rows:
+            # Try without grade filter if grade was specified but no match
+            if caption_grade:
+                cursor = await db.execute(
+                    f"SELECT student_name, grade, father_mobile, mother_mobile "
+                    f"FROM pi_sheet_students WHERE {where_clause}",
+                    params[:-1],
+                )
+                rows = await cursor.fetchall()
+
+        if not rows:
+            return None
+
+        # Pick the best match — prefer exact name match
+        best = None
+        for row in rows:
+            student_name = row[0]
+            grade = row[1]
+            father_phone = re.sub(r"\D", "", row[2] or "") if row[2] else ""
+            mother_phone = re.sub(r"\D", "", row[3] or "") if row[3] else ""
+            parent_phones = []
+            for p in (father_phone, mother_phone):
+                if len(p) >= 10:
+                    parent_phones.append(f"91{p[-10:]}")
+
+            candidate = {
+                "student_name": student_name,
+                "grade": grade,
+                "parent_phones": parent_phones,
+            }
+
+            # Exact name match (case-insensitive)
+            if student_name.lower() == name_part.lower():
+                return candidate
+            # First/last name match
+            if not best:
+                best = candidate
+
+        return best
+    finally:
+        await db.close()
+
+
 async def _try_register_child_face(
     sender: str, reply_to: str, bot_phone: str,
     media_info: dict,
 ) -> bool:
     """Auto-register a child's face when a parent sends a photo.
 
+    CRITICAL: Each photo is identified by the caption (Name + Class).
+    Different names/classes = different students, even from the same parent.
+    Only group photos under the same student when name AND class match exactly.
+
     Flow:
-    1. Look up sender phone in pi_sheet_students (parent DB).
-    2. If parent found, download the image from Cloud API.
-    3. Store in agent_registered_faces linked to the child.
-    4. Confirm to parent.
+    1. Parse caption for student name and class.
+    2. Look up student in pi_sheet_students DB (by name + class, or parent phone).
+    3. Download image.
+    4. Store with correct student identity.
+    5. Confirm to parent.
 
     Returns True if the image was handled as a face registration.
     """
-    children = await _lookup_parent_child_class(sender)
-    logger.info(f"Face registration: parent lookup for {sender} found {len(children)} children: {[c['student_name'] for c in children]}")
-    if not children:
-        return False
+    caption_raw = (media_info.get("caption", "") or "").strip()
+    caption = caption_raw.lower()
+
+    # --- Step 1: Try to find student by caption name ---
+    # Search the entire DB for a student matching the caption name
+    target_child = None
+    caption_matched = False
+
+    if caption_raw:
+        target_child = await _find_student_by_caption(caption_raw)
+        if target_child:
+            caption_matched = True
+            logger.info(f"Face registration: caption matched student "
+                        f"{target_child['student_name']} ({target_child['grade']})")
+
+    # --- Step 2: If caption didn't match, fall back to parent phone lookup ---
+    if not target_child:
+        children = await _lookup_parent_child_class(sender)
+        logger.info(f"Face registration: parent lookup for {sender} found "
+                    f"{len(children)} children: {[c['student_name'] for c in children]}")
+
+        if not children:
+            # Not a known parent — can't register
+            return False
+
+        if caption_raw:
+            # Caption was provided but didn't match DB exactly — try matching
+            # against this parent's children by partial name
+            for child in children:
+                child_name_lower = child["student_name"].lower()
+                # Check if any part of caption matches the child name
+                caption_words = caption.split()
+                child_words = child_name_lower.split()
+                if any(cw in caption for cw in child_words if len(cw) > 2):
+                    target_child = child
+                    caption_matched = True
+                    break
+
+        if not target_child:
+            if len(children) == 1 and not caption_raw:
+                # Single child, no caption — auto-assign only if no caption
+                target_child = children[0]
+            else:
+                # Multiple children or caption didn't match any — ask for clarity
+                if len(children) == 1:
+                    child_list = f"1. {children[0]['student_name']} ({children[0]['grade']})"
+                else:
+                    child_list = "\n".join(
+                        f"{i+1}. {c['student_name']} ({c['grade']})"
+                        for i, c in enumerate(children)
+                    )
+                ask_msg = (
+                    "Thank you for sharing the photo!\n\n"
+                    "Please confirm the student's name and class for this photo.\n"
+                    "Send the photo again with the caption in this format:\n"
+                    "*Student Name Grade/Class*\n\n"
+                    "Example: *Aarav Sharma Grade 5A*\n\n"
+                    f"Children linked to your number:\n{child_list}"
+                )
+                await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, ask_msg)
+                return True
 
     # Download image — supports both Cloud API (cloud_media_id) and Green API (direct url)
     cloud_media_id = media_info.get("cloud_media_id", "")
@@ -3087,36 +3249,6 @@ async def _try_register_child_face(
     if not img_bytes:
         logger.error(f"Face registration: failed to download image from {sender}")
         return False
-
-    caption = (media_info.get("caption", "") or "").strip().lower()
-
-    # If parent has multiple children, check caption for a name hint
-    target_child = None
-    if len(children) == 1:
-        target_child = children[0]
-    else:
-        for child in children:
-            child_name_lower = child["student_name"].lower()
-            if child_name_lower in caption or caption in child_name_lower:
-                target_child = child
-                break
-
-        if not target_child:
-            # Ask parent which child
-            child_list = "\n".join(
-                f"{i+1}. {c['student_name']} ({c['grade']})"
-                for i, c in enumerate(children)
-            )
-            ask_msg = (
-                "Thank you for sharing the photo!\n\n"
-                "We found multiple children linked to your number:\n"
-                f"{child_list}\n\n"
-                "Please resend the photo with your child's name in the caption "
-                "(e.g. send the photo with caption \"Rahul\")."
-            )
-            await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
-            await send_whatsapp_message(reply_to, ask_msg)
-            return True
 
     student_name = target_child["student_name"]
     grade = target_child["grade"]
