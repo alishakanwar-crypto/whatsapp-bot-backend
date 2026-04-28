@@ -3868,7 +3868,53 @@ async def receive_cloud_api_message(request: Request):
                 f"{quoted_context_text[:100]}"
             )
         else:
-            logger.info(f"[REPLY CONTEXT] Quoted msg {quoted_msg_id} not found in DB")
+            # Fallback: try to find the original message via Cloud API
+            logger.info(f"[REPLY CONTEXT] Quoted msg {quoted_msg_id} not in DB, trying Cloud API lookup")
+            try:
+                import httpx as _httpx_ctx
+                from app.services.whatsapp_service import get_cloud_token, get_cloud_phone_id
+                _token = get_cloud_token()
+                _phone_id = get_cloud_phone_id()
+                if _token and _phone_id:
+                    async with _httpx_ctx.AsyncClient() as _client:
+                        _resp = await _client.get(
+                            f"https://graph.facebook.com/v25.0/{_phone_id}/messages/{quoted_msg_id}",
+                            headers={"Authorization": f"Bearer {_token}"},
+                            timeout=10.0,
+                        )
+                        if _resp.status_code == 200:
+                            _data = _resp.json()
+                            _body = (_data.get("text", {}).get("body", "")
+                                     or _data.get("image", {}).get("caption", "")
+                                     or _data.get("document", {}).get("caption", ""))
+                            if _body:
+                                quoted_context_text = _body
+                                logger.info(f"[REPLY CONTEXT] Got from Cloud API: {_body[:100]}")
+            except Exception as _e:
+                logger.warning(f"[REPLY CONTEXT] Cloud API lookup failed: {_e}")
+
+            # Fallback 2: use the last bot message to this user as context
+            if not quoted_context_text:
+                try:
+                    _db = await get_db()
+                    try:
+                        _cur = await _db.execute(
+                            """SELECT content FROM messages
+                               WHERE receiver = ? AND direction = 'outgoing'
+                               ORDER BY timestamp DESC LIMIT 1""",
+                            (sender,),
+                        )
+                        _row = await _cur.fetchone()
+                        if _row:
+                            quoted_context_text = _row[0]
+                            logger.info(
+                                f"[REPLY CONTEXT] Using last bot message as context: "
+                                f"{quoted_context_text[:100]}"
+                            )
+                    finally:
+                        await _db.close()
+                except Exception as _e2:
+                    logger.warning(f"[REPLY CONTEXT] DB fallback failed: {_e2}")
 
     logger.info(f"Cloud API message from {sender}: {message_text} | media: {media_info is not None}")
 
