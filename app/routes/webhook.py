@@ -4065,9 +4065,11 @@ async def receive_cloud_api_message(request: Request):
                             # Save conversation for 2-way relay
                             await save_forwarded_conversation(
                                 teacher_phone=teacher_phone,
-                                parent_phone=sender,
-                                parent_reply_to=reply_to,
-                                message_text=forward_text,
+                                teacher_name=teacher_name,
+                                teacher_grade=grade_teacher["grade"],
+                                original_chat_id=reply_to,
+                                sender_phone=sender,
+                                original_message=forward_text[:500],
                             )
                             confirm = (
                                 f"Your file has been forwarded to *{teacher_name}* "
@@ -4270,9 +4272,11 @@ async def receive_cloud_api_message(request: Request):
                         # Save conversation for 2-way relay
                         await save_forwarded_conversation(
                             teacher_phone=teacher_phone,
-                            parent_phone=sender,
-                            parent_reply_to=reply_to,
-                            message_text=fwd_text,
+                            teacher_name=teacher_name,
+                            teacher_grade=grade_teacher["grade"],
+                            original_chat_id=reply_to,
+                            sender_phone=sender,
+                            original_message=fwd_text[:500],
                         )
                         confirm = (
                             f"Your query has been forwarded to *{teacher_name}* "
