@@ -49,10 +49,53 @@ _GRADE_EXTRACT_RE = re.compile(
 )
 
 # Track processed email message-IDs to avoid re-processing.
-# OrderedDict preserves insertion order so trimming always discards the
-# oldest entries (a plain set has no guaranteed order).
+# In-memory cache is backed by the `processed_messages` DB table so that
+# IDs survive OOM kills and Fly.io restarts (prevents duplicate homework
+# broadcasts to parents).
 _processed_message_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
 _MAX_PROCESSED_IDS = 200  # reduced from 500 to limit memory usage
+
+
+def _db_email_id(message_id: str) -> str:
+    """Prefix email Message-IDs so they don't collide with webhook dedup IDs."""
+    return f"email:{message_id}"
+
+
+def _is_email_processed_in_db(message_id: str) -> bool:
+    """Check the persistent DB for a previously processed email Message-ID."""
+    import sqlite3
+    db_path = os.getenv("DB_PATH", "/data/app.db")
+    if not os.path.exists(os.path.dirname(db_path) if os.path.dirname(db_path) else "."):
+        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.db")
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.execute(
+            "SELECT 1 FROM processed_messages WHERE message_id = ? LIMIT 1",
+            (_db_email_id(message_id),),
+        )
+        found = cur.fetchone() is not None
+        conn.close()
+        return found
+    except Exception:
+        return False
+
+
+def _mark_email_processed_in_db(message_id: str) -> None:
+    """Persist a processed email Message-ID in the DB."""
+    import sqlite3
+    db_path = os.getenv("DB_PATH", "/data/app.db")
+    if not os.path.exists(os.path.dirname(db_path) if os.path.dirname(db_path) else "."):
+        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.db")
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT OR IGNORE INTO processed_messages (message_id) VALUES (?)",
+            (_db_email_id(message_id),),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to persist email dedup ID: {e}")
 
 
 def _decode_mime_header(raw: str | None) -> str:
@@ -244,9 +287,12 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     raw_email = msg_data[0][1]
     msg = email.message_from_bytes(raw_email)
 
-    # Get Message-ID to avoid reprocessing
+    # Get Message-ID to avoid reprocessing (check in-memory cache + persistent DB)
     message_id = msg.get("Message-ID", "")
     if message_id in _processed_message_ids:
+        return
+    if message_id and _is_email_processed_in_db(message_id):
+        _processed_message_ids[message_id] = None  # warm the in-memory cache
         return
 
 
@@ -306,6 +352,8 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
         loop.close()
 
     _processed_message_ids[message_id] = None
+    if message_id:
+        _mark_email_processed_in_db(message_id)
 
 
 async def _broadcast_email_homework(

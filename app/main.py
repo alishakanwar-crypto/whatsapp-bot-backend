@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -90,9 +91,25 @@ async def healthz():
     return {"status": "ok"}
 
 
+def _check_debug_auth(request: Request) -> None:
+    """Verify X-Agent-Secret header on debug endpoints.
+
+    Raises 401 when AGENT_SECRET is set and the header is missing/wrong.
+    Skips the check when the env var is not configured so local dev
+    keeps working without extra setup.
+    """
+    from fastapi import HTTPException
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @app.get("/debug/version")
-async def debug_version():
+async def debug_version(request: Request):
     """Check deployed code version."""
+    _check_debug_auth(request)
     from app.services.whatsapp_service import get_whatsapp_provider, get_id_instance, get_api_url
     return {
         "version": "2026-04-27-v5-verify-token-fix",
@@ -105,8 +122,9 @@ async def debug_version():
 
 
 @app.get("/debug/webhook-config")
-async def debug_webhook_config():
+async def debug_webhook_config(request: Request):
     """Check webhook and WhatsApp provider configuration."""
+    _check_debug_auth(request)
     from app.database import get_db
     db = await get_db()
     try:
@@ -131,8 +149,9 @@ async def debug_webhook_config():
 
 
 @app.get("/debug/check-meta-webhook")
-async def check_meta_webhook():
+async def check_meta_webhook(request: Request):
     """Server-side check of Meta webhook subscription status."""
+    _check_debug_auth(request)
     import httpx
     from app.services.whatsapp_service import get_cloud_token
     token = get_cloud_token()
@@ -184,8 +203,9 @@ async def check_meta_webhook():
 
 
 @app.get("/debug/update-webhook-url")
-async def update_webhook_url():
+async def update_webhook_url(request: Request):
     """Try to update Meta webhook callback URL to this server."""
+    _check_debug_auth(request)
     import httpx
     from app.services.whatsapp_service import get_cloud_token
     token = get_cloud_token()
@@ -246,8 +266,9 @@ async def update_webhook_url():
 
 
 @app.get("/debug/parent-phones")
-async def debug_parent_phones():
+async def debug_parent_phones(request: Request):
     """Debug endpoint to verify parent phone data is loaded."""
+    _check_debug_auth(request)
     from app.database import get_db
     db = await get_db()
     try:
@@ -281,8 +302,9 @@ async def debug_parent_phones():
 
 
 @app.get("/debug/parent-search")
-async def debug_parent_search(phone: str = ""):
+async def debug_parent_search(request: Request, phone: str = ""):
     """Search for a parent by phone number (last 10 digits)."""
+    _check_debug_auth(request)
     from app.database import get_db
     if not phone:
         return {"error": "Provide ?phone=DIGITS"}
