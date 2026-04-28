@@ -3351,6 +3351,12 @@ async def receive_whatsapp_message(request: Request):
 @router.post("/webhook/send-image")
 async def send_image_to_chat(request: Request):
     """Send an image to a WhatsApp chat (individual or group)."""
+    # Auth check — admin-only endpoint
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            return {"error": "Unauthorized"}
     body = await request.json()
     chat_id = body.get("chatId", "")
     image_url = body.get("imageUrl", "")
