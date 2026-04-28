@@ -4220,6 +4220,79 @@ async def receive_cloud_api_message(request: Request):
         if parent_routed:
             return {"status": "ok"}
 
+        # --- Admin/teacher → Class Teacher forwarding ---
+        # If sender is admin/teacher and message mentions "ct", "class teacher",
+        # "ask teacher", "confirm from teacher", etc., forward to the class teacher
+        # instead of GPT.
+        if _is_admin_panel(sender) or _is_teacher_phone(sender):
+            _ct_pattern = re.compile(
+                r'\b(?:ct|class\s*teacher|ask\s*(?:the\s*)?(?:ct|teacher)|'
+                r'confirm\s*(?:from|with)\s*(?:ct|teacher)|'
+                r'forward\s*(?:to\s*)?(?:ct|teacher)|'
+                r'send\s*(?:to\s*)?(?:ct|teacher)|'
+                r'check\s*(?:from|with)\s*(?:ct|teacher))\b',
+                re.IGNORECASE,
+            )
+            if _ct_pattern.search(message_text):
+                # Find the grade in the message or via sender's child
+                grade_teacher = find_teacher_by_grade(message_text)
+                if not grade_teacher:
+                    # Try from quoted context
+                    if quoted_context_text:
+                        grade_teacher = find_teacher_by_grade(quoted_context_text)
+                if not grade_teacher:
+                    # Try from sender's children (if admin is also a parent)
+                    _admin_children = await _lookup_parent_child_class(sender)
+                    if _admin_children and len(_admin_children) == 1:
+                        grade_teacher = find_teacher_by_grade(_admin_children[0]["grade"])
+
+                if grade_teacher:
+                    teacher_name = grade_teacher["teacher"].split("/")[0].strip()
+                    teacher_phone = grade_teacher.get("whatsapp", "")
+                    if teacher_phone:
+                        chat_id = _teacher_chat_id(teacher_phone)
+                        fwd_text = message_text
+                        if quoted_context_text:
+                            fwd_text = (
+                                f"[Regarding: \"{quoted_context_text[:300]}\"]\n\n"
+                                f"{message_text}"
+                            )
+                        admin_label = f"Admin ({sender[-4:]})"
+                        fwd_msg = (
+                            f"Dear {teacher_name},\n\n"
+                            f"{admin_label} has sent a query via the PPIS Bot:\n\n"
+                            f"\"{fwd_text[:500]}\"\n\n"
+                            f"Kindly reply to this message and your response "
+                            f"will be forwarded back.\n\n"
+                            f"Warm regards,\nPP International School"
+                        )
+                        await send_whatsapp_message(chat_id, fwd_msg)
+                        # Save conversation for 2-way relay
+                        await save_forwarded_conversation(
+                            teacher_phone=teacher_phone,
+                            parent_phone=sender,
+                            parent_reply_to=reply_to,
+                            message_text=fwd_text,
+                        )
+                        confirm = (
+                            f"Your query has been forwarded to *{teacher_name}* "
+                            f"({grade_teacher['grade']}). "
+                            f"You will receive a reply when the teacher responds."
+                        )
+                        await save_message(bot_phone, sender, confirm, "whatsapp", "outgoing")
+                        await send_whatsapp_message(reply_to, confirm)
+                        return {"status": "ok"}
+                else:
+                    # Can't determine which teacher — ask for grade
+                    ask_grade = (
+                        "I understand you want to contact a class teacher. "
+                        "Could you please specify the class/grade "
+                        "(e.g., Grade 3C, 5A, Nursery 1)?"
+                    )
+                    await save_message(bot_phone, sender, ask_grade, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, ask_grade)
+                    return {"status": "ok"}
+
         # --- GPT fallback (for admins, teachers, or unknown senders) ---
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
