@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>PPIS School Command Center</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --primary: #1a56db; --primary-light: #e8effd; --success: #059669;
+  --danger: #dc2626; --warning: #d97706; --gray-50: #f9fafb;
+  --gray-100: #f3f4f6; --gray-200: #e5e7eb; --gray-300: #d1d5db;
+  --gray-500: #6b7280; --gray-700: #374151; --gray-900: #111827;
+  --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--gray-50); color: var(--gray-900); min-height: 100vh; }
+.app { max-width: 480px; margin: 0 auto; padding-bottom: 70px; }
+@media (min-width: 768px) { .app { max-width: 900px; } }
+
+/* Header */
+.header { background: var(--primary); color: white; padding: 16px 20px; position: sticky; top: 0; z-index: 100; }
+.header h1 { font-size: 18px; font-weight: 700; }
+.header .subtitle { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+
+/* Stats Cards */
+.stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 16px; }
+@media (min-width: 768px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
+.stat-card { background: white; border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+.stat-card .value { font-size: 28px; font-weight: 800; color: var(--primary); }
+.stat-card .label { font-size: 12px; color: var(--gray-500); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-card.success .value { color: var(--success); }
+.stat-card.warning .value { color: var(--warning); }
+.stat-card.danger .value { color: var(--danger); }
+
+/* Bottom Nav */
+.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: white; border-top: 1px solid var(--gray-200); display: flex; z-index: 100; max-width: 480px; margin: 0 auto; }
+@media (min-width: 768px) { .bottom-nav { max-width: 900px; } }
+.nav-item { flex: 1; padding: 8px 4px; text-align: center; cursor: pointer; transition: all 0.2s; }
+.nav-item.active { color: var(--primary); }
+.nav-item .icon { font-size: 20px; }
+.nav-item .nav-label { font-size: 10px; margin-top: 2px; }
+
+/* Section */
+.section { padding: 0 16px 16px; }
+.section-title { font-size: 16px; font-weight: 700; margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; }
+
+/* Cards & Lists */
+.card { background: white; border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; margin-bottom: 12px; }
+.card-header { padding: 12px 16px; border-bottom: 1px solid var(--gray-100); font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+.card-body { padding: 12px 16px; }
+.list-item { padding: 12px 16px; border-bottom: 1px solid var(--gray-100); display: flex; justify-content: space-between; align-items: center; }
+.list-item:last-child { border-bottom: none; }
+.list-item .name { font-weight: 600; font-size: 14px; }
+.list-item .meta { font-size: 12px; color: var(--gray-500); }
+.list-item .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+.badge-green { background: #dcfce7; color: var(--success); }
+.badge-blue { background: var(--primary-light); color: var(--primary); }
+.badge-yellow { background: #fef3c7; color: var(--warning); }
+.badge-red { background: #fecaca; color: var(--danger); }
+
+/* Chat */
+.chat-bubble { padding: 10px 14px; border-radius: 12px; margin: 6px 16px; max-width: 85%; font-size: 14px; line-height: 1.4; }
+.chat-incoming { background: white; border: 1px solid var(--gray-200); align-self: flex-start; }
+.chat-outgoing { background: var(--primary-light); align-self: flex-end; margin-left: auto; }
+.chat-sender { font-size: 11px; color: var(--gray-500); margin: 2px 16px 0; }
+.chat-time { font-size: 10px; color: var(--gray-500); margin-top: 2px; text-align: right; }
+.chat-container { display: flex; flex-direction: column; }
+
+/* Search */
+.search-bar { margin: 12px 16px; position: relative; }
+.search-bar input { width: 100%; padding: 10px 16px 10px 40px; border: 1px solid var(--gray-200); border-radius: 24px; font-size: 14px; background: white; outline: none; }
+.search-bar input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+.search-bar .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--gray-500); }
+
+/* Tabs */
+.tabs { display: flex; gap: 8px; padding: 0 16px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tab { padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; border: 1px solid var(--gray-200); background: white; }
+.tab.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+/* Loading */
+.loading { text-align: center; padding: 40px; color: var(--gray-500); }
+.spinner { display: inline-block; width: 32px; height: 32px; border: 3px solid var(--gray-200); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Grade breakdown */
+.grade-bar { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.grade-bar .grade-name { font-size: 13px; font-weight: 500; width: 80px; }
+.grade-bar .bar-bg { flex: 1; height: 8px; background: var(--gray-100); border-radius: 4px; overflow: hidden; }
+.grade-bar .bar-fill { height: 100%; background: var(--primary); border-radius: 4px; transition: width 0.5s; }
+.grade-bar .count { font-size: 12px; color: var(--gray-500); width: 30px; text-align: right; }
+
+/* Empty state */
+.empty { text-align: center; padding: 40px 20px; color: var(--gray-500); }
+.empty .emoji { font-size: 40px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const API = window.location.origin + '/api/dashboard';
+
+function formatTime(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  } catch { return ts; }
+}
+function formatPhone(p) {
+  if (!p) return '';
+  const d = p.replace(/\D/g, '');
+  if (d.length >= 12) return '+' + d.slice(0,2) + ' ' + d.slice(2,7) + ' ' + d.slice(7);
+  return p;
+}
+
+// ─── Overview Tab ─────────────────────────────────────
+function OverviewTab() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(API + '/overview');
+      setData(await r.json());
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); const iv = setInterval(load, 30000); return () => clearInterval(iv); }, [load]);
+
+  if (loading) return <div className="loading"><div className="spinner" /><p>Loading dashboard...</p></div>;
+  if (!data) return <div className="empty"><div className="emoji">!</div><p>Failed to load data</p></div>;
+
+  return (
+    <>
+      <div className="stats-grid">
+        <div className="stat-card success">
+          <div className="value">{data.present_today}</div>
+          <div className="label">Present Today</div>
+        </div>
+        <div className="stat-card">
+          <div className="value">{data.registered_faces}</div>
+          <div className="label">Faces Registered</div>
+        </div>
+        <div className="stat-card warning">
+          <div className="value">{data.messages_today}</div>
+          <div className="label">Messages Today</div>
+        </div>
+        <div className="stat-card">
+          <div className="value">{data.total_cameras}</div>
+          <div className="label">Cameras Active</div>
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="section-title">Recent Activity</div>
+        <div className="card">
+          {data.recent_activity && data.recent_activity.length > 0 ? data.recent_activity.map((msg, i) => (
+            <div className="list-item" key={i}>
+              <div>
+                <div className="name">{formatPhone(msg.sender)}</div>
+                <div className="meta">{msg.content}</div>
+              </div>
+              <div>
+                <span className={`badge ${msg.direction === 'incoming' ? 'badge-blue' : 'badge-green'}`}>
+                  {msg.direction === 'incoming' ? 'IN' : 'OUT'}
+                </span>
+                <div className="meta" style={{marginTop: 4}}>{formatTime(msg.time)}</div>
+              </div>
+            </div>
+          )) : <div className="empty"><p>No recent activity</p></div>}
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="stats-grid" style={{padding: 0}}>
+          <div className="stat-card">
+            <div className="value" style={{fontSize: 22}}>{data.total_students}</div>
+            <div className="label">Total Students</div>
+          </div>
+          <div className="stat-card">
+            <div className="value" style={{fontSize: 22}}>{data.total_messages}</div>
+            <div className="label">Total Messages</div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Attendance Tab ───────────────────────────────────
+function AttendanceTab() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(API + '/attendance/today');
+      setData(await r.json());
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); const iv = setInterval(load, 30000); return () => clearInterval(iv); }, [load]);
+
+  if (loading) return <div className="loading"><div className="spinner" /></div>;
+  if (!data) return <div className="empty"><p>Failed to load</p></div>;
+
+  const maxGrade = Math.max(1, ...data.grade_breakdown.map(g => g.count));
+
+  return (
+    <>
+      <div className="stats-grid">
+        <div className="stat-card success">
+          <div className="value">{data.present_today}</div>
+          <div className="label">Present</div>
+        </div>
+        <div className="stat-card">
+          <div className="value">{data.registered_faces}</div>
+          <div className="label">Registered</div>
+        </div>
+        <div className="stat-card warning">
+          <div className="value">{data.total_students}</div>
+          <div className="label">Total Students</div>
+        </div>
+        <div className="stat-card danger">
+          <div className="value">{data.total_students - data.present_today}</div>
+          <div className="label">Not Detected</div>
+        </div>
+      </div>
+
+      {data.grade_breakdown.length > 0 && (
+        <div className="section">
+          <div className="section-title">Grade-wise Attendance</div>
+          <div className="card">
+            <div className="card-body">
+              {data.grade_breakdown.map((g, i) => (
+                <div className="grade-bar" key={i}>
+                  <div className="grade-name">{g.grade}</div>
+                  <div className="bar-bg"><div className="bar-fill" style={{width: `${(g.count / maxGrade) * 100}%`}} /></div>
+                  <div className="count">{g.count}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="section">
+        <div className="section-title">Recent Detections</div>
+        <div className="card">
+          {data.recent_entries && data.recent_entries.length > 0 ? data.recent_entries.map((e, i) => (
+            <div className="list-item" key={i}>
+              <div>
+                <div className="name">{e.name}</div>
+                <div className="meta">{e.grade} &middot; {e.camera}</div>
+              </div>
+              <div style={{textAlign: 'right'}}>
+                <span className={`badge ${e.notified ? 'badge-green' : 'badge-yellow'}`}>
+                  {e.notified ? 'Notified' : 'Pending'}
+                </span>
+                <div className="meta" style={{marginTop: 4}}>{e.confidence}% &middot; {formatTime(e.time)}</div>
+              </div>
+            </div>
+          )) : <div className="empty"><div className="emoji">&#128247;</div><p>No attendance records yet today.<br/>Records appear when the campus agent detects faces.</p></div>}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Chats Tab ────────────────────────────────────────
+function ChatsTab() {
+  const [conversations, setConversations] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [selectedPhone, setSelectedPhone] = useState(null);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(API + '/chats/conversations?limit=50');
+        const d = await r.json();
+        setConversations(d.conversations || []);
+      } catch (e) { console.error(e); }
+      setLoading(false);
+    })();
+  }, []);
+
+  const loadChat = async (phone) => {
+    setSelectedPhone(phone);
+    setLoading(true);
+    try {
+      const r = await fetch(API + `/chats?phone=${phone}&limit=50`);
+      const d = await r.json();
+      setMessages(d.messages || []);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  if (selectedPhone) {
+    const conv = conversations.find(c => c.phone === selectedPhone);
+    return (
+      <>
+        <div style={{padding: '12px 16px', background: 'white', borderBottom: '1px solid var(--gray-200)', display: 'flex', alignItems: 'center', gap: 12}}>
+          <span onClick={() => setSelectedPhone(null)} style={{cursor: 'pointer', fontSize: 20}}>&#8592;</span>
+          <div>
+            <div style={{fontWeight: 600, fontSize: 14}}>{conv?.label || formatPhone(selectedPhone)}</div>
+            <div style={{fontSize: 12, color: 'var(--gray-500)'}}>{formatPhone(selectedPhone)}</div>
+          </div>
+        </div>
+        {loading ? <div className="loading"><div className="spinner" /></div> : (
+          <div className="chat-container" style={{padding: '8px 0'}}>
+            {[...messages].reverse().map((m, i) => (
+              <div key={i}>
+                <div className="chat-sender">{m.direction === 'incoming' ? formatPhone(m.sender) : 'Bot'}</div>
+                <div className={`chat-bubble ${m.direction === 'incoming' ? 'chat-incoming' : 'chat-outgoing'}`}>
+                  {m.content}
+                  <div className="chat-time">{formatTime(m.timestamp)}</div>
+                </div>
+              </div>
+            ))}
+            {messages.length === 0 && <div className="empty"><p>No messages</p></div>}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  const filtered = conversations.filter(c =>
+    !search || c.phone.includes(search) || (c.label || '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <>
+      <div className="search-bar">
+        <span className="search-icon">&#128269;</span>
+        <input placeholder="Search by phone or name..." value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      {loading ? <div className="loading"><div className="spinner" /></div> : (
+        <div className="card" style={{margin: '0 16px'}}>
+          {filtered.length > 0 ? filtered.map((c, i) => (
+            <div className="list-item" key={i} onClick={() => loadChat(c.phone)} style={{cursor: 'pointer'}}>
+              <div>
+                <div className="name">{c.label || formatPhone(c.phone)}</div>
+                <div className="meta">{c.last_message}</div>
+              </div>
+              <div style={{textAlign: 'right'}}>
+                <span className={`badge ${c.direction === 'incoming' ? 'badge-blue' : 'badge-green'}`}>
+                  {c.direction === 'incoming' ? 'IN' : 'OUT'}
+                </span>
+                <div className="meta" style={{marginTop: 4}}>{formatTime(c.last_time)}</div>
+              </div>
+            </div>
+          )) : <div className="empty"><p>No conversations found</p></div>}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Students Tab ─────────────────────────────────────
+function StudentsTab() {
+  const [students, setStudents] = useState([]);
+  const [grades, setGrades] = useState([]);
+  const [faces, setFaces] = useState([]);
+  const [search, setSearch] = useState('');
+  const [gradeFilter, setGradeFilter] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('students'); // students | faces
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [sr, gr, fr] = await Promise.all([
+          fetch(API + '/students?limit=200'),
+          fetch(API + '/students/grades'),
+          fetch(API + '/faces'),
+        ]);
+        const sd = await sr.json(); setStudents(sd.students || []);
+        const gd = await gr.json(); setGrades(gd.grades || []);
+        const fd = await fr.json(); setFaces(fd.registered || []);
+      } catch (e) { console.error(e); }
+      setLoading(false);
+    })();
+  }, []);
+
+  const filtered = students.filter(s => {
+    if (gradeFilter && !s.grade.includes(gradeFilter)) return false;
+    if (search && !s.name.toLowerCase().includes(search.toLowerCase()) &&
+        !(s.father_name || '').toLowerCase().includes(search.toLowerCase()) &&
+        !(s.mother_name || '').toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const registeredIds = new Set(faces.map(f => f.person_id));
+
+  return (
+    <>
+      <div className="tabs" style={{marginTop: 12}}>
+        <div className={`tab ${view === 'students' ? 'active' : ''}`} onClick={() => setView('students')}>
+          Students ({students.length})
+        </div>
+        <div className={`tab ${view === 'faces' ? 'active' : ''}`} onClick={() => setView('faces')}>
+          Faces Registered ({faces.length})
+        </div>
+      </div>
+
+      {view === 'faces' ? (
+        <div className="section" style={{marginTop: 8}}>
+          <div className="card">
+            {faces.length > 0 ? faces.map((f, i) => (
+              <div className="list-item" key={i}>
+                <div>
+                  <div className="name">{f.name}</div>
+                  <div className="meta">{f.person_id} &middot; {f.face_count} photo(s)</div>
+                </div>
+                <div style={{textAlign: 'right'}}>
+                  <span className="badge badge-green">Registered</span>
+                  <div className="meta" style={{marginTop: 4}}>{formatPhone(f.phone)}</div>
+                </div>
+              </div>
+            )) : <div className="empty"><p>No faces registered yet</p></div>}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="search-bar">
+            <span className="search-icon">&#128269;</span>
+            <input placeholder="Search students..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <div className="tabs">
+            <div className={`tab ${!gradeFilter ? 'active' : ''}`} onClick={() => setGradeFilter('')}>All</div>
+            {grades.slice(0, 15).map((g, i) => (
+              <div key={i} className={`tab ${gradeFilter === g.grade ? 'active' : ''}`}
+                   onClick={() => setGradeFilter(gradeFilter === g.grade ? '' : g.grade)}>
+                {g.grade} ({g.count})
+              </div>
+            ))}
+          </div>
+          {loading ? <div className="loading"><div className="spinner" /></div> : (
+            <div className="card" style={{margin: '12px 16px'}}>
+              {filtered.slice(0, 100).map((s, i) => (
+                <div className="list-item" key={i}>
+                  <div>
+                    <div className="name">{s.name}</div>
+                    <div className="meta">
+                      {s.grade}
+                      {s.father_name && ` | F: ${s.father_name}`}
+                      {s.mother_name && ` | M: ${s.mother_name}`}
+                    </div>
+                    <div className="meta">
+                      {s.father_phone && `${formatPhone(s.father_phone)}`}
+                      {s.mother_phone && ` / ${formatPhone(s.mother_phone)}`}
+                    </div>
+                  </div>
+                  <div>
+                    {registeredIds.has(s.name.replace(/ /g, '_').toUpperCase() + '_' + s.grade.replace(/ /g, '').toUpperCase()) ?
+                      <span className="badge badge-green">Face</span> :
+                      <span className="badge badge-yellow">No Face</span>
+                    }
+                  </div>
+                </div>
+              ))}
+              {filtered.length === 0 && <div className="empty"><p>No students found</p></div>}
+              {filtered.length > 100 && <div style={{padding: 12, textAlign: 'center', color: 'var(--gray-500)', fontSize: 13}}>Showing 100 of {filtered.length}</div>}
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+// ─── Cameras Tab ──────────────────────────────────────
+function CamerasTab() {
+  const [cameras, setCameras] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(API + '/cameras');
+        const d = await r.json();
+        setCameras(d.cameras || []);
+      } catch (e) { console.error(e); }
+      setLoading(false);
+    })();
+  }, []);
+
+  const filtered = cameras.filter(c =>
+    !search || c.location.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Group by DVR
+  const byDvr = {};
+  filtered.forEach(c => {
+    const key = `DVR ${c.dvr_index + 1}`;
+    if (!byDvr[key]) byDvr[key] = [];
+    byDvr[key].push(c);
+  });
+
+  return (
+    <>
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="value">{cameras.length}</div>
+          <div className="label">Total Cameras</div>
+        </div>
+        <div className="stat-card">
+          <div className="value">{new Set(cameras.map(c => c.dvr_index)).size}</div>
+          <div className="label">DVRs</div>
+        </div>
+      </div>
+      <div className="search-bar">
+        <span className="search-icon">&#128269;</span>
+        <input placeholder="Search cameras..." value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      {loading ? <div className="loading"><div className="spinner" /></div> : (
+        Object.entries(byDvr).map(([dvr, cams]) => (
+          <div className="section" key={dvr}>
+            <div className="section-title">{dvr} ({cams.length} cameras)</div>
+            <div className="card">
+              {cams.map((c, i) => (
+                <div className="list-item" key={i}>
+                  <div>
+                    <div className="name">{c.location}</div>
+                    <div className="meta">Ch {c.channel} &middot; {c.description || c.cam_type || 'Camera'}</div>
+                  </div>
+                  <span className="badge badge-blue">Ch {c.channel}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────
+function App() {
+  const [tab, setTab] = useState('overview');
+
+  const tabs = [
+    { id: 'overview', icon: '\u{1F3E0}', label: 'Home' },
+    { id: 'attendance', icon: '\u{2705}', label: 'Attendance' },
+    { id: 'chats', icon: '\u{1F4AC}', label: 'Chats' },
+    { id: 'students', icon: '\u{1F393}', label: 'Students' },
+    { id: 'cameras', icon: '\u{1F4F7}', label: 'Cameras' },
+  ];
+
+  return (
+    <div className="app">
+      <div className="header">
+        <h1>PPIS School Command Center</h1>
+        <div className="subtitle">PP International School &middot; Live Dashboard</div>
+      </div>
+
+      {tab === 'overview' && <OverviewTab />}
+      {tab === 'attendance' && <AttendanceTab />}
+      {tab === 'chats' && <ChatsTab />}
+      {tab === 'students' && <StudentsTab />}
+      {tab === 'cameras' && <CamerasTab />}
+
+      <div className="bottom-nav">
+        {tabs.map(t => (
+          <div key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
+            <div className="icon">{t.icon}</div>
+            <div className="nav-label">{t.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
