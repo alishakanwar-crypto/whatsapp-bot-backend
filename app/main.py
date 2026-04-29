@@ -329,6 +329,30 @@ async def debug_parent_search(request: Request, phone: str = ""):
         await db.close()
 
 
+@app.get("/debug/simulate-snapshot")
+async def debug_simulate_snapshot(request: Request, phone: str = "", message: str = "show my child"):
+    """Simulate the snapshot request flow for debugging."""
+    _check_debug_auth(request)
+    from app.routes.webhook import (
+        _is_snapshot_request, _is_admin_panel, _is_pi_sheet_parent,
+        _extract_classroom_from_message, _lookup_parent_child_class,
+    )
+    is_admin = _is_admin_panel(phone)
+    is_snapshot = _is_snapshot_request(message, is_admin=is_admin)
+    is_parent = await _is_pi_sheet_parent(phone) if phone else False
+    classroom = _extract_classroom_from_message(message)
+    children = await _lookup_parent_child_class(phone) if phone else []
+    return {
+        "phone": phone,
+        "message": message,
+        "is_admin": is_admin,
+        "is_snapshot_request": is_snapshot,
+        "is_pi_sheet_parent": is_parent,
+        "extracted_classroom": classroom,
+        "children_found": children,
+    }
+
+
 @app.post("/api/send-email")
 async def api_send_email(request: Request):
     """Send an email via the server's SMTP config (for admin use).
