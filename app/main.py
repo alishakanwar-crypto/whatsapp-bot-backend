@@ -353,6 +353,31 @@ async def debug_simulate_snapshot(request: Request, phone: str = "", message: st
     }
 
 
+@app.post("/debug/add-student")
+async def debug_add_student(request: Request):
+    """Add a student to pi_sheet_students for testing."""
+    _check_debug_auth(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    grade = body.get("grade", "").strip()
+    father = body.get("father_mobile", "").strip()
+    mother = body.get("mother_mobile", "").strip()
+    if not name or not grade:
+        return {"error": "name and grade required"}
+    from app.database import get_db
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO pi_sheet_students (student_name, grade, father_mobile, mother_mobile) "
+            "VALUES (?, ?, ?, ?)",
+            (name, grade, father, mother),
+        )
+        await db.commit()
+        return {"status": "ok", "name": name, "grade": grade}
+    finally:
+        await db.close()
+
+
 @app.post("/api/send-face-reminder")
 async def send_face_photo_reminder(request: Request, background_tasks: BackgroundTasks):
     """Send WhatsApp reminder to parents who haven't registered face photos."""
