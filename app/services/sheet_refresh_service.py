@@ -619,22 +619,25 @@ async def populate_parent_phones() -> bool:
         # Clean up stale duplicate rows where the same student has a less
         # specific grade (e.g. "Nursery" vs "Nursery 2") from a prior run.
         cleaned = 0
-        seen_students: dict[str, set[str]] = {}
         for (norm_name, grade), _ in student_map.items():
-            seen_students.setdefault(norm_name, set()).add(grade)
-        for name, grades_set in seen_students.items():
-            if len(grades_set) <= 1:
+            # Find all rows for this student in the DB
+            dup_cur = await db.execute(
+                "SELECT id, grade FROM pi_sheet_students "
+                "WHERE UPPER(student_name) = ?",
+                (norm_name,),
+            )
+            all_rows = await dup_cur.fetchall()
+            if len(all_rows) <= 1:
                 continue
-            # If we have both "Nursery" and "Nursery 2", remove "Nursery"
-            for g in list(grades_set):
-                more_specific = [g2 for g2 in grades_set if g2 != g and g2.startswith(g)]
-                if more_specific:
-                    c = await db.execute(
-                        "DELETE FROM pi_sheet_students "
-                        "WHERE UPPER(student_name) = ? AND grade = ?",
-                        (name, g),
+            # Delete rows with less specific grades
+            for row in all_rows:
+                row_grade = row["grade"] or ""
+                if row_grade != grade and grade.startswith(row_grade):
+                    await db.execute(
+                        "DELETE FROM pi_sheet_students WHERE id = ?",
+                        (row["id"],),
                     )
-                    cleaned += c.rowcount
+                    cleaned += 1
 
         await db.commit()
         logger.info(
