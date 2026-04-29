@@ -2533,14 +2533,13 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
         )
         rows = await cursor.fetchall()
         for row in rows:
-            # Collect both parent phones for notifications
-            father_phone = re.sub(r"\D", "", row[2] or "") if row[2] else ""
-            mother_phone = re.sub(r"\D", "", row[3] or "") if row[3] else ""
+            # Collect all parent phones (supports comma-separated numbers)
             parent_phones = []
-            for p in (father_phone, mother_phone):
-                if len(p) >= 10:
-                    p10 = p[-10:]
-                    parent_phones.append(f"91{p10}")
+            for raw in (row[2] or "", row[3] or ""):
+                for segment in raw.split(","):
+                    digits = re.sub(r"\D", "", segment)
+                    if len(digits) >= 10:
+                        parent_phones.append(f"91{digits[-10:]}")
             results.append({
                 "student_name": row[0],
                 "grade": row[1],

@@ -560,9 +560,17 @@ async def populate_parent_phones() -> bool:
                     "mother_mobile": "",
                 }
             if role == "father":
-                student_map[key]["father_mobile"] = phone
+                existing = student_map[key]["father_mobile"]
+                if existing and phone not in existing:
+                    student_map[key]["father_mobile"] = f"{existing},{phone}"
+                else:
+                    student_map[key]["father_mobile"] = phone
             elif role == "mother":
-                student_map[key]["mother_mobile"] = phone
+                existing = student_map[key]["mother_mobile"]
+                if existing and phone not in existing:
+                    student_map[key]["mother_mobile"] = f"{existing},{phone}"
+                else:
+                    student_map[key]["mother_mobile"] = phone
 
     if not student_map:
         logger.warning("PARENT PHONES: No valid records found in JSON")
