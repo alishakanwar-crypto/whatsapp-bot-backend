@@ -2862,9 +2862,26 @@ async def detect_and_handle_snapshot_request(
         # Regular parent: try classroom from message first
         location = _extract_classroom_from_message(message_text)
 
+        # Look up the parent's children (needed for fallback and section inference)
+        children = await _lookup_parent_child_class(sender)
+
+        # If grade extracted without section (e.g. "GRADE 9"), try to infer
+        # section from the parent's registered children.
+        if location and re.match(r"^GRADE \d{1,2}$", location) and children:
+            grade_num = location.split()[-1]  # e.g. "9"
+            matching = [
+                c for c in children
+                if re.match(rf"Grade {grade_num}[A-D]", c["grade"], re.IGNORECASE)
+            ]
+            if len(matching) == 1:
+                # Convert child grade "Grade 9A" to camera key "GRADE 9A"
+                location = matching[0]["grade"].upper()
+                logger.info(
+                    f"Inferred section: {location} for parent {sender} "
+                    f"(child: {matching[0]['student_name']})"
+                )
+
         if not location:
-            # Try to look up the parent's child class from PI Sheet
-            children = await _lookup_parent_child_class(sender)
             if len(children) == 1:
                 location = children[0]["grade"]
                 logger.info(f"Auto-detected classroom {location} for parent {sender} (child: {children[0]['student_name']})")
