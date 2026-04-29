@@ -360,16 +360,13 @@ async def send_face_photo_reminder(request: Request, background_tasks: Backgroun
     import json as _json
     import asyncio
 
-    # 1. Get registered student names from face DB
-    from app.database import get_db
-    db = await get_db()
-    try:
-        cursor = await db.execute("SELECT DISTINCT person_id FROM face_images")
-        rows = await cursor.fetchall()
-    finally:
-        await db.close()
+    # 1. Get registered student names from face API
+    import httpx
+    async with httpx.AsyncClient() as client:
+        resp = await client.get("https://app-itszlsnn.fly.dev/api/face/images", timeout=30)
+        face_data = resp.json()
 
-    registered_ids = {r[0].upper() for r in rows}
+    registered_ids = {item["person_id"].upper() for item in face_data}
     # Extract just the name part (e.g. "SUHAAN_AHUJA_GRADE3C" -> "SUHAAN AHUJA")
     registered_names = set()
     for pid in registered_ids:
