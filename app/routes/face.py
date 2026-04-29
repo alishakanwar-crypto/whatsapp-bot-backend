@@ -125,6 +125,24 @@ async def get_face_image(face_id: int):
         await db.close()
 
 
+@router.patch("/{person_id}/phone", dependencies=[Depends(verify_agent_secret)])
+async def update_phone(person_id: str, phone: str = Form(...)):
+    """Update the phone number for all face entries of a person."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE agent_registered_faces SET phone = ? "
+            "WHERE person_id = ? COLLATE NOCASE",
+            (phone, person_id),
+        )
+        await db.commit()
+        updated = cursor.rowcount
+        logger.info(f"Updated phone for {person_id}: {phone} ({updated} rows)")
+        return {"updated": updated, "person_id": person_id, "phone": phone}
+    finally:
+        await db.close()
+
+
 @router.delete("/entry/{face_id}", dependencies=[Depends(verify_agent_secret)])
 async def delete_face_entry(face_id: int):
     """Delete a single face entry by ID."""
