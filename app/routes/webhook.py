@@ -2550,6 +2550,32 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
         await db.close()
 
 
+def _grade_to_camera_key(grade: str) -> str:
+    """Convert a PI-sheet grade name to a camera mapping key.
+
+    Examples:
+      'Grade 9A'   -> 'GRADE 9A'
+      'Nursery 2'  -> 'NUR-2'
+      'Prep 3'     -> 'PREP-3'
+      'Popsicles'  -> 'Popsicles'
+    """
+    g = grade.strip()
+    g_upper = g.upper()
+    m = re.match(r"GRADE\s*(\d{1,2})\s*([A-D])?", g_upper)
+    if m:
+        num, sec = m.group(1), (m.group(2) or "")
+        return f"GRADE {num}{sec}"
+    m = re.match(r"(?:NURSERY|NUR)[\s-]*(\d+)", g_upper)
+    if m:
+        return f"NUR-{m.group(1)}"
+    m = re.match(r"PREP[\s-]*(\d+)", g_upper)
+    if m:
+        return f"PREP-{m.group(1)}"
+    if "POPSICLE" in g_upper:
+        return "Popsicles"
+    return g
+
+
 def _extract_classroom_from_message(message_text: str) -> str | None:
     """Extract classroom name from message text.
 
@@ -2826,7 +2852,7 @@ async def detect_and_handle_snapshot_request(
             # (admins can also be parents)
             children = await _lookup_parent_child_class(sender)
             if len(children) == 1:
-                location = children[0]["grade"]
+                location = _grade_to_camera_key(children[0]["grade"])
                 logger.info(f"Admin {sender} auto-detected as parent of {children[0]['student_name']} ({location})")
             elif len(children) > 1:
                 child_list = "\n".join(
@@ -2883,7 +2909,7 @@ async def detect_and_handle_snapshot_request(
 
         if not location:
             if len(children) == 1:
-                location = children[0]["grade"]
+                location = _grade_to_camera_key(children[0]["grade"])
                 logger.info(f"Auto-detected classroom {location} for parent {sender} (child: {children[0]['student_name']})")
             elif len(children) > 1:
                 child_list = "\n".join(

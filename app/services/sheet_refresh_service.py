@@ -536,7 +536,9 @@ async def populate_parent_phones() -> bool:
     student_map: dict[tuple[str, str], dict] = {}
     for entry in parents:
         raw_name = (entry.get("student_name") or "").strip()
-        raw_grade = (entry.get("grade") or "").strip()
+        # Prefer "sheet" field (e.g. "Nur 2") over "grade" (e.g. "Nursery")
+        # because "sheet" preserves the section/number.
+        raw_grade = (entry.get("sheet") or entry.get("grade") or "").strip()
         phone = (entry.get("phone") or "").strip()
         role = (entry.get("role") or "").lower()
 
