@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import init_db
-from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face
+from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face, dashboard
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -78,6 +78,7 @@ app.include_router(bulk.router)
 app.include_router(agent_ws.router)
 app.include_router(agent_config.router)
 app.include_router(face.router)
+app.include_router(dashboard.router)
 
 
 # Serve static files (school images)
@@ -85,6 +86,22 @@ import os
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Serve dashboard frontend (SPA)
+dashboard_dir = os.path.join(os.path.dirname(__file__), "dashboard_dist")
+if os.path.isdir(dashboard_dir):
+    from fastapi.responses import FileResponse
+
+    @app.get("/dashboard/{path:path}")
+    async def serve_dashboard(path: str):
+        file_path = os.path.join(dashboard_dir, path)
+        if path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(dashboard_dir, "index.html"))
+
+    @app.get("/dashboard")
+    async def serve_dashboard_root():
+        return FileResponse(os.path.join(dashboard_dir, "index.html"))
 
 
 @app.get("/healthz")

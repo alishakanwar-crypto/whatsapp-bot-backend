@@ -140,6 +140,29 @@ async def init_db():
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS attendance_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_id TEXT NOT NULL,
+                student_name TEXT NOT NULL,
+                grade TEXT NOT NULL DEFAULT '',
+                camera_label TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'present',
+                notification_sent INTEGER NOT NULL DEFAULT 0,
+                parent_phones TEXT NOT NULL DEFAULT '',
+                logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT NOT NULL,
+                message_type TEXT NOT NULL DEFAULT 'attendance',
+                student_name TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'sent',
+                wa_message_id TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS agent_registered_faces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 person_id TEXT NOT NULL,
