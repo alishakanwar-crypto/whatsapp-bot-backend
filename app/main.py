@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # (e.g. AGENT_SECRET in agent_config.py and agent_ws.py, IMAP/SMTP creds in email services)
 load_dotenv()
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -350,6 +350,113 @@ async def debug_simulate_snapshot(request: Request, phone: str = "", message: st
         "is_pi_sheet_parent": is_parent,
         "extracted_classroom": classroom,
         "children_found": children,
+    }
+
+
+@app.post("/api/send-face-reminder")
+async def send_face_photo_reminder(request: Request, background_tasks: BackgroundTasks):
+    """Send WhatsApp reminder to parents who haven't registered face photos."""
+    _check_debug_auth(request)
+    import json as _json
+    import asyncio
+
+    # 1. Get registered student names from face DB
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT DISTINCT person_id FROM face_images")
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    registered_ids = {r[0].upper() for r in rows}
+    # Extract just the name part (e.g. "SUHAAN_AHUJA_GRADE3C" -> "SUHAAN AHUJA")
+    registered_names = set()
+    for pid in registered_ids:
+        parts = pid.split("_")
+        # Remove grade suffix
+        name_parts = []
+        for p in parts:
+            if p.startswith("GRADE") or p.startswith("NUR") or p.startswith("PREP") or p == "NURSERY":
+                break
+            name_parts.append(p)
+        if name_parts:
+            registered_names.add(" ".join(name_parts))
+
+    # 2. Load all parents
+    json_path = os.path.join(os.path.dirname(__file__), "personalized_parents.json")
+    with open(json_path) as f:
+        parents = _json.load(f)
+
+    # 3. Group by student, collect phones for unregistered students only
+    phones_to_message: dict[str, set[str]] = {}  # phone -> set of child names
+    for entry in parents:
+        name = (entry.get("student_name") or "").strip().upper()
+        phone = (entry.get("phone") or "").strip()
+        grade = (entry.get("sheet") or entry.get("grade") or "").strip()
+        if not name or not phone:
+            continue
+        # Check if registered (fuzzy)
+        is_reg = False
+        for rn in registered_names:
+            if rn in name or name in rn:
+                is_reg = True
+                break
+        if is_reg:
+            continue
+        # Skip test/admin entries
+        if "ALISHA" in name or "HARPREET" in name or "ARPIT" in name:
+            continue
+        child_label = f"{name} ({grade})" if grade else name
+        phones_to_message.setdefault(phone, set()).add(child_label)
+
+    unique_phones = list(phones_to_message.keys())
+
+    # 4. Send in background
+    async def _send_reminders():
+        from app.services.whatsapp_service import send_whatsapp_message
+        sent = 0
+        failed = 0
+        for phone in unique_phones:
+            children = ", ".join(sorted(phones_to_message[phone]))
+            msg = (
+                "Dear Parent,\n\n"
+                "Greetings from PP International School! \U0001f3eb\n\n"
+                "We are pleased to introduce our *Smart Attendance System* "
+                "powered by facial recognition technology. To activate automatic "
+                "attendance tracking for your ward, we kindly request you to:\n\n"
+                "\U0001f4f7 *Send a clear, front-facing photo* of your child's face "
+                "to this number along with the message:\n"
+                f"*\"Register {children}\"*\n\n"
+                "\u2705 Once registered, you will receive daily WhatsApp notifications "
+                "when your child's attendance is marked.\n\n"
+                "\U0001f4f1 You can also type *\"Show my child\"* anytime during school hours "
+                "to see a live photo from your child's classroom camera.\n\n"
+                "Thank you for your support!\n"
+                "Warm regards,\n"
+                "PP International School"
+            )
+            try:
+                ok = await send_whatsapp_message(phone, msg)
+                if ok:
+                    sent += 1
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
+            # Rate limit: 20 msgs/sec
+            await asyncio.sleep(0.05)
+            if sent % 50 == 0 and sent > 0:
+                logger.info(f"Face reminder progress: {sent} sent, {failed} failed of {len(unique_phones)}")
+        logger.info(f"Face reminder complete: {sent} sent, {failed} failed of {len(unique_phones)}")
+
+    background_tasks.add_task(_send_reminders)
+
+    return {
+        "status": "sending",
+        "total_phones": len(unique_phones),
+        "registered_students": len(registered_names),
+        "message": f"Sending reminders to {len(unique_phones)} parent phones (excluding {len(registered_names)} already registered students)",
     }
 
 
