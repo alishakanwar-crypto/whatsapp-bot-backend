@@ -434,41 +434,28 @@ async def send_face_photo_reminder(request: Request, background_tasks: Backgroun
 
     unique_phones = list(phones_to_message.keys())
 
-    # 4. Send in background
+    # 4. Send in background using approved template
     async def _send_reminders():
-        from app.services.whatsapp_service import send_whatsapp_message
+        from app.services.whatsapp_service import send_cloud_template_message
         sent = 0
         failed = 0
         for phone in unique_phones:
-            children = ", ".join(sorted(phones_to_message[phone]))
-            msg = (
-                "Dear Parent,\n\n"
-                "Greetings from PP International School! \U0001f3eb\n\n"
-                "We are pleased to introduce our *Smart Attendance System* "
-                "powered by facial recognition technology. To activate automatic "
-                "attendance tracking for your ward, we kindly request you to:\n\n"
-                "\U0001f4f7 *Send a clear, front-facing photo* of your child's face "
-                "to this number along with the message:\n"
-                f"*\"Register {children}\"*\n\n"
-                "\u2705 Once registered, you will receive daily WhatsApp notifications "
-                "when your child's attendance is marked.\n\n"
-                "\U0001f4f1 You can also type *\"Show my child\"* anytime during school hours "
-                "to see a live photo from your child's classroom camera.\n\n"
-                "Thank you for your support!\n"
-                "Warm regards,\n"
-                "PP International School"
-            )
             try:
-                ok = await send_whatsapp_message(phone, msg)
+                ok = await send_cloud_template_message(
+                    phone,
+                    "face_registration_reminder",
+                    language_code="en",
+                )
                 if ok:
                     sent += 1
                 else:
                     failed += 1
-            except Exception:
+            except Exception as exc:
+                logger.error(f"Reminder send error for {phone}: {exc}")
                 failed += 1
-            # Rate limit: 20 msgs/sec
-            await asyncio.sleep(0.05)
-            if sent % 50 == 0 and sent > 0:
+            # Rate limit: ~10 msgs/sec to stay within Meta limits
+            await asyncio.sleep(0.1)
+            if (sent + failed) % 50 == 0 and (sent + failed) > 0:
                 logger.info(f"Face reminder progress: {sent} sent, {failed} failed of {len(unique_phones)}")
         logger.info(f"Face reminder complete: {sent} sent, {failed} failed of {len(unique_phones)}")
 
