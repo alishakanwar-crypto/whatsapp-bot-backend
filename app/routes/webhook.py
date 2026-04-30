@@ -928,9 +928,9 @@ _CLASS_LIST_RE = re.compile(
 )
 
 _GRADE_EXTRACT_RE = re.compile(
-    r"(?:grade|class|कक्षा|क्लास)\s*(\d{1,2})\s*([a-cA-C])?|"
-    r"(?:nur(?:sery)?|nursery)\s*(\d)?|"
-    r"(?:prep)\s*(\d)?|"
+    r"(?:grade|class|कक्षा|क्लास)[\s\-]*(\d{1,2})[\s\-]*([a-cA-C])?|"
+    r"(?:nur(?:sery)?|nursery)[\s\-]*(\d)?|"
+    r"(?:prep)[\s\-]*(\d)?|"
     r"(?:popsicle)",
     re.IGNORECASE,
 )
@@ -3592,15 +3592,15 @@ async def _find_student_by_caption(caption: str) -> dict | None:
 # "Grade 3C", "Class 5A", "3C", "3 C", "NUR", "Nursery", "Prep 1", "Popsicle"
 _CAPTION_CLASS_RE = re.compile(
     r"(?:"
-    r"(?:grade|class|कक्षा|क्लास)\s*(\d{1,2})\s*([a-cA-C])?"  # "Grade 3C"
+    r"(?:grade|class|कक्षा|क्लास)[\s\-]*(\d{1,2})[\s\-]*([a-cA-C])?"  # "Grade 3C", "Grade 9-A"
     r"|"
-    r"(?:nur(?:sery)?)\s*(\d)?"  # "Nursery", "NUR 1"
+    r"(?:nur(?:sery)?)[\s\-]*(\d)?"  # "Nursery", "NUR 1"
     r"|"
-    r"(?:prep)\s*(\d)?"  # "Prep 1"
+    r"(?:prep)[\s\-]*(\d)?"  # "Prep 1"
     r"|"
     r"(?:popsicle)"  # "Popsicle"
     r"|"
-    r"\b(\d{1,2})\s*([a-cA-C])\b"  # "3C", "3 C", "5A", "10B"
+    r"\b(\d{1,2})[\s\-]*([a-cA-C])\b"  # "3C", "3 C", "3-C", "9-A", "10B"
     r")",
     re.IGNORECASE,
 )
@@ -3631,6 +3631,8 @@ _NON_NAME_WORDS = {
     "image", "photo", "file", "document", "video", "pdf", "attached",
     "attachment", "dear", "hello", "sir", "maam", "madam", "good",
     "morning", "evening", "thank", "thanks", "okay", "yes", "hi",
+    # Command words (not student names)
+    "register", "add", "enroll", "enrol", "signup",
 }
 
 
