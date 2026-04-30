@@ -21,7 +21,7 @@ async def attendance_today():
         # Total present today
         cursor = await db.execute(
             "SELECT COUNT(DISTINCT person_id) FROM attendance_records "
-            "WHERE date(logged_at) = date('now')"
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes')"
         )
         row = await cursor.fetchone()
         present_today = row[0] if row else 0
@@ -40,7 +40,7 @@ async def attendance_today():
         cursor = await db.execute(
             "SELECT grade, COUNT(DISTINCT person_id) as count "
             "FROM attendance_records "
-            "WHERE date(logged_at) = date('now') "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes') "
             "GROUP BY grade ORDER BY grade"
         )
         grades = [{"grade": r[0], "count": r[1]} for r in await cursor.fetchall()]
@@ -50,8 +50,8 @@ async def attendance_today():
             "SELECT person_id, student_name, grade, camera_label, confidence, "
             "notification_sent, logged_at "
             "FROM attendance_records "
-            "WHERE date(logged_at) = date('now') "
-            "ORDER BY logged_at DESC LIMIT 50"
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes') "
+            "ORDER BY logged_at DESC LIMIT 500"
         )
         recent = [
             {
@@ -115,13 +115,22 @@ async def report_attendance(request: Request):
             phones = rec.get("parent_phones", "")
             logged_at = rec.get("logged_at", datetime.now().isoformat())
 
-            # Dedup: skip if already reported today for this person
+            # Check if already reported today for this person
             cursor = await db.execute(
                 "SELECT id FROM attendance_records "
                 "WHERE person_id = ? AND date(logged_at) = date(?)",
                 (person_id, logged_at),
             )
-            if await cursor.fetchone():
+            existing = await cursor.fetchone()
+            if existing:
+                # Update with latest data (notification status, time, etc.)
+                await db.execute(
+                    "UPDATE attendance_records SET notification_sent = ?, "
+                    "logged_at = ?, confidence = ?, parent_phones = ? "
+                    "WHERE id = ?",
+                    (notified, logged_at, confidence, phones, existing[0]),
+                )
+                inserted += 1
                 continue
 
             await db.execute(
@@ -257,7 +266,7 @@ async def notification_stats():
         # Count messages by direction today
         cursor = await db.execute(
             "SELECT direction, COUNT(*) FROM messages "
-            "WHERE date(timestamp) = date('now') GROUP BY direction"
+            "WHERE date(timestamp) = date('now', '+5 hours', '+30 minutes') GROUP BY direction"
         )
         msg_counts = {r[0]: r[1] for r in await cursor.fetchall()}
 
@@ -268,7 +277,7 @@ async def notification_stats():
         # Today's attendance notifications
         cursor = await db.execute(
             "SELECT COUNT(*) FROM attendance_records "
-            "WHERE date(logged_at) = date('now') AND notification_sent = 1"
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes') AND notification_sent = 1"
         )
         notified_today = (await cursor.fetchone())[0]
 
@@ -423,13 +432,13 @@ async def dashboard_overview():
         # Today's attendance
         cursor = await db.execute(
             "SELECT COUNT(DISTINCT person_id) FROM attendance_records "
-            "WHERE date(logged_at) = date('now')"
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes')"
         )
         present_today = (await cursor.fetchone())[0]
 
         # Today's messages
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM messages WHERE date(timestamp) = date('now')"
+            "SELECT COUNT(*) FROM messages WHERE date(timestamp) = date('now', '+5 hours', '+30 minutes')"
         )
         messages_today = (await cursor.fetchone())[0]
 
