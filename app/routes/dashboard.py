@@ -154,7 +154,7 @@ async def delete_attendance_record(person_id: str):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM attendance_records WHERE person_id = ?", (person_id,)
+            "DELETE FROM attendance_records WHERE LOWER(person_id) = LOWER(?)", (person_id,)
         )
         await db.commit()
         return {"status": "ok", "deleted": cursor.rowcount, "person_id": person_id}
