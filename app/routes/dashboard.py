@@ -191,7 +191,8 @@ async def get_chats(
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         cursor = await db.execute(
-            f"SELECT id, sender, receiver, content, channel, direction, timestamp "
+            f"SELECT id, sender, receiver, content, channel, direction, "
+            f"datetime(timestamp, '+5 hours', '+30 minutes') "
             f"FROM messages {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
             params + [limit, offset],
         )
@@ -228,7 +229,7 @@ async def get_conversations(limit: int = Query(30, ge=1, le=100)):
             SELECT
                 CASE WHEN direction = 'incoming' THEN sender ELSE receiver END as phone,
                 content as last_message,
-                timestamp as last_time,
+                datetime(timestamp, '+5 hours', '+30 minutes') as last_time,
                 direction
             FROM messages
             WHERE id IN (
@@ -419,7 +420,8 @@ async def get_cameras():
             "cameras": [
                 {
                     "location": r[0], "dvr_index": r[1], "channel": r[2],
-                    "description": r[3], "cam_type": r[4],
+                    "description": r[3],
+                    "cam_type": r[4] if r[4] else f"DVR {r[1] + 1}",
                 }
                 for r in rows
             ],
@@ -464,10 +466,11 @@ async def dashboard_overview():
         cursor = await db.execute("SELECT COUNT(*) FROM agent_camera_mapping")
         total_cameras = (await cursor.fetchone())[0]
 
-        # Recent activity (last 10 messages)
+        # Recent activity (last 10 messages) — convert to IST
         cursor = await db.execute(
-            "SELECT sender, content, direction, timestamp FROM messages "
-            "ORDER BY timestamp DESC LIMIT 10"
+            "SELECT sender, content, direction, "
+            "datetime(timestamp, '+5 hours', '+30 minutes') "
+            "FROM messages ORDER BY timestamp DESC LIMIT 10"
         )
         recent_messages = [
             {"sender": r[0], "content": r[1][:80], "direction": r[2], "time": r[3]}
