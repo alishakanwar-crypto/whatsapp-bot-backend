@@ -148,6 +148,20 @@ async def report_attendance(request: Request):
         await db.close()
 
 
+@router.delete("/attendance/record/{person_id}")
+async def delete_attendance_record(person_id: str):
+    """Delete an attendance record by person_id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM attendance_records WHERE person_id = ?", (person_id,)
+        )
+        await db.commit()
+        return {"status": "ok", "deleted": cursor.rowcount, "person_id": person_id}
+    finally:
+        await db.close()
+
+
 # ── Chats ────────────────────────────────────────────────────────────────────
 
 @router.get("/chats")
