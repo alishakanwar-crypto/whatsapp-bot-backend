@@ -360,6 +360,24 @@ async def get_students(
         await db.close()
 
 
+@router.delete("/students/{student_id}")
+async def delete_student(student_id: int):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT student_name, grade FROM pi_sheet_students WHERE id = ?",
+            (student_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {"status": "error", "message": "Student not found"}
+        await db.execute("DELETE FROM pi_sheet_students WHERE id = ?", (student_id,))
+        await db.commit()
+        return {"status": "ok", "deleted": {"id": student_id, "name": row[0], "grade": row[1]}}
+    finally:
+        await db.close()
+
+
 @router.get("/students/grades")
 async def get_grades():
     """Get list of all grades with student counts."""
