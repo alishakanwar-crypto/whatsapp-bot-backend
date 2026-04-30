@@ -392,7 +392,9 @@ async def agent_websocket(websocket: WebSocket):
                 if future and not future.done():
                     future.set_result(data)
                     img_count = data.get("image_count", 1 if data.get("image_base64") else 0)
-                    logger.info(f"Snapshot response (v1) for {request_id}: success={data.get('success')}, images={img_count}")
+                    detail = data.get("detail", "")
+                    detail_str = f", detail={detail}" if detail else ""
+                    logger.info(f"Snapshot response (v1) for {request_id}: success={data.get('success')}, images={img_count}{detail_str}")
                 else:
                     logger.warning(f"Snapshot response for unknown/expired request: {request_id}")
 
@@ -401,6 +403,13 @@ async def agent_websocket(websocket: WebSocket):
 
             elif msg_type == "test_result":
                 logger.info(f"DVR test result: {data}")
+
+            elif msg_type == "test_all_dvrs_result":
+                request_id = data.get("request_id", "")
+                future = _pending_requests.get(request_id)
+                if future and not future.done():
+                    future.set_result(data)
+                logger.info(f"DVR test results: {data.get('results', [])}")
 
             elif msg_type == "mapping_updated":
                 logger.info(
@@ -509,6 +518,41 @@ async def push_mapping_endpoint(request: Request):
         return JSONResponse({"error": "No camera_mapping provided"}, status_code=400)
     result = await push_camera_mapping(mapping)
     return result
+
+
+@router.get("/api/agent/test-dvrs")
+async def test_dvrs_endpoint():
+    """Remotely test DVR connectivity through the campus agent."""
+    global _agent_ws
+    if _agent_ws is None:
+        return JSONResponse(
+            {"error": "Agent not connected"}, status_code=503
+        )
+
+    request_id = str(uuid.uuid4())
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    _pending_requests[request_id] = future
+
+    try:
+        await _agent_ws.send_json({
+            "type": "test_all_dvrs",
+            "request_id": request_id,
+        })
+    except Exception as e:
+        _pending_requests.pop(request_id, None)
+        return JSONResponse(
+            {"error": f"Failed to send test request: {e}"}, status_code=500
+        )
+
+    try:
+        result = await asyncio.wait_for(future, timeout=30.0)
+        return result
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"error": "DVR test timed out after 30s"}, status_code=504
+        )
+    finally:
+        _pending_requests.pop(request_id, None)
 
 
 @router.post("/api/agent/snapshot")
