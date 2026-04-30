@@ -220,6 +220,28 @@ async def check_meta_webhook(request: Request):
     return results
 
 
+@app.get("/debug/templates")
+async def list_templates(request: Request):
+    """List approved WhatsApp message templates."""
+    _check_debug_auth(request)
+    import httpx
+    from app.services.whatsapp_service import get_cloud_token
+    token = get_cloud_token()
+    if not token:
+        return {"error": "No cloud token configured"}
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://graph.facebook.com/v25.0/2417647228700804/message_templates",
+                params={"limit": 100},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=15.0,
+            )
+            return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/debug/update-webhook-url")
 async def update_webhook_url(request: Request):
     """Try to update Meta webhook callback URL to this server."""
