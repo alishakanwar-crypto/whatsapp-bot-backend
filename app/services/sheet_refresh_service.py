@@ -536,9 +536,16 @@ async def populate_parent_phones() -> bool:
     student_map: dict[tuple[str, str], dict] = {}
     for entry in parents:
         raw_name = (entry.get("student_name") or "").strip()
-        # Prefer "sheet" field (e.g. "Nur 2") over "grade" (e.g. "Nursery")
-        # because "sheet" preserves the section/number.
-        raw_grade = (entry.get("sheet") or entry.get("grade") or "").strip()
+        # For multi-student entries (e.g. "Nitya & Aarna"), use "grade" field
+        # because it has grades for ALL children ("Grade 7A & Grade 9A"),
+        # whereas "sheet" only has the first child's grade ("Grade 7A").
+        # For single-student entries, prefer "sheet" over "grade" because
+        # "sheet" preserves the section/number (e.g. "Nur 2" vs "Nursery").
+        is_multi_student = "&" in raw_name
+        if is_multi_student:
+            raw_grade = (entry.get("grade") or entry.get("sheet") or "").strip()
+        else:
+            raw_grade = (entry.get("sheet") or entry.get("grade") or "").strip()
         phone = (entry.get("phone") or "").strip()
         role = (entry.get("role") or "").lower()
 
@@ -547,7 +554,7 @@ async def populate_parent_phones() -> bool:
 
         grades = _normalize_grade_name(raw_grade)
         # Handle multi-student entries like 'SEERAT SETHI & Rushank Sethi'
-        names = [n.strip() for n in raw_name.split("&")] if "&" in raw_name else [raw_name]
+        names = [n.strip() for n in raw_name.split("&")] if is_multi_student else [raw_name]
 
         for i, name in enumerate(names):
             grade = grades[i] if i < len(grades) else (grades[0] if grades else "")
