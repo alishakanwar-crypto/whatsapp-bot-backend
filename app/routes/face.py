@@ -7,10 +7,12 @@ and uses them for real-time recognition.
 """
 
 import base64
+import gc
+import json
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, File, Form, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from app.database import get_db
 from app.routes.agent_config import verify_agent_secret
@@ -83,29 +85,40 @@ async def list_face_images():
     """List all face images with metadata (base64-encoded image data).
 
     Used by the Campus Agent to sync face data on startup.
+    Streams results as a JSON array, one row at a time, to avoid
+    loading all images into memory at once (prevents OOM on 256MB Fly).
     """
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            "SELECT id, person_id, name, role, phone, angle, image_data, registered_at "
-            "FROM agent_registered_faces ORDER BY person_id, angle"
-        )
-        rows = await cursor.fetchall()
-        results = []
-        for r in rows:
-            results.append({
-                "id": r["id"],
-                "person_id": r["person_id"],
-                "name": r["name"],
-                "role": r["role"],
-                "phone": r["phone"],
-                "angle": r["angle"],
-                "image_base64": base64.b64encode(r["image_data"]).decode("ascii"),
-                "registered_at": r["registered_at"],
-            })
-        return results
-    finally:
-        await db.close()
+    async def _stream():
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT id, person_id, name, role, phone, angle, image_data, registered_at "
+                "FROM agent_registered_faces ORDER BY person_id, angle"
+            )
+            yield "["
+            first = True
+            async for r in cursor:
+                img_b64 = base64.b64encode(r["image_data"]).decode("ascii")
+                entry = {
+                    "id": r["id"],
+                    "person_id": r["person_id"],
+                    "name": r["name"],
+                    "role": r["role"],
+                    "phone": r["phone"],
+                    "angle": r["angle"],
+                    "image_base64": img_b64,
+                    "registered_at": r["registered_at"],
+                }
+                chunk = ("," if not first else "") + json.dumps(entry)
+                first = False
+                yield chunk
+                del img_b64, entry, chunk
+            yield "]"
+        finally:
+            gc.collect()
+            await db.close()
+
+    return StreamingResponse(_stream(), media_type="application/json")
 
 
 @router.get("/image/{face_id}", dependencies=[Depends(verify_agent_secret)])
