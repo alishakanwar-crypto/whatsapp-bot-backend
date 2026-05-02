@@ -3080,11 +3080,12 @@ async def detect_and_handle_snapshot_request(
             except Exception as exc:
                 logger.error(f"Exception uploading/sending snapshot {idx+1} for {location}: {exc}", exc_info=True)
 
-        # Free any remaining base64 data
+        # Free any remaining base64 data and force garbage collection
         for img_data in images_list:
             img_data.pop("image_base64", None)
         result.pop("image_base64", None)
         result.pop("images", None)
+        import gc; gc.collect()
 
         if sent_count > 0:
             logger.info(f"Sent {sent_count}/{image_count} snapshot(s) for {location} to {sender}")
