@@ -80,6 +80,25 @@ async def list_registered():
         await db.close()
 
 
+@router.get("/manifest", dependencies=[Depends(verify_agent_secret)])
+async def face_manifest():
+    """Return lightweight metadata for all faces (no image data).
+
+    The agent uses this to determine which faces it's missing locally,
+    then downloads only the missing ones via /api/face/image/{face_id}.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, person_id, name, role, phone, angle, registered_at "
+            "FROM agent_registered_faces ORDER BY person_id, angle"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
 @router.get("/images", dependencies=[Depends(verify_agent_secret)])
 async def list_face_images():
     """List all face images with metadata (base64-encoded image data).
