@@ -3,3 +3,4 @@ __pycache__/
 *.db
 .env
 __pycache__
+session_full_messages.txt
