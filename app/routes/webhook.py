@@ -3504,9 +3504,12 @@ async def _find_student_by_caption(caption: str) -> dict | None:
             if not name_part:
                 name_part = caption_clean[flex_match.end():].strip()
 
-    # Clean name: remove common prefixes/suffixes
-    name_part = re.sub(r"(?i)^(photo\s*(of)?|pic\s*(of)?|image\s*(of)?)\s*", "", name_part).strip()
+    # Clean name: remove common prefixes/suffixes and command words
+    name_part = re.sub(r"(?i)^(register|add|enroll|enrol|signup|photo|pic|image)(\s+(of|for))?\s*", "", name_part).strip()
     name_part = re.sub(r"[^\w\s]", "", name_part).strip()
+    # Also remove any remaining command words from the middle
+    name_words_clean = [w for w in name_part.split() if w.lower() not in _NON_NAME_WORDS]
+    name_part = " ".join(name_words_clean).strip()
 
     if not name_part or len(name_part) < 2:
         return None
@@ -3740,16 +3743,28 @@ async def _try_register_child_face(
 
         if caption_raw:
             # Caption was provided but didn't match DB exactly — try matching
-            # against this parent's children by partial name
+            # against this parent's children by partial name.
+            # Use a scoring system: count how many of the child's name words
+            # appear in the caption. Pick the child with the MOST matches.
+            # This prevents "gupta" in "Aarna Gupta" from matching "Nitya Gupta".
+            caption_name_words = [
+                w for w in caption.split()
+                if len(w) > 2 and w.isalpha() and w not in _NON_NAME_WORDS
+            ]
+            best_score = 0
             for child in children:
                 child_name_lower = child["student_name"].lower()
-                # Check if any part of caption matches the child name
-                caption_words = caption.split()
-                child_words = child_name_lower.split()
-                if any(cw in caption for cw in child_words if len(cw) > 2):
+                child_words = [w for w in child_name_lower.split() if len(w) > 1]
+                # Score = number of child name words found in caption
+                score = sum(1 for cw in child_words if cw in caption)
+                # Bonus: check if caption also mentions the child's grade
+                child_grade = child.get("grade", "").lower().replace("grade", "").replace("grade ", "").strip()
+                if child_grade and child_grade in caption.replace("-", "").replace(" ", ""):
+                    score += 2
+                if score > best_score:
+                    best_score = score
                     target_child = child
                     caption_matched = True
-                    break
 
         if not target_child:
             # Caption had name+class but didn't match any student in DB.
