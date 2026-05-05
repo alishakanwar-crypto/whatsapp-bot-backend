@@ -39,6 +39,12 @@ _pending_requests: dict[str, asyncio.Future] = {}
 # Accumulate individual images for v2 protocol (request_id -> list of image dicts)
 _pending_images: dict[str, list] = {}
 
+# Queued snapshot requests — filled when agent is offline, drained on reconnect
+# Each entry: {"classroom": str, "sender": str, "reply_to": str, "queued_at": float}
+_queued_snapshots: list[dict] = []
+_MAX_QUEUED = 20  # max pending queued requests
+_QUEUE_TTL = 120  # discard queued requests older than 2 minutes
+
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
 
 # ---------------------------------------------------------------------------
@@ -56,7 +62,7 @@ _health_state: dict = {
 }
 
 # Threshold: only alert admin after this many consecutive snapshot failures
-_ALERT_THRESHOLD = 3
+_ALERT_THRESHOLD = 5
 
 # ---------------------------------------------------------------------------
 # Fallback proxy: when the agent isn't connected locally, proxy snapshot
@@ -154,6 +160,77 @@ def should_alert_admin() -> bool:
         _health_state["admin_alerted"] = True
         return True
     return False
+
+
+def queue_snapshot_request(classroom: str, sender: str, reply_to: str) -> bool:
+    """Queue a snapshot request to be fulfilled when the agent reconnects.
+
+    Returns True if queued successfully, False if queue is full.
+    """
+    # Purge expired entries
+    now = time.time()
+    _queued_snapshots[:] = [
+        q for q in _queued_snapshots
+        if now - q["queued_at"] < _QUEUE_TTL
+    ]
+    # Avoid duplicate requests from same sender for same classroom
+    for q in _queued_snapshots:
+        if q["sender"] == sender and q["classroom"] == classroom:
+            return True  # already queued
+    if len(_queued_snapshots) >= _MAX_QUEUED:
+        return False
+    _queued_snapshots.append({
+        "classroom": classroom,
+        "sender": sender,
+        "reply_to": reply_to,
+        "queued_at": now,
+    })
+    logger.info(f"Queued snapshot request for '{classroom}' from {sender} ({len(_queued_snapshots)} in queue)")
+    return True
+
+
+async def _drain_queued_snapshots():
+    """Process all queued snapshot requests after agent reconnects.
+
+    Called automatically when the agent WebSocket reconnects.
+    """
+    if not _queued_snapshots:
+        return
+
+    now = time.time()
+    # Copy and clear the queue atomically
+    pending = [q for q in _queued_snapshots if now - q["queued_at"] < _QUEUE_TTL]
+    _queued_snapshots.clear()
+
+    if not pending:
+        return
+
+    logger.info(f"Draining {len(pending)} queued snapshot request(s)")
+
+    for q in pending:
+        try:
+            result = await request_snapshot(q["classroom"], timeout=55.0)
+            if result.get("success") and result.get("images"):
+                from app.services.whatsapp_service import (
+                    upload_base64_image_cloud,
+                    send_cloud_media,
+                )
+                for img_data in result["images"]:
+                    img_b64 = img_data.get("image_base64", "")
+                    desc = img_data.get("description", q["classroom"])
+                    if img_b64:
+                        media_id = await upload_base64_image_cloud(img_b64)
+                        if media_id:
+                            await send_cloud_media(
+                                q["reply_to"], media_id, "image",
+                                caption=f"📸 {desc}"
+                            )
+                record_snapshot_success()
+                logger.info(f"Delivered queued snapshot for '{q['classroom']}' to {q['sender']}")
+            else:
+                logger.warning(f"Queued snapshot for '{q['classroom']}' failed: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Error delivering queued snapshot for '{q['classroom']}': {e}")
 
 
 async def _proxy_snapshot_request(classroom: str, timeout: float = 55.0) -> dict | None:
@@ -330,6 +407,9 @@ async def agent_websocket(websocket: WebSocket):
     _health_state["consecutive_failures"] = 0  # reset on fresh connection
     _health_state["admin_alerted"] = False
     logger.info("Campus agent connected via WebSocket")
+
+    # Drain any queued snapshot requests from while agent was offline
+    asyncio.create_task(_drain_queued_snapshots())
 
     try:
         while True:

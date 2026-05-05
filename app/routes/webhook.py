@@ -2706,6 +2706,32 @@ async def _is_pi_sheet_parent(sender: str) -> bool:
     return len(children) > 0
 
 
+async def _extract_classroom_for_queue(
+    message_text: str, sender: str, is_admin: bool
+) -> str | None:
+    """Best-effort classroom extraction for queuing when agent is offline.
+
+    Tries message text first, then parent's registered child grade.
+    """
+    # Try explicit classroom from message
+    loc = _extract_classroom_from_message(message_text)
+    if loc:
+        return loc
+
+    # Try location keywords for admin
+    if is_admin:
+        loc2 = _extract_location_from_message(message_text)
+        if loc2:
+            return loc2
+
+    # Fall back to parent's child grade
+    children = await _lookup_parent_child_class(sender)
+    if len(children) == 1:
+        return _grade_to_camera_key(children[0]["grade"])
+
+    return None
+
+
 async def detect_and_handle_snapshot_request(
     sender: str, message_text: str, reply_to: str
 ) -> bool:
@@ -2747,7 +2773,7 @@ async def detect_and_handle_snapshot_request(
     from app.routes.agent_ws import (
         is_agent_connected, request_snapshot, wait_for_agent,
         record_snapshot_success, record_snapshot_failure, should_alert_admin,
-        get_health_state,
+        get_health_state, queue_snapshot_request,
     )
     from app.services.whatsapp_service import (
         upload_base64_image_cloud,
@@ -2757,10 +2783,10 @@ async def detect_and_handle_snapshot_request(
     logger.info(f"Snapshot request detected from {sender} (admin={is_admin}): {message_text}")
 
     # ---------------------------------------------------------------------------
-    # ALWAYS-ACTIVE: Smart retry with health tracking
-    # Instead of immediately saying "system offline", wait for the agent to
-    # reconnect (up to 30s) and only show offline after confirmed persistent
-    # failure (_ALERT_THRESHOLD consecutive failures).
+    # ALWAYS-ACTIVE: Smart retry with queued delivery
+    # Instead of saying "system offline", queue the request. The agent
+    # auto-reconnects (exponential backoff 5-60s) and queued requests are
+    # fulfilled automatically — the parent gets their photo without retrying.
     # ---------------------------------------------------------------------------
     agent_ready = await wait_for_agent(max_wait=30.0)
     if not agent_ready:
@@ -2772,41 +2798,37 @@ async def detect_and_handle_snapshot_request(
             f"(consecutive_failures={consecutive})"
         )
 
-        # Only send an offline message after _ALERT_THRESHOLD (3) consecutive
-        # failures.  Before that, tell the user we are retrying transparently.
-        if consecutive < 3:
-            # Transparent retry — tell user to wait briefly, don't spam "offline"
-            await send_whatsapp_message(
-                reply_to,
-                f"{_greeting(sender)},\n\n"
-                "Your request is being processed. The system is reconnecting "
-                "to the campus cameras. Please allow a moment — your photo "
-                "will be delivered as soon as the connection is restored.\n\n"
-                "Thank you for your patience.\n"
-                "Warm regards,\nPP International School"
-            )
-            return True
+        # Determine the classroom for queuing (best-effort extraction)
+        _queue_classroom = _extract_classroom_for_queue(message_text, sender, is_admin)
 
-        # --- Confirmed persistent failure (3+ consecutive) ---
-        # Only send one offline message per user within a short window
-        import time as _time
-        _OFFLINE_DEDUP_WINDOW = 300  # 5 minutes
-        if not hasattr(detect_and_handle_snapshot_request, "_offline_sent"):
-            detect_and_handle_snapshot_request._offline_sent = {}  # type: ignore[attr-defined]
-        now = _time.time()
-        last_sent = detect_and_handle_snapshot_request._offline_sent.get(sender, 0)  # type: ignore[attr-defined]
-        if now - last_sent < _OFFLINE_DEDUP_WINDOW:
-            logger.info(f"Suppressing duplicate offline message for {sender} (sent {now - last_sent:.0f}s ago)")
-            return True
-        detect_and_handle_snapshot_request._offline_sent[sender] = now  # type: ignore[attr-defined]
+        if _queue_classroom:
+            queued = queue_snapshot_request(_queue_classroom, sender, reply_to)
+            if queued:
+                await send_whatsapp_message(
+                    reply_to,
+                    f"{_greeting(sender)},\n\n"
+                    "Your request is being processed. The system is briefly "
+                    "reconnecting to the campus cameras — your photo will be "
+                    "delivered automatically within the next 1-2 minutes.\n\n"
+                    "No need to send the request again.\n\n"
+                    "Thank you for your patience.\n"
+                    "Warm regards,\nPP International School"
+                )
+                return True
 
-        # Alert admin if threshold just crossed
-        if should_alert_admin():
-            logger.critical(
-                f"HEALTH ALERT: {consecutive} consecutive snapshot failures — "
-                f"alerting admin panel"
-            )
-            # Send alert to admin panel numbers (non-blocking)
+        # Queue full or couldn't determine classroom — give polite retry message
+        await send_whatsapp_message(
+            reply_to,
+            f"{_greeting(sender)},\n\n"
+            "Your request is being processed. The system is reconnecting "
+            "to the campus cameras. Please try again in 1-2 minutes and "
+            "your photo will be delivered.\n\n"
+            "Thank you for your patience.\n"
+            "Warm regards,\nPP International School"
+        )
+
+        # Alert admin only after 5+ consecutive failures (silent to parents)
+        if consecutive >= 5 and should_alert_admin():
             admin_phones = ["919971166562", "919599488106", "918076455224"]
             for admin_phone in admin_phones:
                 try:
@@ -2814,35 +2836,14 @@ async def detect_and_handle_snapshot_request(
                         admin_phone,
                         "PPIS Bot — Camera System Alert\n\n"
                         f"The campus camera system has failed {consecutive} "
-                        f"consecutive times. The agent on the school PC may "
-                        f"need to be restarted.\n\n"
-                        "Please check the Campus Agent on the school PC and "
-                        "restart it if needed.\n\n"
-                        "This alert will not repeat until the system recovers."
+                        f"consecutive times. The agent auto-restart is in "
+                        f"progress.\n\n"
+                        "The system should recover automatically. If it "
+                        "persists for more than 10 minutes, please check "
+                        "the Campus Agent PC."
                     )
                 except Exception:
-                    pass  # best-effort admin notification
-
-        greeting = _greeting(sender)
-        addr = "Dear Admin" if is_admin else f"{greeting}"
-        offline_msg = (
-            "The campus camera system is temporarily unavailable. "
-            "Our team has been notified and the system will be restored shortly. "
-            "Please try again in a few minutes."
-        )
-        if not is_admin:
-            offline_msg += (
-                "\n\nFor assistance, please contact:\n"
-                "School Helpline / Front Desk: 8800935552\n"
-                "Ms. Harpreet Kaur (Administration Incharge): 9599488106"
-            )
-        await send_whatsapp_message(
-            reply_to,
-            f"{addr},\n\n"
-            f"{offline_msg}\n\n"
-            "Thank you for your patience.\n"
-            "Warm regards,\nPP International School"
-        )
+                    pass
         return True
 
     # --- Determine which location/classroom to capture ---
