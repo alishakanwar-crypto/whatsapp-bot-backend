@@ -36,6 +36,24 @@ PI_SHEET_CSV_URL = os.getenv(
     "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ6ZUQa6hhQ_9QXYIuJuWsleqSZ5vgXbWrRvDfvFpqdEx0iW28Z1GlpLdt9T1F9AvX4BdgPjAmfvH96/pub?output=csv&gid=74061219",
 )
 
+# Published Google Sheet base URL for all grade tabs
+PI_SHEET_PUB_BASE = os.getenv(
+    "PI_SHEET_PUB_BASE",
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ6ZUQa6hhQ_9QXYIuJuWsleqSZ5vgXbWrRvDfvFpqdEx0iW28Z1GlpLdt9T1F9AvX4BdgPjAmfvH96/pub?output=csv",
+)
+
+# All known grade tab GIDs in the PI Sheet
+PI_SHEET_GRADE_GIDS = [
+    "1288447916", "2004260388", "1830685668", "1370627064", "1786778811",
+    "313661668", "616483027", "1943511617", "1102992088", "352154940",
+    "81657730", "2002492962", "390677163", "2068519553", "873031775",
+    "149553903", "22291716", "1168194216", "505784395", "1571684282",
+    "353406549", "1466129543", "1448970633", "743552850", "43691386",
+    "1591415360", "2010955306", "1384983764", "1505127962", "1630447148",
+    "1059379388", "187664454", "573773967", "1080176279", "696644819",
+    "523098156", "255213929",
+]
+
 # Known male teachers (for honorific)
 MALE_TEACHERS = {"shyam manohar", "tarun dhall", "christy joseph", "deepak"}
 
@@ -464,6 +482,238 @@ def refresh_pi_sheet_sync() -> None:
 # ---------------------------------------------------------------------------
 # Parent phone data population from personalized_parents.json
 # ---------------------------------------------------------------------------
+
+def _normalize_grade_for_db(grade: str) -> str:
+    """Normalize a raw grade string to canonical DB format."""
+    g = grade.strip()
+    g_upper = g.upper()
+    if g_upper.startswith("GRADE "):
+        g = "Grade " + g_upper[6:]
+    elif g_upper.startswith("PREP "):
+        g = "Prep " + g_upper[5:]
+    elif g_upper in ("POPSICLE", "POPSICLES"):
+        g = "Popsicles"
+    return g
+
+
+def _find_phone_column(header_cells: list[str], parent_type: str) -> int:
+    """Find the column index for a parent phone number.
+
+    Handles all known variations: 'FATHER MOBILE NO.', 'FATHERMOBILE',
+    'FATHER MOB', 'FATHER MOBILE', "FATHER'S MOBILE", etc.
+    """
+    parent_upper = parent_type.upper()  # "FATHER" or "MOTHER"
+    phone_keywords = ("MOBILE", "MOB", "PHONE", "CONTACT", "NO")
+    for idx, cell in enumerate(header_cells):
+        cu = cell.strip().upper().replace("'S", "").replace("'S", "")
+        if parent_upper not in cu:
+            continue
+        # Direct matches like FATHERMOBILE, FATHER MOBILE NO, etc.
+        remaining = cu.replace(parent_upper, "").strip()
+        if any(kw in remaining or kw in cu for kw in phone_keywords):
+            return idx
+        # Exact combined form e.g. FATHERMOBILE
+        if cu == f"{parent_upper}MOBILE":
+            return idx
+    return -1
+
+
+def _normalize_phone(phone: str) -> str:
+    """Normalize an Indian phone number to 91XXXXXXXXXX format."""
+    if not phone:
+        return ""
+    digits = _re.sub(r"\D", "", phone)
+    if len(digits) == 10:
+        return f"91{digits}"
+    if len(digits) == 12 and digits.startswith("91"):
+        return digits
+    if len(digits) > 10:
+        return f"91{digits[-10:]}"
+    return digits
+
+
+async def fetch_all_pi_sheet_tabs() -> bool:
+    """Fetch ALL grade tabs from the published PI Sheet and rebuild pi_sheet_students.
+
+    This is the authoritative student import function. It:
+    - Fetches every grade tab (38+ tabs) from the published Google Sheet
+    - Handles all column-name variations (FATHERMOBILE, FATHER MOBILE NO., etc.)
+    - Excludes withdrawn students (rows after 'Withdrawal' marker)
+    - Deduplicates by (name, grade)
+    - Replaces all rows in pi_sheet_students
+    """
+    active_students: list[dict] = []
+
+    async with httpx.AsyncClient() as client:
+        for gid in PI_SHEET_GRADE_GIDS:
+            try:
+                url = f"{PI_SHEET_PUB_BASE}&gid={gid}"
+                resp = await client.get(url, timeout=20, follow_redirects=True)
+                if resp.status_code != 200:
+                    logger.warning(f"PI SHEET TAB gid={gid}: HTTP {resp.status_code}")
+                    continue
+
+                text = resp.text
+                if not text or len(text) < 30:
+                    continue
+
+                reader = csv.reader(io.StringIO(text))
+                rows = list(reader)
+                if len(rows) < 2:
+                    continue
+
+                # --- Find header row ---
+                header_idx = -1
+                name_col = -1
+                for i, row in enumerate(rows):
+                    cells_upper = [c.strip().upper() for c in row]
+                    for j, cell in enumerate(cells_upper):
+                        if cell in ("STUDENT NAME", "STUDENTNAME", "STUDENT  NAME"):
+                            header_idx = i
+                            name_col = j
+                            break
+                    if header_idx >= 0:
+                        break
+                if header_idx < 0 or name_col < 0:
+                    continue
+
+                header_cells = [c.strip() for c in rows[header_idx]]
+                header_upper = [c.upper() for c in header_cells]
+
+                grade_col = -1
+                for j, cell in enumerate(header_upper):
+                    if cell == "GRADE":
+                        grade_col = j
+                        break
+
+                father_phone_col = _find_phone_column(header_cells, "FATHER")
+                mother_phone_col = _find_phone_column(header_cells, "MOTHER")
+
+                # Determine tab grade from first data row
+                tab_grade = ""
+                if grade_col >= 0:
+                    for row in rows[header_idx + 1 :]:
+                        if grade_col < len(row) and row[grade_col].strip():
+                            tab_grade = row[grade_col].strip()
+                            break
+
+                # --- Parse student rows ---
+                in_withdrawal = False
+                for i in range(header_idx + 1, len(rows)):
+                    row = rows[i]
+                    row_text = ",".join(row).strip().lower()
+
+                    if not row_text or row_text.replace(",", "").strip() == "":
+                        continue
+
+                    if "withdrawal" in row_text or "withdraw" in row_text:
+                        in_withdrawal = True
+                        continue
+
+                    if in_withdrawal:
+                        continue
+
+                    if name_col >= len(row):
+                        continue
+
+                    name = row[name_col].strip()
+                    if (
+                        not name
+                        or len(name) < 2
+                        or name.upper()
+                        in ("STUDENT NAME", "STUDENTNAME", "S.NO.", "SR. NO.", "NAME")
+                        or name.isdigit()
+                    ):
+                        continue
+
+                    grade = (
+                        row[grade_col].strip()
+                        if grade_col >= 0
+                        and grade_col < len(row)
+                        and row[grade_col].strip()
+                        else tab_grade
+                    )
+                    grade = _normalize_grade_for_db(grade)
+
+                    fp = (
+                        _normalize_phone(row[father_phone_col].strip())
+                        if father_phone_col >= 0 and father_phone_col < len(row)
+                        else ""
+                    )
+                    mp = (
+                        _normalize_phone(row[mother_phone_col].strip())
+                        if mother_phone_col >= 0 and mother_phone_col < len(row)
+                        else ""
+                    )
+
+                    active_students.append(
+                        {
+                            "name": name,
+                            "grade": grade,
+                            "father_phone": fp,
+                            "mother_phone": mp,
+                        }
+                    )
+
+            except Exception as e:
+                logger.warning(f"PI SHEET TAB gid={gid}: {e}")
+                continue
+
+    if not active_students:
+        logger.error("PI SHEET FULL REFRESH: No students found across any tab")
+        return False
+
+    # --- Deduplicate by (NAME, GRADE) ---
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict] = []
+    for s in active_students:
+        key = (s["name"].upper().strip(), s["grade"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(s)
+
+    logger.info(
+        f"PI SHEET FULL REFRESH: {len(unique)} unique active students "
+        f"(from {len(active_students)} raw, {len(active_students) - len(unique)} duplicates removed)"
+    )
+
+    # --- Replace all rows in pi_sheet_students ---
+    from app.database import get_db
+
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM pi_sheet_students")
+
+        for s in unique:
+            await db.execute(
+                "INSERT INTO pi_sheet_students "
+                "(student_name, grade, father_name, mother_name, "
+                "father_mobile, mother_mobile, address, transport) "
+                "VALUES (?, ?, '', '', ?, ?, '', '')",
+                (s["name"], s["grade"], s["father_phone"], s["mother_phone"]),
+            )
+
+        await db.commit()
+
+        # Report phone coverage
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM pi_sheet_students "
+            "WHERE (father_mobile != '' AND father_mobile IS NOT NULL) "
+            "OR (mother_mobile != '' AND mother_mobile IS NOT NULL)"
+        )
+        with_phones = (await cur.fetchone())[0]
+        logger.info(
+            f"PI SHEET FULL REFRESH: {len(unique)} students written, "
+            f"{with_phones} with phone numbers, "
+            f"{len(unique) - with_phones} missing phones"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"PI SHEET FULL REFRESH: DB error: {e}")
+        return False
+    finally:
+        await db.close()
+
 
 def _normalize_grade_name(grade_raw: str) -> list[str]:
     """Normalize a grade string to canonical form (e.g. 'GRADE 3B' -> 'Grade 3B').

@@ -360,6 +360,38 @@ async def get_students(
         await db.close()
 
 
+@router.post("/students/refresh")
+async def refresh_students():
+    """Re-import all students from the PI Sheet (all grade tabs).
+
+    Fetches every grade tab, excludes withdrawn students, deduplicates,
+    and replaces the pi_sheet_students table.
+    """
+    from app.services.sheet_refresh_service import fetch_all_pi_sheet_tabs
+
+    result = await fetch_all_pi_sheet_tabs()
+    if result:
+        db = await get_db()
+        try:
+            cursor = await db.execute("SELECT COUNT(*) FROM pi_sheet_students")
+            total = (await cursor.fetchone())[0]
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM pi_sheet_students "
+                "WHERE (father_mobile != '' AND father_mobile IS NOT NULL) "
+                "OR (mother_mobile != '' AND mother_mobile IS NOT NULL)"
+            )
+            with_phones = (await cursor.fetchone())[0]
+            return {
+                "status": "ok",
+                "total_students": total,
+                "with_phones": with_phones,
+                "missing_phones": total - with_phones,
+            }
+        finally:
+            await db.close()
+    return {"status": "error", "message": "Failed to refresh PI Sheet data"}
+
+
 @router.delete("/students/{student_id}")
 async def delete_student(student_id: int):
     db = await get_db()
