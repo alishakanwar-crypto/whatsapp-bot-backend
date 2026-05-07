@@ -840,6 +840,112 @@ async def meal_monitoring_status():
     return _meal_monitoring_status or {"running": False}
 
 
+@app.get("/api/meal-monitoring/config")
+async def meal_monitoring_config():
+    """Get meal monitoring configuration including schedule and enabled state."""
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT value FROM settings WHERE key = 'meal_monitoring_enabled'"
+        )
+        row = await cursor.fetchone()
+        enabled = row[0] == "1" if row else False
+    except Exception:
+        enabled = False
+    finally:
+        await db.close()
+
+    return {
+        "enabled": enabled,
+        "schedule": {
+            "short_break": {"time_ist": "08:50 AM", "time_utc": "03:20"},
+            "lunch": {"time_ist": "11:20 AM", "time_utc": "05:50"},
+        },
+    }
+
+
+@app.post("/api/meal-monitoring/toggle")
+async def toggle_meal_monitoring(request: Request):
+    """Enable or disable automatic meal monitoring.
+
+    Body JSON:
+      - enabled: true/false
+    """
+    body = await request.json()
+    enabled = body.get("enabled", False)
+
+    from app.database import get_db
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO settings (key, value) VALUES ('meal_monitoring_enabled', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("1" if enabled else "0",),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    # Update the scheduler
+    from app.services.scheduler_service import scheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    if enabled:
+        from app.services.meal_monitoring_service import run_meal_monitoring_sync
+        scheduler.add_job(
+            run_meal_monitoring_sync,
+            trigger=CronTrigger(hour=3, minute=20, second=0),
+            args=["short_break"],
+            id="meal_monitoring_short_break",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            run_meal_monitoring_sync,
+            trigger=CronTrigger(hour=5, minute=50, second=0),
+            args=["lunch"],
+            id="meal_monitoring_lunch",
+            replace_existing=True,
+        )
+    else:
+        try:
+            scheduler.remove_job("meal_monitoring_short_break")
+        except Exception:
+            pass
+        try:
+            scheduler.remove_job("meal_monitoring_lunch")
+        except Exception:
+            pass
+
+    return {"status": "ok", "enabled": enabled}
+
+
+@app.get("/api/meal-monitoring/grades")
+async def meal_monitoring_grades():
+    """List all grades with their camera mapping status."""
+    from app.services.meal_monitoring_service import (
+        _get_all_classroom_grades,
+        _pi_grade_to_camera_key,
+    )
+    from app.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT DISTINCT grade FROM pi_sheet_students ORDER BY grade"
+        )
+        all_grades = [r[0] for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+    result = []
+    for g in all_grades:
+        cam = _pi_grade_to_camera_key(g)
+        result.append({"grade": g, "camera": cam or "", "has_camera": cam is not None})
+
+    return {"grades": result, "total": len(result), "with_camera": sum(1 for r in result if r["has_camera"])}
+
+
 # ---------------------------------------------------------------------------
 # Homework Delivery API
 # ---------------------------------------------------------------------------

@@ -627,24 +627,36 @@ def start_scheduler() -> None:
     logger.info("Scheduled health monitor every 60 seconds")
 
     # --- Meal Monitoring ---
-    # DISABLED: Auto-trigger paused until testing is complete.
-    # Use POST /api/meal-monitoring/trigger to test manually.
-    # from app.services.meal_monitoring_service import run_meal_monitoring_sync
-    # scheduler.add_job(
-    #     run_meal_monitoring_sync,
-    #     trigger=CronTrigger(hour=3, minute=20, second=0),
-    #     args=["short_break"],
-    #     id="meal_monitoring_short_break",
-    #     replace_existing=True,
-    # )
-    # scheduler.add_job(
-    #     run_meal_monitoring_sync,
-    #     trigger=CronTrigger(hour=5, minute=50, second=0),
-    #     args=["lunch"],
-    #     id="meal_monitoring_lunch",
-    #     replace_existing=True,
-    # )
-    logger.info("Meal monitoring auto-trigger DISABLED (use manual trigger for testing)")
+    # Loads enabled state from settings table. Use the control panel to toggle.
+    import sqlite3 as _sqlite3
+    _meal_enabled = False
+    try:
+        _conn = _sqlite3.connect("/data/app.db")
+        _row = _conn.execute("SELECT value FROM settings WHERE key='meal_monitoring_enabled'").fetchone()
+        _meal_enabled = _row and _row[0] == "1"
+        _conn.close()
+    except Exception:
+        pass
+
+    from app.services.meal_monitoring_service import run_meal_monitoring_sync
+    if _meal_enabled:
+        scheduler.add_job(
+            run_meal_monitoring_sync,
+            trigger=CronTrigger(hour=3, minute=20, second=0),
+            args=["short_break"],
+            id="meal_monitoring_short_break",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            run_meal_monitoring_sync,
+            trigger=CronTrigger(hour=5, minute=50, second=0),
+            args=["lunch"],
+            id="meal_monitoring_lunch",
+            replace_existing=True,
+        )
+        logger.info("Meal monitoring auto-trigger ENABLED (from settings)")
+    else:
+        logger.info("Meal monitoring auto-trigger DISABLED (toggle from control panel)")
 
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
