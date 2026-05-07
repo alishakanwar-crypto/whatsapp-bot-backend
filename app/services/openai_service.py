@@ -851,15 +851,15 @@ async def generate_homework_review(
     student_name: str = "",
     grade: str = "",
 ) -> str:
-    """Analyze a homework/notebook photo and return corrections & feedback.
+    """Analyze a homework/notebook photo using a two-step approach.
 
-    Uses GPT-4o vision to read handwritten work and provide:
-    - Subject identification
-    - Error detection (math, spelling, grammar, content)
-    - Specific corrections
-    - Encouraging overall feedback
+    Step 1: GPT-4o reads the handwritten numbers (OCR only)
+    Step 2: Python verifies the math (100% accurate computation)
+
+    This prevents GPT from marking correct answers as wrong.
     """
     import base64
+    import json
 
     ai_client = get_client()
     if ai_client is None:
@@ -873,90 +873,227 @@ async def generate_homework_review(
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         data_uri = f"data:{mime_type};base64,{b64}"
 
-        student_context = ""
-        if student_name and grade:
-            student_context = f"Student: {student_name} ({grade}). "
-        elif student_name:
-            student_context = f"Student: {student_name}. "
-        elif grade:
-            student_context = f"Grade: {grade}. "
-
-        review_prompt = (
-            "You are an experienced school teacher reviewing a student's homework. "
-            f"{student_context}"
-            "A parent sent this photo of their child's work.\n\n"
-            "STEP-BY-STEP PROCESS — follow exactly:\n\n"
-            "STEP 1: IDENTIFY the subject and topic.\n\n"
-            "STEP 2: For EACH problem, do this internal analysis (do NOT include this in your reply):\n"
-            "  a) Read the first number digit by digit. Children's handwriting can be messy — "
-            "look very carefully at each digit. Common confusions: 0 vs 9, 1 vs 7, 3 vs 8, 5 vs 6.\n"
-            "  b) Read the second number digit by digit.\n"
-            "  c) Read the student's answer digit by digit.\n"
-            "  d) Compute the correct answer yourself: add ones column first, carry if needed, "
-            "then tens, hundreds, thousands. Show your work mentally.\n"
-            "  e) Compare YOUR computed answer with what the STUDENT actually wrote.\n"
-            "  f) If they match → ✅. If they don't → ❌.\n\n"
-            "STEP 3: For column-based math (Th H T O format):\n"
-            "  - Th = Thousands, H = Hundreds, T = Tens, O = Ones\n"
-            "  - Read each row as a COMPLETE number: Th=3 H=2 T=4 O=6 means 3246\n"
-            "  - The LAST row (after the line) is the student's answer\n"
-            "  - Small circled numbers above columns are carry marks — these are NOT part of the answer\n"
-            "  - The answer is the bottom row after the addition line\n\n"
-            "STEP 4: CRITICAL — Read digits with extreme care:\n"
-            "  - Zoom into each digit individually\n"
-            "  - If a digit looks ambiguous, consider which interpretation makes the math correct\n"
-            "  - Children often write correct answers — do NOT assume errors\n"
-            "  - If your computed answer matches the student's answer, it IS correct — mark ✅\n"
-            "  - Only mark ❌ when you are CERTAIN the student's answer differs from the correct answer\n\n"
-            "OUTPUT FORMAT (WhatsApp-compatible):\n"
-            "📚 *Homework Review*\n"
-            f"{'*Student:* ' + student_name + chr(10) if student_name else ''}"
-            "*Subject:* [subject]\n"
-            "*Topic:* [topic]\n\n"
-            "*Results:*\n"
-            "For each problem, write ONE line:\n"
-            "• ✅ (a) 3246 + 3123 = 6369 — Correct!\n"
-            "• ❌ (b) 5682 + 3125 — Student wrote 8907. Correct answer: 8807.\n\n"
-            "*Score:* X out of Y correct\n\n"
-            "*Overall:* [Brief encouraging feedback]\n\n"
-            "RULES:\n"
-            "- Only ❌ for ACTUAL errors you are CERTAIN about\n"
-            "- Only ✅ for correct answers\n"
-            "- NEVER show both ❌ and ✅ for the same problem\n"
-            "- When uncertain about a digit, lean toward the student being correct\n"
-            "- If handwriting is unclear, say so and skip that problem\n"
-            "- Be encouraging and positive"
-        )
-
         caption_text = caption.strip() if caption else ""
-        if caption_text:
-            review_prompt += f"\n\nParent's message: {caption_text}"
 
-        user_content: list[dict] = [
-            {"type": "text", "text": review_prompt},
-            {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
-        ]
-
-        messages: list[dict] = [
-            {"role": "system", "content": "You are an expert school teacher who carefully checks homework. You read each handwritten digit with extreme precision — zooming in and considering the shape carefully before deciding what digit it is. You ALWAYS compute math answers yourself column by column (ones, tens, hundreds, thousands) with proper carry. You NEVER mark a correct answer as wrong. When a digit is ambiguous, you choose the interpretation that makes the student's answer correct."},
-            {"role": "user", "content": user_content},
-        ]
-
-        response = await ai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            max_tokens=1200,
-            temperature=0.1,
+        # ---------------------------------------------------------------
+        # STEP 1: GPT reads the handwritten content (OCR only)
+        # ---------------------------------------------------------------
+        ocr_prompt = (
+            "You are an OCR expert reading a student's handwritten homework.\n\n"
+            "Look at this image and extract ALL the math problems.\n\n"
+            "For each problem, identify:\n"
+            "- The operation (addition, subtraction, multiplication, division)\n"
+            "- All the numbers being operated on (operands)\n"
+            "- The student's written answer (the final result they wrote)\n\n"
+            "READING TIPS for handwriting:\n"
+            "- If numbers are in columns labeled Th H T O (Thousands, Hundreds, Tens, Ones), "
+            "read each row as one complete number. Example: Th=3, H=2, T=4, O=6 → 3246\n"
+            "- The LAST row (below the line) is the student's answer\n"
+            "- Small circled/superscript numbers ABOVE columns are carry marks — IGNORE them, "
+            "they are NOT part of any number\n"
+            "- Read each digit carefully: 0 can look like 9, 1 can look like 7\n"
+            "- If a digit is truly ambiguous, pick the most likely interpretation\n\n"
+            "If the image is NOT math homework, respond with:\n"
+            '{\"is_math\": false, \"subject\": \"[subject]\", \"description\": \"[what you see]\"}\n\n'
+            "If it IS math homework, respond with ONLY this JSON (no other text):\n"
+            "{\n"
+            '  "is_math": true,\n'
+            '  "subject": "Mathematics",\n'
+            '  "topic": "Addition of 4-digit numbers",\n'
+            '  "problems": [\n'
+            '    {"label": "a", "operation": "+", "operands": [3246, 3123], "student_answer": 6369},\n'
+            '    {"label": "b", "operation": "+", "operands": [5682, 3125], "student_answer": 8807}\n'
+            "  ]\n"
+            "}\n\n"
+            "IMPORTANT:\n"
+            "- Output ONLY valid JSON, no markdown, no explanation\n"
+            "- Read the student's answer very carefully — this is the number at the bottom after the line\n"
+            "- There may be 2 or 3 or more operands per problem (e.g. three numbers being added)\n"
+            "- Include ALL problems visible in the image"
         )
 
-        reply = response.choices[0].message.content
-        if reply is None:
-            return "I received the homework photo but could not generate a review. Please try again."
-        return reply.strip()
+        if caption_text:
+            ocr_prompt += f"\n\nParent's note: {caption_text}"
+
+        ocr_messages: list[dict] = [
+            {"role": "system", "content": "You are a precise OCR system. Output only valid JSON. Read handwritten digits with extreme care."},
+            {"role": "user", "content": [
+                {"type": "text", "text": ocr_prompt},
+                {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
+            ]},
+        ]
+
+        ocr_response = await ai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=ocr_messages,
+            max_tokens=1500,
+            temperature=0.0,
+        )
+
+        ocr_text = ocr_response.choices[0].message.content or ""
+        ocr_text = ocr_text.strip()
+        # Strip markdown code fences if present
+        if ocr_text.startswith("```"):
+            ocr_text = ocr_text.split("\n", 1)[1] if "\n" in ocr_text else ocr_text[3:]
+            if ocr_text.endswith("```"):
+                ocr_text = ocr_text[:-3].strip()
+
+        logger.info(f"[HOMEWORK REVIEW] OCR result: {ocr_text[:500]}")
+
+        try:
+            data = json.loads(ocr_text)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, fall back to single-step approach
+            logger.warning("[HOMEWORK REVIEW] OCR JSON parse failed, using fallback")
+            return await _homework_review_fallback(
+                ai_client, data_uri, student_name, grade, caption_text
+            )
+
+        # ---------------------------------------------------------------
+        # STEP 2: Python does the math verification (100% accurate)
+        # ---------------------------------------------------------------
+        if not data.get("is_math"):
+            # Not math homework — generate a general review
+            return await _homework_review_fallback(
+                ai_client, data_uri, student_name, grade, caption_text
+            )
+
+        subject = data.get("subject", "Mathematics")
+        topic = data.get("topic", "Math")
+        problems = data.get("problems", [])
+
+        if not problems:
+            return await _homework_review_fallback(
+                ai_client, data_uri, student_name, grade, caption_text
+            )
+
+        # Verify each problem with Python math
+        results: list[str] = []
+        correct_count = 0
+        total_count = len(problems)
+
+        for p in problems:
+            label = p.get("label", "?")
+            operation = p.get("operation", "+")
+            operands = p.get("operands", [])
+            student_ans = p.get("student_answer")
+
+            if not operands or student_ans is None:
+                continue
+
+            # Compute the correct answer using Python
+            try:
+                if operation == "+":
+                    correct_ans = sum(operands)
+                elif operation == "-":
+                    correct_ans = operands[0] - sum(operands[1:])
+                elif operation in ("*", "×"):
+                    correct_ans = 1
+                    for n in operands:
+                        correct_ans *= n
+                elif operation in ("/", "÷"):
+                    correct_ans = operands[0] // operands[1] if len(operands) > 1 else operands[0]
+                else:
+                    correct_ans = sum(operands)
+            except Exception:
+                correct_ans = None
+
+            if correct_ans is None:
+                continue
+
+            # Format the problem string
+            op_symbol = operation if operation in ("+", "-") else ("×" if operation in ("*", "×") else "÷")
+            problem_str = f" {op_symbol} ".join(str(n) for n in operands)
+
+            # Compare student answer to correct answer
+            if int(student_ans) == int(correct_ans):
+                results.append(f"• ✅ ({label}) {problem_str} = {correct_ans} — Correct!")
+                correct_count += 1
+            else:
+                results.append(
+                    f"• ❌ ({label}) {problem_str} — Student wrote {student_ans}. "
+                    f"Correct answer: {correct_ans}."
+                )
+
+        # ---------------------------------------------------------------
+        # STEP 3: Format the final response
+        # ---------------------------------------------------------------
+        header = "📚 *Homework Review*\n"
+        if student_name:
+            header += f"*Student:* {student_name}\n"
+        header += f"*Subject:* {subject}\n"
+        header += f"*Topic:* {topic}\n"
+
+        results_str = "\n".join(results)
+
+        score_str = f"*Score:* {correct_count} out of {total_count} correct"
+
+        # Generate encouraging feedback
+        if correct_count == total_count:
+            overall = "*Overall:* Excellent work! All answers are correct. Keep it up! 🌟"
+        elif correct_count >= total_count * 0.7:
+            overall = f"*Overall:* Great effort! Most answers are correct. Just review the ones marked ❌ and practice carrying over numbers. You're doing well! 😊"
+        elif correct_count >= total_count * 0.4:
+            overall = f"*Overall:* Good try! Keep practicing — focus on carrying over numbers carefully when adding columns. You'll get better with practice! 💪"
+        else:
+            overall = f"*Overall:* Keep trying! Practice makes perfect. Focus on adding one column at a time (ones, then tens, then hundreds, then thousands) and remember to carry over when a column adds up to 10 or more. You can do it! 💪"
+
+        return f"{header}\n*Results:*\n{results_str}\n\n{score_str}\n\n{overall}"
 
     except Exception as e:
-        logger.error(f"Homework review vision error: {e}")
+        logger.error(f"Homework review vision error: {e}", exc_info=True)
         return "I received the homework photo but encountered an error while reviewing. Please try again."
+
+
+async def _homework_review_fallback(
+    ai_client,
+    data_uri: str,
+    student_name: str,
+    grade: str,
+    caption_text: str,
+) -> str:
+    """Fallback: single-step review for non-math or when OCR JSON fails."""
+    student_context = ""
+    if student_name and grade:
+        student_context = f"Student: {student_name} ({grade}). "
+    elif student_name:
+        student_context = f"Student: {student_name}. "
+
+    prompt = (
+        "You are a school teacher reviewing a student's homework. "
+        f"{student_context}"
+        "A parent sent this photo. Analyze the work and provide feedback.\n\n"
+        "Format your response as:\n"
+        "📚 *Homework Review*\n"
+        f"{'*Student:* ' + student_name + chr(10) if student_name else ''}"
+        "*Subject:* [subject]\n"
+        "*Topic:* [topic]\n\n"
+        "*Feedback:*\n[Your detailed review with corrections if needed]\n\n"
+        "*Overall:* [Brief encouraging assessment]\n\n"
+        "Be encouraging and specific. If you see errors, explain the correction clearly."
+    )
+    if caption_text:
+        prompt += f"\n\nParent's message: {caption_text}"
+
+    messages: list[dict] = [
+        {"role": "system", "content": "You are a helpful and encouraging school teacher."},
+        {"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
+        ]},
+    ]
+
+    response = await ai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        max_tokens=1200,
+        temperature=0.2,
+    )
+
+    reply = response.choices[0].message.content
+    if reply is None:
+        return "I received the homework photo but could not generate a review. Please try again."
+    return reply.strip()
 
 
 async def _send_quota_alert() -> None:
