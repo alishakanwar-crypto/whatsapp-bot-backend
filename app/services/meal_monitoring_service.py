@@ -275,19 +275,20 @@ async def run_meal_monitoring(break_type: str = "lunch",
                 sent_phones.add(digits)
 
                 try:
-                    # Strategy: Send template first (works outside 24-hr window),
-                    # then send the image. Template opens conversation window.
-                    # Try ppis_meal_update template first (with image header).
+                    # Strategy: Send template WITH image header first (single message).
+                    # If that fails, send text template + separate image.
+                    image_in_template = False
                     tmpl_ok = await send_cloud_template_message(
                         digits,
                         "ppis_meal_update",
                         body_params=[grade_label, date_str, capture_ts],
                         header_image_id=media_id,
                     )
+                    if tmpl_ok:
+                        image_in_template = True
 
                     if not tmpl_ok:
-                        # Fallback: send ppis_meal_update without image header
-                        # (in case the template doesn't have IMAGE header approved)
+                        # Template with image header not supported — try text-only
                         tmpl_ok = await send_cloud_template_message(
                             digits,
                             "ppis_meal_update",
@@ -295,8 +296,7 @@ async def run_meal_monitoring(break_type: str = "lunch",
                         )
 
                     if not tmpl_ok:
-                        # Last resort: use ppis_attendance_alert template
-                        # (guaranteed approved) to open the conversation window
+                        # Last resort: use ppis_class_assignment template
                         tmpl_ok = await send_cloud_template_message(
                             digits,
                             "ppis_class_assignment",
@@ -306,12 +306,24 @@ async def run_meal_monitoring(break_type: str = "lunch",
                             ],
                         )
 
-                    if tmpl_ok:
-                        # Template opened conversation window — now send image
-                        await asyncio.sleep(1)
-                        await send_cloud_media(
+                    if tmpl_ok and not image_in_template:
+                        # Template was text-only — send image separately.
+                        # Template opens conversation window for free-form messages.
+                        await asyncio.sleep(2)
+                        img_ok = await send_cloud_media(
                             digits, "image", media_id=media_id, caption=caption,
                         )
+                        if not img_ok:
+                            # Retry once after a longer delay
+                            logger.warning(f"Meal monitoring: image send retry for {digits}")
+                            await asyncio.sleep(3)
+                            img_ok = await send_cloud_media(
+                                digits, "image", media_id=media_id, caption=caption,
+                            )
+                        if not img_ok:
+                            logger.error(f"Meal monitoring: image send FAILED for {digits} after retry")
+
+                    if tmpl_ok:
                         grade_sent += 1
                     else:
                         grade_failed += 1
