@@ -743,6 +743,95 @@ async def set_whatsapp_creds(request: Request):
     return {"status": "ok", "saved": saved}
 
 
+# ---------------------------------------------------------------------------
+# Meal Monitoring API
+# ---------------------------------------------------------------------------
+
+_meal_monitoring_status: dict = {}
+
+
+@app.post("/api/meal-monitoring/trigger")
+async def trigger_meal_monitoring(request: Request):
+    """Manually trigger meal monitoring for testing.
+
+    Body JSON:
+      - break_type: "short_break" or "lunch" (default "lunch")
+    """
+    import os
+    from fastapi import HTTPException
+
+    agent_secret = os.environ.get("AGENT_SECRET", "")
+    if agent_secret:
+        header_secret = request.headers.get("x-agent-secret", "")
+        if header_secret != agent_secret:
+            raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
+
+    global _meal_monitoring_status
+    if _meal_monitoring_status.get("running"):
+        return {"status": "already_running", **_meal_monitoring_status}
+
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    break_type = body.get("break_type", "lunch")
+
+    from app.services.meal_monitoring_service import run_meal_monitoring
+
+    _meal_monitoring_status = {"running": True, "break_type": break_type}
+    try:
+        result = await run_meal_monitoring(break_type)
+        _meal_monitoring_status = {"running": False, **result}
+        return result
+    except Exception as e:
+        _meal_monitoring_status = {"running": False, "error": str(e)}
+        return {"status": "error", "error": str(e)}
+
+
+@app.get("/api/meal-monitoring/logs")
+async def meal_monitoring_logs(
+    date: str | None = None,
+    limit: int = 100,
+):
+    """Get meal monitoring logs.
+
+    Query params:
+      - date: YYYY-MM-DD (default today IST)
+      - limit: max rows (default 100)
+    """
+    from app.database import get_db
+
+    db = await get_db()
+    try:
+        if not date:
+            date = "date('now', '+5 hours', '+30 minutes')"
+            cursor = await db.execute(
+                f"SELECT * FROM meal_monitoring_logs "
+                f"WHERE date(created_at) = {date} "
+                f"ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM meal_monitoring_logs "
+                "WHERE date(created_at) = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (date, limit),
+            )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return {
+            "status": "ok",
+            "count": len(rows),
+            "logs": [dict(zip(cols, r)) for r in rows],
+        }
+    finally:
+        await db.close()
+
+
+@app.get("/api/meal-monitoring/status")
+async def meal_monitoring_status():
+    """Get current meal monitoring run status."""
+    return _meal_monitoring_status or {"running": False}
+
+
 @app.get("/privacy-policy")
 async def privacy_policy():
     from fastapi.responses import HTMLResponse

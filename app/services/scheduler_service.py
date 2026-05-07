@@ -626,6 +626,28 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled health monitor every 60 seconds")
 
+    # --- Meal Monitoring ---
+    # Short Break: 8:50 AM IST = 3:20 UTC
+    from app.services.meal_monitoring_service import run_meal_monitoring_sync
+    scheduler.add_job(
+        run_meal_monitoring_sync,
+        trigger=CronTrigger(hour=3, minute=20, second=0),
+        args=["short_break"],
+        id="meal_monitoring_short_break",
+        replace_existing=True,
+    )
+    logger.info("Scheduled meal monitoring for Short Break at 8:50 AM IST (3:20 UTC)")
+
+    # Lunch Break: 11:20 AM IST = 5:50 UTC
+    scheduler.add_job(
+        run_meal_monitoring_sync,
+        trigger=CronTrigger(hour=5, minute=50, second=0),
+        args=["lunch"],
+        id="meal_monitoring_lunch",
+        replace_existing=True,
+    )
+    logger.info("Scheduled meal monitoring for Lunch Break at 11:20 AM IST (5:50 UTC)")
+
     scheduler.start()
     logger.info("Scheduler started successfully")
 

@@ -173,6 +173,18 @@ async def init_db():
                 image_data BLOB NOT NULL,
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS meal_monitoring_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                grade TEXT NOT NULL,
+                camera_key TEXT NOT NULL DEFAULT '',
+                break_type TEXT NOT NULL DEFAULT '',
+                capture_time TEXT NOT NULL DEFAULT '',
+                parents_sent INTEGER NOT NULL DEFAULT 0,
+                parents_failed INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # ------------------------------------------------------------------
