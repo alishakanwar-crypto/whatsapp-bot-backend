@@ -756,6 +756,8 @@ async def trigger_meal_monitoring(request: Request):
 
     Body JSON:
       - break_type: "short_break" or "lunch" (default "lunch")
+      - grade: (optional) Only process this specific grade, e.g. "Grade 3C"
+      - phones: (optional) Only send to these specific phone numbers
     """
     import os
     from fastapi import HTTPException
@@ -772,12 +774,18 @@ async def trigger_meal_monitoring(request: Request):
 
     body = await request.json() if request.headers.get("content-type") == "application/json" else {}
     break_type = body.get("break_type", "lunch")
+    target_grade = body.get("grade")
+    target_phones = body.get("phones")
 
     from app.services.meal_monitoring_service import run_meal_monitoring
 
     _meal_monitoring_status = {"running": True, "break_type": break_type}
     try:
-        result = await run_meal_monitoring(break_type)
+        result = await run_meal_monitoring(
+            break_type,
+            target_grade=target_grade,
+            target_phones=target_phones,
+        )
         _meal_monitoring_status = {"running": False, **result}
         return result
     except Exception as e:

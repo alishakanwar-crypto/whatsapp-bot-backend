@@ -139,11 +139,15 @@ async def _log_meal_snapshot(grade: str, camera_key: str, break_type: str,
 # Core meal monitoring logic
 # ---------------------------------------------------------------------------
 
-async def run_meal_monitoring(break_type: str = "lunch") -> dict:
-    """Capture snapshots from all classroom cameras and send to parents.
+async def run_meal_monitoring(break_type: str = "lunch",
+                              target_grade: str | None = None,
+                              target_phones: list[str] | None = None) -> dict:
+    """Capture snapshots from classroom cameras and send to parents.
 
     Args:
         break_type: "short_break" or "lunch"
+        target_grade: If set, only process this specific grade (e.g. "Grade 3C")
+        target_phones: If set, only send to these phone numbers (for testing)
 
     Returns summary dict with sent/failed counts.
     """
@@ -159,14 +163,18 @@ async def run_meal_monitoring(break_type: str = "lunch") -> dict:
     time_str = now_ist.strftime("%I:%M %p")
     break_label = "Short Break" if break_type == "short_break" else "Lunch Break"
 
-    logger.info(f"=== MEAL MONITORING START: {break_label} at {time_str} IST ===")
+    test_mode = bool(target_grade or target_phones)
+    logger.info(f"=== MEAL MONITORING START: {break_label} at {time_str} IST {'(TEST MODE)' if test_mode else ''} ===")
 
     if not is_agent_connected():
         logger.error("Meal monitoring: agent not connected, aborting")
         return {"status": "error", "error": "agent_not_connected", "sent": 0, "failed": 0}
 
-    grades = await _get_all_classroom_grades()
-    logger.info(f"Meal monitoring: {len(grades)} grades with cameras to capture")
+    if target_grade:
+        grades = [target_grade]
+    else:
+        grades = await _get_all_classroom_grades()
+    logger.info(f"Meal monitoring: {len(grades)} grades to capture")
 
     total_sent = 0
     total_failed = 0
@@ -241,6 +249,16 @@ async def run_meal_monitoring(break_type: str = "lunch") -> dict:
         grade_sent = 0
         grade_failed = 0
 
+        # Normalize target_phones for matching
+        _target_set: set[str] | None = None
+        if target_phones:
+            _target_set = set()
+            for tp in target_phones:
+                d = "".join(c for c in tp if c.isdigit())
+                if len(d) == 10:
+                    d = "91" + d
+                _target_set.add(d)
+
         for parent in parents:
             for phone in [parent["father_phone"], parent["mother_phone"]]:
                 if not phone or len(phone) < 10:
@@ -251,6 +269,9 @@ async def run_meal_monitoring(break_type: str = "lunch") -> dict:
                     digits = "91" + digits
                 if digits in sent_phones:
                     continue  # Avoid duplicate
+                # Filter by target phones if specified
+                if _target_set and digits not in _target_set:
+                    continue
                 sent_phones.add(digits)
 
                 try:
