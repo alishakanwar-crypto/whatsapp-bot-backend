@@ -259,12 +259,17 @@ async def send_cloud_template_message(
     template_name: str,
     language_code: str = "en",
     body_params: list[str] | None = None,
+    header_image_id: str | None = None,
+    header_image_url: str | None = None,
 ) -> bool:
     """Send a template message via Meta Cloud API.
 
     Template messages can be sent outside the 24-hour conversation window,
     unlike plain text messages.  ``body_params`` is a list of positional
     parameter values ({{1}}, {{2}}, …) for the template body.
+
+    For templates with IMAGE headers, pass either ``header_image_id``
+    (uploaded media ID) or ``header_image_url`` (public URL).
     """
     token = get_cloud_token()
     phone_id = get_cloud_phone_id()
@@ -279,19 +284,34 @@ async def send_cloud_template_message(
     url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
+    components: list[dict] = []
+
+    # Image header component (for templates with IMAGE header)
+    if header_image_id or header_image_url:
+        img_param: dict = {"type": "image"}
+        if header_image_id:
+            img_param["image"] = {"id": header_image_id}
+        else:
+            img_param["image"] = {"link": header_image_url}
+        components.append({
+            "type": "header",
+            "parameters": [img_param],
+        })
+
+    if body_params:
+        components.append({
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": p} for p in body_params
+            ],
+        })
+
     template_obj: dict = {
         "name": template_name,
         "language": {"code": language_code},
     }
-    if body_params:
-        template_obj["components"] = [
-            {
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": p} for p in body_params
-                ],
-            }
-        ]
+    if components:
+        template_obj["components"] = components
 
     payload = {
         "messaging_product": "whatsapp",

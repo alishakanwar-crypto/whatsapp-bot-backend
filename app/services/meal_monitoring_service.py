@@ -151,6 +151,7 @@ async def run_meal_monitoring(break_type: str = "lunch") -> dict:
     from app.services.whatsapp_service import (
         upload_base64_image_cloud,
         send_cloud_media,
+        send_cloud_template_message,
     )
 
     now_ist = datetime.now(IST)
@@ -218,10 +219,11 @@ async def run_meal_monitoring(break_type: str = "lunch") -> dict:
             total_skipped += 1
             continue
 
-        # Build caption with tags
+        # Build caption and template params
         section_tag = f" - Section {section}" if section else ""
+        grade_label = f"{class_name}{section_tag}"
         caption = (
-            f"📸 *{class_name}{section_tag}*\n"
+            f"📸 *{grade_label}*\n"
             f"📅 Date: {date_str} | 🕐 Time: {capture_ts}\n"
             f"🍽️ {break_label}\n\n"
             f"Be Assured, your child has taken meal."
@@ -252,10 +254,43 @@ async def run_meal_monitoring(break_type: str = "lunch") -> dict:
                 sent_phones.add(digits)
 
                 try:
-                    success = await send_cloud_media(
-                        digits, "image", media_id=media_id, caption=caption,
+                    # Strategy: Send template first (works outside 24-hr window),
+                    # then send the image. Template opens conversation window.
+                    # Try ppis_meal_update template first (with image header).
+                    tmpl_ok = await send_cloud_template_message(
+                        digits,
+                        "ppis_meal_update",
+                        body_params=[grade_label, date_str, capture_ts],
+                        header_image_id=media_id,
                     )
-                    if success:
+
+                    if not tmpl_ok:
+                        # Fallback: send ppis_meal_update without image header
+                        # (in case the template doesn't have IMAGE header approved)
+                        tmpl_ok = await send_cloud_template_message(
+                            digits,
+                            "ppis_meal_update",
+                            body_params=[grade_label, date_str, capture_ts],
+                        )
+
+                    if not tmpl_ok:
+                        # Last resort: use ppis_attendance_alert template
+                        # (guaranteed approved) to open the conversation window
+                        tmpl_ok = await send_cloud_template_message(
+                            digits,
+                            "ppis_class_assignment",
+                            body_params=[
+                                f"Meal update: {grade_label}",
+                                f"{date_str} {capture_ts}",
+                            ],
+                        )
+
+                    if tmpl_ok:
+                        # Template opened conversation window — now send image
+                        await asyncio.sleep(1)
+                        await send_cloud_media(
+                            digits, "image", media_id=media_id, caption=caption,
+                        )
                         grade_sent += 1
                     else:
                         grade_failed += 1
