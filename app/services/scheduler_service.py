@@ -648,6 +648,33 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled meal monitoring for Lunch Break at 11:20 AM IST (5:50 UTC)")
 
+    # --- Homework Delivery (Google Docs) ---
+    # Check homework docs after each period ends.
+    # Times are offset by +3 minutes to give teachers time to update.
+    # IST → UTC: subtract 5h30m
+    from app.services.homework_delivery_service import run_homework_delivery_sync
+
+    _hw_schedule = [
+        # (period, hour_utc, minute_utc, description)
+        (1, 3, 23, "Period 1 ends 08:50 IST → check 08:53 IST = 03:23 UTC"),
+        (2, 4, 8,  "Period 2 ends 09:35 IST → check 09:38 IST = 04:08 UTC"),
+        (3, 4, 43, "Period 3 ends 10:10 IST → check 10:13 IST = 04:43 UTC"),
+        (4, 5, 18, "Period 4 ends 10:45 IST → check 10:48 IST = 05:18 UTC"),
+        (5, 5, 53, "Period 5 ends 11:20 IST → check 11:23 IST = 05:53 UTC"),
+        (6, 6, 53, "Period 6 ends 12:20 IST → check 12:23 IST = 06:53 UTC"),
+        (7, 7, 28, "Period 7 ends 12:55 IST → check 12:58 IST = 07:28 UTC"),
+        (8, 8, 3,  "Period 8 ends 01:30 IST → check 01:33 IST = 08:03 UTC"),
+    ]
+    for period, h_utc, m_utc, desc in _hw_schedule:
+        scheduler.add_job(
+            run_homework_delivery_sync,
+            trigger=CronTrigger(hour=h_utc, minute=m_utc, second=0),
+            args=[period],
+            id=f"homework_delivery_period_{period}",
+            replace_existing=True,
+        )
+        logger.info(f"Scheduled homework delivery: {desc}")
+
     scheduler.start()
     logger.info("Scheduler started successfully")
 

@@ -185,6 +185,32 @@ async def init_db():
                 status TEXT NOT NULL DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS homework_docs (
+                grade TEXT PRIMARY KEY,
+                doc_id TEXT NOT NULL,
+                doc_url TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS homework_doc_state (
+                grade TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL DEFAULT '',
+                last_content TEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS homework_delivery_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                grade TEXT NOT NULL,
+                period INTEGER NOT NULL DEFAULT 0,
+                content TEXT NOT NULL DEFAULT '',
+                parents_sent INTEGER NOT NULL DEFAULT 0,
+                parents_failed INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT '',
+                delivery_time TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # ------------------------------------------------------------------

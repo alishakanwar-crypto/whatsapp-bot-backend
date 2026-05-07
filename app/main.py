@@ -832,6 +832,118 @@ async def meal_monitoring_status():
     return _meal_monitoring_status or {"running": False}
 
 
+# ---------------------------------------------------------------------------
+# Homework Delivery API
+# ---------------------------------------------------------------------------
+
+_homework_delivery_status: dict = {}
+
+
+@app.post("/api/homework/trigger")
+async def trigger_homework_delivery(request: Request):
+    """Manually trigger homework delivery check for a specific period.
+
+    Body JSON:
+      - period: 1-8 (required)
+    """
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    period = body.get("period", 0)
+    if not period or period < 1 or period > 8:
+        return {"status": "error", "error": "period must be 1-8"}
+
+    global _homework_delivery_status
+    if _homework_delivery_status.get("running"):
+        return {"status": "already_running", **_homework_delivery_status}
+
+    from app.services.homework_delivery_service import run_homework_delivery
+
+    _homework_delivery_status = {"running": True, "period": period}
+    try:
+        result = await run_homework_delivery(period)
+        _homework_delivery_status = {"running": False, **result}
+        return result
+    except Exception as e:
+        _homework_delivery_status = {"running": False, "error": str(e)}
+        return {"status": "error", "error": str(e)}
+
+
+@app.get("/api/homework/logs")
+async def homework_delivery_logs(limit: int = 50):
+    """Get recent homework delivery logs."""
+    from app.services.homework_delivery_service import get_homework_logs
+    logs = await get_homework_logs(limit)
+    return {"status": "ok", "count": len(logs), "logs": logs}
+
+
+@app.get("/api/homework/docs")
+async def list_homework_docs():
+    """List all registered homework Google Docs."""
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT grade, doc_id, doc_url, created_at FROM homework_docs ORDER BY grade"
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return {
+            "status": "ok",
+            "count": len(rows),
+            "docs": [dict(zip(cols, r)) for r in rows],
+        }
+    finally:
+        await db.close()
+
+
+@app.post("/api/homework/register-doc")
+async def register_homework_doc_endpoint(request: Request):
+    """Register a Google Doc for a class's homework.
+
+    Body JSON:
+      - grade: e.g. "Grade 3A"
+      - doc_id: Google Doc ID
+      - doc_url: (optional) full URL
+    """
+    body = await request.json()
+    grade = body.get("grade", "")
+    doc_id = body.get("doc_id", "")
+    doc_url = body.get("doc_url", "")
+    if not grade or not doc_id:
+        return {"status": "error", "error": "grade and doc_id required"}
+
+    from app.services.homework_delivery_service import register_homework_doc
+    ok = await register_homework_doc(grade, doc_id, doc_url)
+    return {"status": "ok" if ok else "error", "grade": grade, "doc_id": doc_id}
+
+
+@app.post("/api/homework/register-docs-bulk")
+async def register_homework_docs_bulk(request: Request):
+    """Bulk register homework docs.
+
+    Body JSON:
+      - docs: [{grade, doc_id, doc_url}, ...]
+    """
+    body = await request.json()
+    docs = body.get("docs", [])
+    if not docs:
+        return {"status": "error", "error": "docs list required"}
+
+    from app.services.homework_delivery_service import register_homework_doc
+    results = []
+    for d in docs:
+        ok = await register_homework_doc(d["grade"], d["doc_id"], d.get("doc_url", ""))
+        results.append({"grade": d["grade"], "ok": ok})
+
+    return {"status": "ok", "registered": len([r for r in results if r["ok"]]),
+            "results": results}
+
+
+@app.get("/api/homework/status")
+async def homework_delivery_status():
+    """Get current homework delivery status."""
+    return _homework_delivery_status or {"running": False}
+
+
 @app.get("/privacy-policy")
 async def privacy_policy():
     from fastapi.responses import HTMLResponse
