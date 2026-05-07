@@ -882,30 +882,44 @@ async def generate_homework_review(
             student_context = f"Grade: {grade}. "
 
         review_prompt = (
-            "You are an experienced, encouraging school teacher reviewing a student's homework/notebook work. "
+            "You are an experienced school teacher reviewing a student's homework. "
             f"{student_context}"
-            "The parent has sent this photo of their child's completed work for review.\n\n"
-            "Your task:\n"
-            "1. Identify the SUBJECT and TOPIC from the work shown\n"
-            "2. Read the handwritten/typed content carefully\n"
-            "3. Check for ERRORS — math calculation mistakes, spelling errors, grammar issues, "
-            "incorrect answers, incomplete work\n"
-            "4. Provide SPECIFIC CORRECTIONS with the correct answers\n"
-            "5. Give an encouraging overall assessment\n\n"
-            "Format your response as:\n"
+            "A parent sent this photo of their child's work.\n\n"
+            "CRITICAL INSTRUCTIONS — read carefully:\n\n"
+            "1. IDENTIFY the subject and topic.\n"
+            "2. READ each problem carefully. For math:\n"
+            "   - If numbers are in columns (Th H T O = Thousands Hundreds Tens Ones), "
+            "read each row as a COMPLETE number. Example: if Th=3 H=2 T=4 O=6, that is 3246.\n"
+            "   - Identify the operation (addition, subtraction, etc.)\n"
+            "   - Read the student's final answer as a COMPLETE number.\n"
+            "3. VERIFY each answer yourself by computing the correct result. "
+            "ACTUALLY DO THE MATH — do not guess or assume.\n"
+            "4. COMPARE the student's answer to your computed answer:\n"
+            "   - If they MATCH → mark ✅ and state the problem briefly\n"
+            "   - If they DON'T MATCH → mark ❌, show what the student wrote, "
+            "and show the correct answer\n"
+            "5. Do NOT mark correct answers as wrong. Do NOT show ❌ then ✅ for the same problem.\n\n"
+            "FORMAT (use WhatsApp-compatible formatting):\n"
             "📚 *Homework Review*\n"
             f"{'*Student:* ' + student_name + chr(10) if student_name else ''}"
-            "*Subject:* [identified subject]\n"
-            "*Topic:* [identified topic]\n\n"
-            "*Corrections:*\n"
-            "[List specific errors with corrections. Use ❌ for wrong and ✅ for correct]\n\n"
-            "*Overall:* [Brief encouraging feedback — praise effort, note areas to improve]\n\n"
-            "If the image is NOT homework/notebook work (e.g. a random photo, document, etc.), "
-            "politely say: 'This doesn't appear to be homework/notebook work. "
-            "Please share a clear photo of the completed work for review.'\n\n"
-            "If the handwriting is too unclear to read, say so honestly and ask for a clearer photo.\n\n"
-            "Keep the response concise but thorough. Use simple language suitable for parents. "
-            "Be encouraging — focus on what the child did well first, then corrections."
+            "*Subject:* [subject]\n"
+            "*Topic:* [topic]\n\n"
+            "*Results:*\n"
+            "For each problem, write ONE line:\n"
+            "• ✅ (a) 3246 + 3123 = 6369 — Correct!\n"
+            "• ❌ (b) 5682 + 3125 = 8807 — Student wrote 8907. Correct answer: 8807.\n\n"
+            "Then at the end:\n"
+            "*Score:* X out of Y correct\n\n"
+            "*Overall:* [Brief encouraging feedback. Praise what they did well. "
+            "If there are mistakes, gently explain the pattern of errors.]\n\n"
+            "IMPORTANT RULES:\n"
+            "- Only use ❌ for ACTUAL errors where the student's answer is wrong\n"
+            "- Only use ✅ for correct answers\n"
+            "- Never show both ❌ and ✅ for the same problem\n"
+            "- If the image is not homework, say so politely\n"
+            "- If handwriting is too unclear, ask for a clearer photo\n"
+            "- Keep language simple (for parents)\n"
+            "- Be encouraging and positive"
         )
 
         caption_text = caption.strip() if caption else ""
@@ -918,15 +932,15 @@ async def generate_homework_review(
         ]
 
         messages: list[dict] = [
-            {"role": "system", "content": "You are a helpful and encouraging school teacher."},
+            {"role": "system", "content": "You are an expert school teacher who carefully checks homework. You ALWAYS verify math by computing the answer yourself before marking correct or incorrect. You NEVER mark a correct answer as wrong."},
             {"role": "user", "content": user_content},
         ]
 
         response = await ai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=messages,
-            max_tokens=800,
-            temperature=0.3,
+            max_tokens=1200,
+            temperature=0.1,
         )
 
         reply = response.choices[0].message.content
