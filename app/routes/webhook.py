@@ -3212,7 +3212,7 @@ async def receive_whatsapp_message(request: Request):
             except Exception as img_exc:
                 logger.error(f"[GREEN IMAGE HANDLER] Exception: {img_exc}", exc_info=True)
 
-            # Vision fallback: describe the image via GPT
+            # Homework review: auto-analyze notebook/homework photos from parents
             try:
                 import httpx as _httpx
                 direct_url = media_info.get("url", "")
@@ -3220,19 +3220,20 @@ async def receive_whatsapp_message(request: Request):
                     async with _httpx.AsyncClient(timeout=30) as _client:
                         _resp = await _client.get(direct_url)
                         if _resp.status_code == 200:
-                            from app.services.openai_service import generate_vision_response
-                            system_prompt = await get_system_prompt()
-                            history = await get_conversation_history(sender)
+                            from app.services.openai_service import generate_homework_review
                             caption = media_info.get("caption", "")
-                            ai_response = await generate_vision_response(
+                            children_green = await _lookup_parent_child_class(sender)
+                            child_name = children_green[0]["student_name"] if children_green else ""
+                            child_grade = children_green[0]["grade"] if children_green else ""
+                            ai_response = await generate_homework_review(
                                 _resp.content, _resp.headers.get("content-type", "image/jpeg"),
-                                caption, system_prompt, history,
+                                caption, student_name=child_name, grade=child_grade,
                             )
                             await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
                             await send_whatsapp_message(reply_to, ai_response)
                             return {"status": "ok"}
             except Exception as vis_exc:
-                logger.error(f"[GREEN IMAGE HANDLER] Vision fallback error: {vis_exc}", exc_info=True)
+                logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
 
             # If all image processing fails, acknowledge receipt
             err_msg = "Your image has been received. Please try sending it again if needed."
@@ -4077,11 +4078,42 @@ async def receive_cloud_api_message(request: Request):
 
             else:
                 # No Name+Class in caption → general file/document
-                # Do NOT ask for student name/class, do NOT attempt registration
-                # Forward to class teacher based on context
+                # For images from parents: auto-review as homework
+                # Also forward to class teacher
                 logger.info(f"[IMAGE HANDLER] General file/document from {sender}")
                 caption = (media_info.get("caption", "") or "").strip()
                 forward_text = caption if caption else "Shared a file/image"
+
+                # --- Automatic Homework Review (for images only) ---
+                is_image_msg = media_info.get("type") == "imageMessage"
+                cloud_mid = media_info.get("cloud_media_id", "")
+                if is_image_msg and cloud_mid:
+                    logger.info(f"[HOMEWORK REVIEW] Auto-reviewing image from parent {sender}")
+                    try:
+                        from app.services.whatsapp_service import download_cloud_media
+                        from app.services.openai_service import generate_homework_review
+
+                        img_bytes, img_mime = await download_cloud_media(cloud_mid)
+                        if img_bytes:
+                            # Look up child info for context
+                            children_hw = await _lookup_parent_child_class(sender)
+                            child_name = children_hw[0]["student_name"] if children_hw else ""
+                            child_grade = children_hw[0]["grade"] if children_hw else ""
+
+                            review = await generate_homework_review(
+                                img_bytes, img_mime, caption,
+                                student_name=child_name, grade=child_grade,
+                            )
+                            del img_bytes  # free memory
+                            await save_message(bot_phone, sender, review, "whatsapp", "outgoing")
+                            await send_whatsapp_message(reply_to, review)
+                            logger.info(f"[HOMEWORK REVIEW] Sent review to {sender}")
+                            return {"status": "ok"}
+                        else:
+                            logger.warning(f"[HOMEWORK REVIEW] Could not download image for {sender}")
+                    except Exception as hw_exc:
+                        logger.error(f"[HOMEWORK REVIEW] Error: {hw_exc}", exc_info=True)
+                    # Fall through to normal routing if review fails
 
                 # Try parent→teacher routing (works for non-admin parents)
                 routed = await try_route_parent_to_class_teacher(

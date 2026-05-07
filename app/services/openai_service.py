@@ -844,6 +844,101 @@ async def generate_vision_response(
         return "I received your image but encountered an error processing it. Please try again."
 
 
+async def generate_homework_review(
+    image_bytes: bytes,
+    mime_type: str,
+    caption: str,
+    student_name: str = "",
+    grade: str = "",
+) -> str:
+    """Analyze a homework/notebook photo and return corrections & feedback.
+
+    Uses GPT-4o vision to read handwritten work and provide:
+    - Subject identification
+    - Error detection (math, spelling, grammar, content)
+    - Specific corrections
+    - Encouraging overall feedback
+    """
+    import base64
+
+    ai_client = get_client()
+    if ai_client is None:
+        return (
+            "Thank you for sharing the homework! "
+            "Our AI assistant is currently unavailable. "
+            "Please try again later."
+        )
+
+    try:
+        b64 = base64.b64encode(image_bytes).decode("utf-8")
+        data_uri = f"data:{mime_type};base64,{b64}"
+
+        student_context = ""
+        if student_name and grade:
+            student_context = f"Student: {student_name} ({grade}). "
+        elif student_name:
+            student_context = f"Student: {student_name}. "
+        elif grade:
+            student_context = f"Grade: {grade}. "
+
+        review_prompt = (
+            "You are an experienced, encouraging school teacher reviewing a student's homework/notebook work. "
+            f"{student_context}"
+            "The parent has sent this photo of their child's completed work for review.\n\n"
+            "Your task:\n"
+            "1. Identify the SUBJECT and TOPIC from the work shown\n"
+            "2. Read the handwritten/typed content carefully\n"
+            "3. Check for ERRORS — math calculation mistakes, spelling errors, grammar issues, "
+            "incorrect answers, incomplete work\n"
+            "4. Provide SPECIFIC CORRECTIONS with the correct answers\n"
+            "5. Give an encouraging overall assessment\n\n"
+            "Format your response as:\n"
+            "📚 *Homework Review*\n"
+            f"{'*Student:* ' + student_name + chr(10) if student_name else ''}"
+            "*Subject:* [identified subject]\n"
+            "*Topic:* [identified topic]\n\n"
+            "*Corrections:*\n"
+            "[List specific errors with corrections. Use ❌ for wrong and ✅ for correct]\n\n"
+            "*Overall:* [Brief encouraging feedback — praise effort, note areas to improve]\n\n"
+            "If the image is NOT homework/notebook work (e.g. a random photo, document, etc.), "
+            "politely say: 'This doesn't appear to be homework/notebook work. "
+            "Please share a clear photo of the completed work for review.'\n\n"
+            "If the handwriting is too unclear to read, say so honestly and ask for a clearer photo.\n\n"
+            "Keep the response concise but thorough. Use simple language suitable for parents. "
+            "Be encouraging — focus on what the child did well first, then corrections."
+        )
+
+        caption_text = caption.strip() if caption else ""
+        if caption_text:
+            review_prompt += f"\n\nParent's message: {caption_text}"
+
+        user_content: list[dict] = [
+            {"type": "text", "text": review_prompt},
+            {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
+        ]
+
+        messages: list[dict] = [
+            {"role": "system", "content": "You are a helpful and encouraging school teacher."},
+            {"role": "user", "content": user_content},
+        ]
+
+        response = await ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=800,
+            temperature=0.3,
+        )
+
+        reply = response.choices[0].message.content
+        if reply is None:
+            return "I received the homework photo but could not generate a review. Please try again."
+        return reply.strip()
+
+    except Exception as e:
+        logger.error(f"Homework review vision error: {e}")
+        return "I received the homework photo but encountered an error while reviewing. Please try again."
+
+
 async def _send_quota_alert() -> None:
     """Send a WhatsApp alert to the admin when OpenAI quota is exceeded."""
     global _QUOTA_ALERT_SENT
