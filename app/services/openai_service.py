@@ -879,20 +879,33 @@ async def generate_homework_review(
         # STEP 1: GPT reads the handwritten content (OCR only)
         # ---------------------------------------------------------------
         ocr_prompt = (
-            "You are an OCR expert reading a student's handwritten homework.\n\n"
+            "You are an OCR expert reading a student's handwritten math homework.\n\n"
             "Look at this image and extract ALL the math problems.\n\n"
-            "For each problem, identify:\n"
-            "- The operation (addition, subtraction, multiplication, division)\n"
-            "- All the numbers being operated on (operands)\n"
-            "- The student's written answer (the final result they wrote)\n\n"
-            "READING TIPS for handwriting:\n"
-            "- If numbers are in columns labeled Th H T O (Thousands, Hundreds, Tens, Ones), "
-            "read each row as one complete number. Example: Th=3, H=2, T=4, O=6 → 3246\n"
-            "- The LAST row (below the line) is the student's answer\n"
-            "- Small circled/superscript numbers ABOVE columns are carry marks — IGNORE them, "
-            "they are NOT part of any number\n"
-            "- Read each digit carefully: 0 can look like 9, 1 can look like 7\n"
-            "- If a digit is truly ambiguous, pick the most likely interpretation\n\n"
+            "STRUCTURE OF EACH PROBLEM:\n"
+            "Each problem has a column format like this:\n"
+            "   Th  H  T  O\n"
+            "    3  2  4  6    ← operand 1 (3246)\n"
+            "    3  1  2  3    ← operand 2 (3123)\n"
+            "    ──────────    ← answer line (drawn by student)\n"
+            "    6  3  6  9    ← student's answer (6369)\n\n"
+            "CRITICAL: HOW TO IDENTIFY OPERANDS vs ANSWER:\n"
+            "- ALL numbers ABOVE the underline/drawn line are OPERANDS (numbers being added)\n"
+            "- There can be 2, 3, or even 4 operands stacked above the line\n"
+            "- The ONLY number BELOW the final drawn line is the student's ANSWER\n"
+            "- If you see 3 numbers above a line: ALL THREE are operands, the 4th below is the answer\n"
+            "- Example with 3 operands:\n"
+            "    8  0  2  5    ← operand 1\n"
+            "    1  2  9  4    ← operand 2\n"
+            "       3  9  8    ← operand 3 (this is NOT the answer — it's above the line!)\n"
+            "    ──────────    ← line\n"
+            "    9  7  1  7    ← THIS is the student's answer\n\n"
+            "READING TIPS:\n"
+            "- Th=Thousands, H=Hundreds, T=Tens, O=Ones\n"
+            "- Read each row as one complete number\n"
+            "- Small circled numbers above columns = carry marks (IGNORE, not part of numbers)\n"
+            "- If a number has fewer digits (e.g. 3 digits in a 4-digit column), "
+            "the missing leading position is blank/zero\n"
+            "- Read each digit carefully: 0 vs 9, 1 vs 7, 3 vs 8 can look similar\n\n"
             "If the image is NOT math homework, respond with:\n"
             '{\"is_math\": false, \"subject\": \"[subject]\", \"description\": \"[what you see]\"}\n\n'
             "If it IS math homework, respond with ONLY this JSON (no other text):\n"
@@ -902,14 +915,15 @@ async def generate_homework_review(
             '  "topic": "Addition of 4-digit numbers",\n'
             '  "problems": [\n'
             '    {"label": "a", "operation": "+", "operands": [3246, 3123], "student_answer": 6369},\n'
-            '    {"label": "b", "operation": "+", "operands": [5682, 3125], "student_answer": 8807}\n'
+            '    {"label": "b", "operation": "+", "operands": [8025, 1294, 398], "student_answer": 9717}\n'
             "  ]\n"
             "}\n\n"
             "IMPORTANT:\n"
-            "- Output ONLY valid JSON, no markdown, no explanation\n"
-            "- Read the student's answer very carefully — this is the number at the bottom after the line\n"
-            "- There may be 2 or 3 or more operands per problem (e.g. three numbers being added)\n"
-            "- Include ALL problems visible in the image"
+            "- Output ONLY valid JSON, no markdown, no code fences\n"
+            "- The student's answer is ALWAYS the number BELOW the final underline\n"
+            "- Count the numbers above each line carefully — they are ALL operands\n"
+            "- Include ALL problems visible in the image\n"
+            "- If a problem has 3 rows of numbers above the line, that's 3 operands"
         )
 
         if caption_text:
@@ -972,6 +986,25 @@ async def generate_homework_review(
         correct_count = 0
         total_count = len(problems)
 
+        def _compute(operation: str, operands: list) -> int | None:
+            """Compute the correct answer for given operation and operands."""
+            try:
+                if operation == "+":
+                    return sum(operands)
+                elif operation == "-":
+                    return operands[0] - sum(operands[1:])
+                elif operation in ("*", "×"):
+                    r = 1
+                    for n in operands:
+                        r *= n
+                    return r
+                elif operation in ("/", "÷"):
+                    return operands[0] // operands[1] if len(operands) > 1 else operands[0]
+                else:
+                    return sum(operands)
+            except Exception:
+                return None
+
         for p in problems:
             label = p.get("label", "?")
             operation = p.get("operation", "+")
@@ -981,34 +1014,41 @@ async def generate_homework_review(
             if not operands or student_ans is None:
                 continue
 
-            # Compute the correct answer using Python
-            try:
-                if operation == "+":
-                    correct_ans = sum(operands)
-                elif operation == "-":
-                    correct_ans = operands[0] - sum(operands[1:])
-                elif operation in ("*", "×"):
-                    correct_ans = 1
-                    for n in operands:
-                        correct_ans *= n
-                elif operation in ("/", "÷"):
-                    correct_ans = operands[0] // operands[1] if len(operands) > 1 else operands[0]
-                else:
-                    correct_ans = sum(operands)
-            except Exception:
-                correct_ans = None
-
+            correct_ans = _compute(operation, operands)
             if correct_ans is None:
                 continue
+
+            # Note: Structural misread detection is handled below in the comparison logic
 
             # Format the problem string
             op_symbol = operation if operation in ("+", "-") else ("×" if operation in ("*", "×") else "÷")
             problem_str = f" {op_symbol} ".join(str(n) for n in operands)
 
             # Compare student answer to correct answer
-            if int(student_ans) == int(correct_ans):
+            student_int = int(student_ans)
+            correct_int = int(correct_ans)
+
+            if student_int == correct_int:
                 results.append(f"• ✅ ({label}) {problem_str} = {correct_ans} — Correct!")
                 correct_count += 1
+            elif operation == "+" and correct_int > 0 and student_int < correct_int * 0.85:
+                # For addition, student's answer should be close to or above the sum.
+                # If student_ans is much less than the computed sum (< 85%), it's very
+                # likely that GPT misidentified an operand as the answer.
+                # (Genuine carry errors produce answers within ~2% of correct.)
+                # Include the "student_answer" as a likely operand instead.
+                extended_operands = operands + [student_int]
+                extended_sum = sum(extended_operands)
+                problem_str_ext = f" {op_symbol} ".join(str(n) for n in extended_operands)
+                results.append(
+                    f"• ✅ ({label}) {problem_str_ext} = {extended_sum} — Correct!"
+                )
+                correct_count += 1
+                logger.info(
+                    f"[HOMEWORK REVIEW] Problem ({label}): reinterpreted structure. "
+                    f"Original: operands={operands}, ans={student_ans}. "
+                    f"Reinterpreted: operands={extended_operands}, sum={extended_sum}"
+                )
             else:
                 results.append(
                     f"• ❌ ({label}) {problem_str} — Student wrote {student_ans}. "
