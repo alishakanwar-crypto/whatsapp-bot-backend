@@ -3360,6 +3360,44 @@ async def receive_whatsapp_message(request: Request):
                 except Exception as e:
                     logger.error(f"[GREEN IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
 
+        # Teacher face reg for teachers NOT in TEACHER_DATA (Green API path)
+        if has_image_green and not is_teacher_green:
+            _gcap_raw = (media_info.get("caption", "") or "").strip()
+            _gcap_low = _gcap_raw.lower()
+            _G_TEACHER_KW = [
+                "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
+                "register", "face", "selfie", "attendance", "register me",
+                "my photo", "my face", "economics", "physics", "chemistry",
+                "biology", "maths", "mathematics", "english", "hindi",
+                "science", "social", "computer", "art", "music", "dance",
+                "sports", "physical education", "p.e.", "commerce",
+                "accounts", "business", "history", "geography", "sanskrit",
+                "french", "coordinator", "hod", "head of department",
+            ]
+            if any(kw in _gcap_low for kw in _G_TEACHER_KW):
+                _tname = _gcap_raw
+                for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. "]:
+                    if _tname.startswith(_pf):
+                        _tname = _tname[len(_pf):]
+                _tname = re.sub(r"\s*\(.*?\)", "", _tname)
+                for _kw in _G_TEACHER_KW:
+                    _tname = re.sub(r"\b" + re.escape(_kw) + r"\b", "", _tname, flags=re.IGNORECASE)
+                _tname = re.sub(r"\s+", " ", _tname).strip(" ,-/")
+                if not _tname:
+                    _tname = f"Teacher_{sender[-10:]}"
+                _sd = re.sub(r"\D", "", sender)
+                _sl10 = _sd[-10:] if len(_sd) >= 10 else _sd
+                logger.info(f"[GREEN] Teacher face reg (not in TEACHER_DATA) sender={sender} name='{_tname}'")
+                try:
+                    _handled = await _try_register_teacher_face(
+                        sender, reply_to, bot_phone, media_info,
+                        {"teacher": _tname, "grade": "", "whatsapp": _sl10},
+                    )
+                    if _handled:
+                        return {"status": "ok"}
+                except Exception as _e:
+                    logger.error(f"[GREEN] Non-TEACHER_DATA face reg error: {_e}", exc_info=True)
+
         if has_image_green and not is_teacher_green:
             logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, url={media_info.get('url', '')[:80]}")
             try:
@@ -4324,6 +4362,65 @@ async def receive_cloud_api_message(request: Request):
                         return {"status": "ok"}
                 except Exception as e:
                     logger.error(f"[IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
+
+        # Teacher face registration for teachers NOT in TEACHER_DATA (e.g. PGT/TGT subject teachers).
+        # If someone sends a photo and caption contains teacher-related keywords or their name,
+        # register them for face recognition using sender's phone.
+        if has_image and not is_teacher:
+            caption_raw = (media_info.get("caption", "") or "").strip()
+            caption_lower = caption_raw.lower()
+            _TEACHER_KEYWORDS = [
+                "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
+                "register", "face", "selfie", "attendance", "register me",
+                "my photo", "my face", "economics", "physics", "chemistry",
+                "biology", "maths", "mathematics", "english", "hindi",
+                "science", "social", "computer", "art", "music", "dance",
+                "sports", "physical education", "p.e.", "commerce",
+                "accounts", "business", "history", "geography", "sanskrit",
+                "french", "coordinator", "hod", "head of department",
+            ]
+            has_teacher_keyword = any(kw in caption_lower for kw in _TEACHER_KEYWORDS)
+            if has_teacher_keyword:
+                # Extract teacher name from caption (strip keywords and clean up)
+                teacher_name_from_caption = caption_raw
+                # Remove common prefixes
+                for prefix in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. "]:
+                    if teacher_name_from_caption.startswith(prefix):
+                        teacher_name_from_caption = teacher_name_from_caption[len(prefix):]
+                # Remove parenthetical and keyword suffixes
+                teacher_name_from_caption = re.sub(
+                    r"\s*\(.*?\)", "", teacher_name_from_caption
+                )
+                # Remove known keywords to isolate the name
+                for kw in _TEACHER_KEYWORDS:
+                    teacher_name_from_caption = re.sub(
+                        r"\b" + re.escape(kw) + r"\b", "",
+                        teacher_name_from_caption, flags=re.IGNORECASE,
+                    )
+                teacher_name_from_caption = re.sub(r"\s+", " ", teacher_name_from_caption).strip(" ,-/")
+                if not teacher_name_from_caption:
+                    teacher_name_from_caption = f"Teacher_{sender[-10:]}"
+
+                logger.info(
+                    f"[IMAGE HANDLER] Teacher face reg (not in TEACHER_DATA) "
+                    f"sender={sender} name='{teacher_name_from_caption}' caption='{caption_raw[:80]}'"
+                )
+                # Build a synthetic teacher_entry for _try_register_teacher_face
+                sender_digits = re.sub(r"\D", "", sender)
+                sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
+                synthetic_entry = {
+                    "teacher": teacher_name_from_caption,
+                    "grade": "",
+                    "whatsapp": sender_last10,
+                }
+                try:
+                    handled = await _try_register_teacher_face(
+                        sender, reply_to, bot_phone, media_info, synthetic_entry,
+                    )
+                    if handled:
+                        return {"status": "ok"}
+                except Exception as e:
+                    logger.error(f"[IMAGE HANDLER] Non-TEACHER_DATA face reg error: {e}", exc_info=True)
 
         # Skip early media interception for remaining teacher media (docs, videos, etc).
         # These must reach the homework broadcast and teacher reply relay handlers below.
