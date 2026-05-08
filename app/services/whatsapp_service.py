@@ -261,6 +261,9 @@ async def send_cloud_template_message(
     body_params: list[str] | None = None,
     header_image_id: str | None = None,
     header_image_url: str | None = None,
+    header_document_id: str | None = None,
+    header_document_url: str | None = None,
+    header_document_filename: str | None = None,
 ) -> bool:
     """Send a template message via Meta Cloud API.
 
@@ -270,6 +273,10 @@ async def send_cloud_template_message(
 
     For templates with IMAGE headers, pass either ``header_image_id``
     (uploaded media ID) or ``header_image_url`` (public URL).
+
+    For templates with DOCUMENT headers, pass ``header_document_id``
+    (uploaded media ID) or ``header_document_url`` (public URL), and
+    optionally ``header_document_filename``.
     """
     token = get_cloud_token()
     phone_id = get_cloud_phone_id()
@@ -296,6 +303,22 @@ async def send_cloud_template_message(
         components.append({
             "type": "header",
             "parameters": [img_param],
+        })
+
+    # Document header component (for templates with DOCUMENT header)
+    if header_document_id or header_document_url:
+        doc_param: dict = {"type": "document"}
+        doc_obj: dict = {}
+        if header_document_id:
+            doc_obj["id"] = header_document_id
+        else:
+            doc_obj["link"] = header_document_url
+        if header_document_filename:
+            doc_obj["filename"] = header_document_filename
+        doc_param["document"] = doc_obj
+        components.append({
+            "type": "header",
+            "parameters": [doc_param],
         })
 
     if body_params:
