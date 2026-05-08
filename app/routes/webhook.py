@@ -633,21 +633,35 @@ async def forward_to_teachers_and_confirm(
             wa_success = await send_whatsapp_message(chat_id, notification)
             if wa_success:
                 logger.info(f"Forwarded via WhatsApp to {entry['teacher']} ({teacher_phone})")
-                # Also forward any attached media
+                # Also forward any attached media (document/image/video)
                 if media_info:
-                    from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                    import asyncio as _asyncio_relay
+                    await _asyncio_relay.sleep(2)  # delay for conversation window
                     cloud_mid = media_info.get("cloud_media_id", "")
+                    green_url = media_info.get("url", "")
+                    media_caption = media_info.get("caption", "")
+                    media_ok = False
                     if cloud_mid:
-                        await forward_cloud_media_to_recipient(
-                            media_info, chat_id, caption=media_info.get("caption", "")
-                        )
-                    elif media_info.get("url"):
-                        await forward_file_by_url(
-                            chat_id,
-                            media_info["url"],
-                            media_info.get("filename", "file"),
-                            media_info.get("caption", ""),
-                        )
+                        from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                        try:
+                            media_ok = await forward_cloud_media_to_recipient(
+                                media_info, chat_id, caption=media_caption,
+                            )
+                        except Exception as _me:
+                            logger.error(f"[FWD MEDIA] Cloud error for {entry['teacher']}: {_me}")
+                    if not media_ok and green_url:
+                        try:
+                            media_ok = await forward_file_by_url(
+                                chat_id, green_url,
+                                media_info.get("filename", "file"),
+                                media_caption,
+                            )
+                        except Exception as _me2:
+                            logger.error(f"[FWD MEDIA] Green URL error for {entry['teacher']}: {_me2}")
+                    if media_ok:
+                        logger.info(f"[FWD MEDIA] Media forwarded to {entry['teacher']}")
+                    elif cloud_mid or green_url:
+                        logger.error(f"[FWD MEDIA] FAILED to forward media to {entry['teacher']}")
 
         # Always send email too (Cloud API text may not deliver outside 24h window)
         email_success = False
@@ -1871,12 +1885,38 @@ async def _forward_query_to_class_teacher(
             logger.info(
                 f"[PARENT→TEACHER] Forwarded to {teacher_name} ({teacher_phone}) via WhatsApp"
             )
-            # Forward media if present
-            if media_info and media_info.get("cloud_media_id"):
-                from app.services.whatsapp_service import forward_cloud_media_to_recipient
-                await forward_cloud_media_to_recipient(
-                    media_info, chat_id, caption=media_info.get("caption", "")
-                )
+            # Forward media (document/image/video) if present
+            if media_info:
+                import asyncio as _asyncio
+                await _asyncio.sleep(2)  # delay to let conversation window open
+                cloud_mid = media_info.get("cloud_media_id", "")
+                green_url = media_info.get("url", "")
+                media_caption = media_info.get("caption", "")
+                media_fwd_ok = False
+                if cloud_mid:
+                    from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                    try:
+                        media_fwd_ok = await forward_cloud_media_to_recipient(
+                            media_info, chat_id, caption=media_caption,
+                        )
+                    except Exception as mf_exc:
+                        logger.error(f"[PARENT→TEACHER] Cloud media forward error: {mf_exc}", exc_info=True)
+                if not media_fwd_ok and green_url:
+                    try:
+                        media_fwd_ok = await forward_file_by_url(
+                            chat_id, green_url,
+                            media_info.get("filename", "file"),
+                            media_caption,
+                        )
+                    except Exception as mf_exc2:
+                        logger.error(f"[PARENT→TEACHER] Green URL forward error: {mf_exc2}", exc_info=True)
+                if media_fwd_ok:
+                    logger.info(f"[PARENT→TEACHER] Media forwarded to {teacher_name} successfully")
+                elif cloud_mid or green_url:
+                    logger.error(
+                        f"[PARENT→TEACHER] FAILED to forward media to {teacher_name} "
+                        f"(cloud_mid={cloud_mid[:20] if cloud_mid else 'N/A'}, url={green_url[:40] if green_url else 'N/A'})"
+                    )
             # Save conversation for reply relay
             await save_forwarded_conversation(
                 teacher_phone=teacher_phone,
@@ -4299,12 +4339,32 @@ async def receive_cloud_api_message(request: Request):
                             )
                             await send_whatsapp_message(chat_id, fwd_msg)
                             # Forward the media too
-                            from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                            import asyncio as _asyncio_fwd
+                            await _asyncio_fwd.sleep(2)  # delay for conversation window
                             cloud_mid = media_info.get("cloud_media_id", "")
+                            green_url = media_info.get("url", "")
+                            media_fwd_ok = False
                             if cloud_mid:
-                                await forward_cloud_media_to_recipient(
-                                    media_info, chat_id, caption=caption,
-                                )
+                                from app.services.whatsapp_service import forward_cloud_media_to_recipient
+                                try:
+                                    media_fwd_ok = await forward_cloud_media_to_recipient(
+                                        media_info, chat_id, caption=caption,
+                                    )
+                                except Exception as _mf_err:
+                                    logger.error(f"[CLOUD FILE FWD] Cloud media error: {_mf_err}", exc_info=True)
+                            if not media_fwd_ok and green_url:
+                                try:
+                                    media_fwd_ok = await forward_file_by_url(
+                                        chat_id, green_url,
+                                        media_info.get("filename", "file"),
+                                        caption,
+                                    )
+                                except Exception as _mf_err2:
+                                    logger.error(f"[CLOUD FILE FWD] Green URL error: {_mf_err2}", exc_info=True)
+                            if media_fwd_ok:
+                                logger.info(f"[CLOUD FILE FWD] Media forwarded to {teacher_name}")
+                            elif cloud_mid or green_url:
+                                logger.error(f"[CLOUD FILE FWD] FAILED to forward media to {teacher_name}")
                             # Save conversation for 2-way relay
                             await save_forwarded_conversation(
                                 teacher_phone=teacher_phone,
