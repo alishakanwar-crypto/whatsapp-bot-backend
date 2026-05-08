@@ -746,8 +746,10 @@ async def forward_to_teachers_and_confirm(
                 header_document_filename=m_fname if h_doc_id else None,
             )
             if wa_success:
-                logger.info(f"[FWD] Template sent to {entry['teacher']} att={has_att}")
-                if media_info and not has_att:
+                logger.info(f"[FWD] Template sent to {entry['teacher']}")
+                # Template ppis_class_assignment has no header — always
+                # send media as a separate message after the template.
+                if media_info:
                     await _asyncio_relay.sleep(2)
                     _cmid = media_info.get("cloud_media_id", "")
                     _gurl = media_info.get("url", "")
@@ -1824,7 +1826,8 @@ async def detect_and_handle_leave_application(
 _SKIP_FORWARD_RE = re.compile(
     r"^(?:hi|hello|hey|ok|okay|thanks|thank you|thankyou|thank u|good morning|"
     r"good evening|good night|bye|haan|ji|theek hai|shukriya|dhanyavaad|namaste|"
-    r"hmm|yes|no|nahi|haa|accha|👍|🙏|❤️|😊)\s*[.!?]*$",
+    r"hmm|yes|no|nahi|haa|accha|👍|🙏|❤️|😊|"
+    r"\[reaction received\]|\[sticker received\]|\[unsupported received\])\s*[.!?]*$",
     re.IGNORECASE,
 )
 
@@ -2042,11 +2045,12 @@ async def _forward_query_to_class_teacher(
 
         if wa_success:
             logger.info(
-                f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone}) "
-                f"attachment={'yes' if has_attachment else 'no'}"
+                f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})"
             )
-            # If media wasn't included in template header, send separately
-            if media_info and not has_attachment:
+            # Template ppis_class_assignment has no header component, so
+            # attachments MUST be sent as a separate message after the
+            # template (which opens a conversation window).
+            if media_info:
                 await _asyncio.sleep(2)
                 cloud_mid = media_info.get("cloud_media_id", "")
                 green_url = media_info.get("url", "")
@@ -2058,7 +2062,7 @@ async def _forward_query_to_class_teacher(
                             media_info, chat_id, caption=media_caption,
                         )
                     except Exception as mf_exc:
-                        logger.error(f"[PARENT→TEACHER] Fallback media forward error: {mf_exc}")
+                        logger.error(f"[PARENT→TEACHER] Media forward error: {mf_exc}")
                 if not media_fwd_ok and green_url:
                     try:
                         media_fwd_ok = await forward_file_by_url(
@@ -4396,6 +4400,13 @@ async def receive_cloud_api_message(request: Request):
 
     logger.info(f"Cloud API message from {sender}: {message_text} | media: {media_info is not None}")
 
+    # --- Silently ignore reactions, stickers, and other non-content messages ---
+    # These should NOT be forwarded to teachers or processed by GPT.
+    _msg_type_cloud = msg_obj.get("type", "")
+    if _msg_type_cloud in ("reaction", "sticker", "interactive", "button", "unsupported"):
+        logger.info(f"[SKIP] Ignoring {_msg_type_cloud} message from {sender}")
+        return {"status": "ok"}
+
     # --- Voice message transcription (Cloud API) ---
     if media_info and media_info.get("type") == "audioMessage":
         cloud_media_id = media_info.get("cloud_media_id", "")
@@ -4609,7 +4620,6 @@ async def receive_cloud_api_message(request: Request):
 
                         img_bytes, img_mime = await download_cloud_media(cloud_mid)
                         if img_bytes:
-                            # Look up child info for context
                             children_hw = await _lookup_parent_child_class(sender)
                             child_name = children_hw[0]["student_name"] if children_hw else ""
                             child_grade = children_hw[0]["grade"] if children_hw else ""
@@ -4618,17 +4628,17 @@ async def receive_cloud_api_message(request: Request):
                                 img_bytes, img_mime, caption,
                                 student_name=child_name, grade=child_grade,
                             )
-                            del img_bytes  # free memory
+                            del img_bytes
                             await save_message(bot_phone, sender, review, "whatsapp", "outgoing")
                             await send_whatsapp_message(reply_to, review)
                             logger.info(f"[HOMEWORK REVIEW] Sent review to {sender}")
-                            return {"status": "ok"}
+                            # Do NOT return here — continue to forward image to teacher
                         else:
                             logger.warning(f"[HOMEWORK REVIEW] Could not download image for {sender}")
                     except Exception as hw_exc:
                         logger.error(f"[HOMEWORK REVIEW] Error: {hw_exc}", exc_info=True)
-                    # Fall through to normal routing if review fails
 
+                # Forward attachment + text to class teacher (all file types)
                 # Try parent→teacher routing (works for non-admin parents)
                 routed = await try_route_parent_to_class_teacher(
                     sender, forward_text, reply_to, media_info,
@@ -4716,21 +4726,23 @@ async def receive_cloud_api_message(request: Request):
                                 header_document_filename=_fn3 if _hd3 else None,
                             )
                             if _fwd_ok:
-                                logger.info(f"[CLOUD FILE FWD] Template sent to {teacher_name} att={_ha3}")
-                                if not _ha3:
-                                    await _asyncio_fwd.sleep(2)
-                                    _gurl3 = media_info.get("url", "")
-                                    _mok3 = False
-                                    if _cmid3:
-                                        try:
-                                            _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
-                                        except Exception as _me3:
-                                            logger.error(f"[CLOUD FILE FWD] Fallback error: {_me3}")
-                                    if not _mok3 and _gurl3:
-                                        try:
-                                            _mok3 = await forward_file_by_url(chat_id, _gurl3, _fn3, caption)
-                                        except Exception as _me4:
-                                            logger.error(f"[CLOUD FILE FWD] Green fallback: {_me4}")
+                                logger.info(f"[CLOUD FILE FWD] Template sent to {teacher_name}")
+                                # Template has no header — always send media separately
+                                await _asyncio_fwd.sleep(2)
+                                _gurl3 = media_info.get("url", "")
+                                _mok3 = False
+                                if _cmid3:
+                                    try:
+                                        _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
+                                    except Exception as _me3:
+                                        logger.error(f"[CLOUD FILE FWD] Media forward error: {_me3}")
+                                if not _mok3 and _gurl3:
+                                    try:
+                                        _mok3 = await forward_file_by_url(chat_id, _gurl3, _fn3, caption)
+                                    except Exception as _me4:
+                                        logger.error(f"[CLOUD FILE FWD] Green fallback: {_me4}")
+                                if _mok3:
+                                    logger.info(f"[CLOUD FILE FWD] Media sent separately to {teacher_name}")
                             else:
                                 logger.warning(f"[CLOUD FILE FWD] Template failed for {teacher_name}, using regular msg")
                                 fwd_msg = (
