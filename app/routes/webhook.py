@@ -4454,20 +4454,39 @@ async def receive_cloud_api_message(request: Request):
         if has_image:
             caption_raw = (media_info.get("caption", "") or "").strip()
             caption_lower = caption_raw.lower()
-            # Skip captions that are clearly NOT a person's name
+            # Skip captions that are clearly NOT a person's name.
+            # This must be comprehensive — any short action/request word
+            # that parents commonly use as image captions.
             _NON_NAME_CAPTIONS = [
                 "homework", "check", "check this", "please check", "hi", "hello",
                 "help", "thanks", "thank you", "ok", "yes", "no", "please",
                 "good morning", "good afternoon", "good evening", "show",
+                # Common abbreviations parents use
+                "chk", "chck", "pls", "plz", "plz check", "pls check",
+                "hw", "hmwk", "hmw", "see", "look", "dekho", "dekhiye",
+                "dekhna", "btao", "bataiye", "verify", "review", "done",
+                "send", "share", "shared", "forwarded", "fwd", "correction",
+                "correct", "wrong", "right", "marks", "grade", "test", "exam",
+                "pic", "photo", "image", "screenshot", "ss", "file", "doc",
+                "document", "pdf", "page", "pg", "note", "notes",
+                "sir", "mam", "madam", "ma'am", "teacher",
+                "kindly", "urgent", "asap", "imp", "important",
+                "today", "tomorrow", "kal", "aaj", "abhi",
             ]
             is_non_name = caption_lower in _NON_NAME_CAPTIONS or not caption_raw
-            # Check if caption looks like a person's name (has alphabetic words 2+ chars)
+            # Check if caption looks like a person's name — must have at
+            # least 2 name-like words (first + last name) to avoid false
+            # positives from single words like "Chk", "Look", etc.
             _name_words = [
                 w for w in re.sub(r"[^\w\s]", " ", caption_raw).split()
                 if len(w) >= 2 and w.isalpha()
-                and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my"}
+                and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my",
+                                       "this", "that", "from", "with", "pgt", "tgt", "ntt",
+                                       "teacher", "sir", "mam", "madam", "mrs", "mr", "ms",
+                                       "regards", "good", "morning", "evening", "photo",
+                                       "required", "please", "kindly"}
             ]
-            has_name_in_caption = len(_name_words) >= 1 and not is_non_name
+            has_name_in_caption = len(_name_words) >= 2 and not is_non_name
             # Exclude if it looks like a student photo (has class indicator)
             has_class_indicator = bool(_CAPTION_CLASS_RE.search(caption_raw)) if caption_raw else False
 
