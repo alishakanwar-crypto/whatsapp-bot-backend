@@ -600,6 +600,36 @@ async def push_mapping_endpoint(request: Request):
     return result
 
 
+@router.post("/api/agent/restart")
+async def restart_agent_endpoint():
+    """Send a restart command to the campus agent via WebSocket.
+
+    The agent process will exit, and run_forever.bat will auto-restart it
+    with a fresh `git pull` (picking up latest code changes).
+    """
+    global _agent_ws
+    if _agent_ws is None:
+        return JSONResponse({"error": "Agent not connected"}, status_code=503)
+    try:
+        await _agent_ws.send_json({"type": "restart"})
+        return {"status": "restart_sent", "message": "Agent will restart with git pull"}
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to send restart: {e}"}, status_code=500)
+
+
+@router.post("/api/agent/sync-faces")
+async def sync_faces_endpoint():
+    """Tell the campus agent to sync new faces from cloud immediately."""
+    global _agent_ws
+    if _agent_ws is None:
+        return JSONResponse({"error": "Agent not connected"}, status_code=503)
+    try:
+        await _agent_ws.send_json({"type": "sync_faces"})
+        return {"status": "sync_requested", "message": "Agent will sync faces from cloud"}
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to send sync: {e}"}, status_code=500)
+
+
 @router.get("/api/agent/test-dvrs")
 async def test_dvrs_endpoint():
     """Remotely test DVR connectivity through the campus agent."""
