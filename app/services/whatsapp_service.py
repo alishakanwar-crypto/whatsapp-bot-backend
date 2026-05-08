@@ -84,7 +84,12 @@ def get_cloud_phone_id() -> str:
 
 
 async def send_whatsapp_image(to: str, image_url: str, caption: str = "") -> bool:
-    """Send an image via WhatsApp using Green API's sendFileByUrl."""
+    """Send an image via WhatsApp using the active provider (Cloud API or Green API)."""
+    provider = get_whatsapp_provider()
+    if provider == "cloud":
+        return await send_cloud_media(to, "image", media_url=image_url, caption=caption)
+
+    # Green API fallback
     id_instance = get_id_instance()
     api_token = get_api_token()
     api_url = get_api_url()
@@ -118,17 +123,32 @@ async def send_whatsapp_image(to: str, image_url: str, caption: str = "") -> boo
 
 
 async def send_whatsapp_image_file(to: str, file_path: str, caption: str = "") -> bool:
-    """Send an image via WhatsApp using Green API's sendFileByUpload (multipart upload)."""
+    """Send an image via WhatsApp using the active provider (Cloud API or Green API)."""
+    if not os.path.isfile(file_path):
+        logger.error(f"Image file not found: {file_path}")
+        return False
+
+    provider = get_whatsapp_provider()
+    if provider == "cloud":
+        import mimetypes
+        filename = os.path.basename(file_path)
+        mime_type = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        media_id = await upload_media_bytes_cloud(file_bytes, mime_type, filename)
+        del file_bytes
+        if not media_id:
+            logger.error(f"Cloud API: failed to upload image file {file_path}")
+            return False
+        return await send_cloud_media(to, "image", media_id=media_id, caption=caption)
+
+    # Green API fallback
     id_instance = get_id_instance()
     api_token = get_api_token()
     api_url = get_api_url()
 
     if not id_instance or not api_token:
         logger.error("Green API credentials not configured")
-        return False
-
-    if not os.path.isfile(file_path):
-        logger.error(f"Image file not found: {file_path}")
         return False
 
     chat_id = to if "@" in to else f"{to}@c.us"
@@ -451,8 +471,29 @@ async def _send_green_text(to: str, message: str) -> bool:
         return False
 
 
+def _guess_media_type(file_name: str) -> str:
+    """Guess Cloud API media type from filename extension."""
+    ext = os.path.splitext(file_name)[1].lower()
+    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        return "image"
+    if ext in (".mp4", ".3gp", ".mov", ".avi"):
+        return "video"
+    if ext in (".ogg", ".mp3", ".amr", ".aac", ".opus"):
+        return "audio"
+    return "document"
+
+
 async def forward_file_by_url(to: str, file_url: str, file_name: str, caption: str = "") -> bool:
-    """Forward a file to a WhatsApp chat by URL (works for images, videos, documents, audio)."""
+    """Forward a file to a WhatsApp chat by URL using the active provider (Cloud API or Green API)."""
+    provider = get_whatsapp_provider()
+    if provider == "cloud":
+        media_type = _guess_media_type(file_name)
+        return await send_cloud_media(
+            to, media_type, media_url=file_url, caption=caption,
+            filename=file_name if media_type == "document" else "",
+        )
+
+    # Green API fallback
     id_instance = get_id_instance()
     api_token = get_api_token()
     api_url = get_api_url()
