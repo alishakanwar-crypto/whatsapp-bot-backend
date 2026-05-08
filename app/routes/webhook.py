@@ -3360,34 +3360,50 @@ async def receive_whatsapp_message(request: Request):
                 except Exception as e:
                     logger.error(f"[GREEN IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
 
-        # Teacher face reg for teachers NOT in TEACHER_DATA (Green API path)
+        # Face registration for ANYONE who sends a photo WITH a name (Green API path)
         if has_image_green and not is_teacher_green:
             _gcap_raw = (media_info.get("caption", "") or "").strip()
             _gcap_low = _gcap_raw.lower()
-            _G_TEACHER_KW = [
-                "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
-                "register", "face", "selfie", "attendance", "register me",
-                "my photo", "my face", "economics", "physics", "chemistry",
-                "biology", "maths", "mathematics", "english", "hindi",
-                "science", "social", "computer", "art", "music", "dance",
-                "sports", "physical education", "p.e.", "commerce",
-                "accounts", "business", "history", "geography", "sanskrit",
-                "french", "coordinator", "hod", "head of department",
+            _G_NON_NAME = [
+                "homework", "check", "check this", "please check", "hi", "hello",
+                "help", "thanks", "thank you", "ok", "yes", "no", "please",
+                "good morning", "good afternoon", "good evening", "show",
             ]
-            if any(kw in _gcap_low for kw in _G_TEACHER_KW):
+            _g_is_non_name = _gcap_low in _G_NON_NAME or not _gcap_raw
+            _g_name_words = [
+                w for w in re.sub(r"[^\w\s]", " ", _gcap_raw).split()
+                if len(w) >= 2 and w.isalpha()
+                and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my"}
+            ]
+            _g_has_name = len(_g_name_words) >= 1 and not _g_is_non_name
+            _g_has_class = bool(_CAPTION_CLASS_RE.search(_gcap_raw)) if _gcap_raw else False
+
+            if _g_has_name and not _g_has_class:
                 _tname = _gcap_raw
-                for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. "]:
-                    if _tname.startswith(_pf):
+                for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
+                            "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. "]:
+                    if _tname.lower().startswith(_pf.lower()):
                         _tname = _tname[len(_pf):]
                 _tname = re.sub(r"\s*\(.*?\)", "", _tname)
-                for _kw in _G_TEACHER_KW:
+                _G_DESIG_KW = [
+                    "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
+                    "register", "face", "selfie", "attendance", "register me",
+                    "my photo", "my face", "economics", "physics", "chemistry",
+                    "biology", "maths", "mathematics", "english", "hindi",
+                    "science", "social", "computer", "art", "music", "dance",
+                    "sports", "physical education", "commerce", "accounts",
+                    "business", "history", "geography", "sanskrit", "french",
+                    "coordinator", "hod", "staff", "librarian", "counselor",
+                    "counsellor", "nurse", "receptionist", "principal",
+                ]
+                for _kw in _G_DESIG_KW:
                     _tname = re.sub(r"\b" + re.escape(_kw) + r"\b", "", _tname, flags=re.IGNORECASE)
-                _tname = re.sub(r"\s+", " ", _tname).strip(" ,-/")
+                _tname = re.sub(r"\s+", " ", _tname).strip(" ,-./")
                 if not _tname:
-                    _tname = f"Teacher_{sender[-10:]}"
+                    _tname = f"Staff_{sender[-10:]}"
                 _sd = re.sub(r"\D", "", sender)
                 _sl10 = _sd[-10:] if len(_sd) >= 10 else _sd
-                logger.info(f"[GREEN] Teacher face reg (not in TEACHER_DATA) sender={sender} name='{_tname}'")
+                logger.info(f"[GREEN] Face reg from caption name sender={sender} name='{_tname}'")
                 try:
                     _handled = await _try_register_teacher_face(
                         sender, reply_to, bot_phone, media_info,
@@ -3396,7 +3412,7 @@ async def receive_whatsapp_message(request: Request):
                     if _handled:
                         return {"status": "ok"}
                 except Exception as _e:
-                    logger.error(f"[GREEN] Non-TEACHER_DATA face reg error: {_e}", exc_info=True)
+                    logger.error(f"[GREEN] Caption-based face reg error: {_e}", exc_info=True)
 
         if has_image_green and not is_teacher_green:
             logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, url={media_info.get('url', '')[:80]}")
@@ -4363,53 +4379,68 @@ async def receive_cloud_api_message(request: Request):
                 except Exception as e:
                     logger.error(f"[IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
 
-        # Teacher face registration for teachers NOT in TEACHER_DATA (e.g. PGT/TGT subject teachers).
-        # If someone sends a photo and caption contains teacher-related keywords or their name,
-        # register them for face recognition using sender's phone.
+        # Face registration for ANYONE who sends a photo WITH a name in the caption.
+        # Teachers, staff, etc. who are NOT in TEACHER_DATA can register by sending
+        # a selfie with their name. If caption has Name+Class → student face reg (below).
+        # If caption has just a name (no class indicator) → teacher/staff face reg.
         if has_image and not is_teacher:
             caption_raw = (media_info.get("caption", "") or "").strip()
             caption_lower = caption_raw.lower()
-            _TEACHER_KEYWORDS = [
-                "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
-                "register", "face", "selfie", "attendance", "register me",
-                "my photo", "my face", "economics", "physics", "chemistry",
-                "biology", "maths", "mathematics", "english", "hindi",
-                "science", "social", "computer", "art", "music", "dance",
-                "sports", "physical education", "p.e.", "commerce",
-                "accounts", "business", "history", "geography", "sanskrit",
-                "french", "coordinator", "hod", "head of department",
+            # Skip captions that are clearly NOT a person's name
+            _NON_NAME_CAPTIONS = [
+                "homework", "check", "check this", "please check", "hi", "hello",
+                "help", "thanks", "thank you", "ok", "yes", "no", "please",
+                "good morning", "good afternoon", "good evening", "show",
             ]
-            has_teacher_keyword = any(kw in caption_lower for kw in _TEACHER_KEYWORDS)
-            if has_teacher_keyword:
-                # Extract teacher name from caption (strip keywords and clean up)
-                teacher_name_from_caption = caption_raw
-                # Remove common prefixes
-                for prefix in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. "]:
-                    if teacher_name_from_caption.startswith(prefix):
-                        teacher_name_from_caption = teacher_name_from_caption[len(prefix):]
-                # Remove parenthetical and keyword suffixes
-                teacher_name_from_caption = re.sub(
-                    r"\s*\(.*?\)", "", teacher_name_from_caption
-                )
-                # Remove known keywords to isolate the name
-                for kw in _TEACHER_KEYWORDS:
-                    teacher_name_from_caption = re.sub(
-                        r"\b" + re.escape(kw) + r"\b", "",
-                        teacher_name_from_caption, flags=re.IGNORECASE,
-                    )
-                teacher_name_from_caption = re.sub(r"\s+", " ", teacher_name_from_caption).strip(" ,-/")
-                if not teacher_name_from_caption:
-                    teacher_name_from_caption = f"Teacher_{sender[-10:]}"
+            is_non_name = caption_lower in _NON_NAME_CAPTIONS or not caption_raw
+            # Check if caption looks like a person's name (has alphabetic words 2+ chars)
+            _name_words = [
+                w for w in re.sub(r"[^\w\s]", " ", caption_raw).split()
+                if len(w) >= 2 and w.isalpha()
+                and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my"}
+            ]
+            has_name_in_caption = len(_name_words) >= 1 and not is_non_name
+            # Exclude if it looks like a student photo (has class indicator)
+            has_class_indicator = bool(_CAPTION_CLASS_RE.search(caption_raw)) if caption_raw else False
+
+            if has_name_in_caption and not has_class_indicator:
+                # Extract the person's name from caption
+                _clean_name = caption_raw
+                # Remove honorifics
+                for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
+                            "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. "]:
+                    if _clean_name.lower().startswith(_pf.lower()):
+                        _clean_name = _clean_name[len(_pf):]
+                # Remove parenthetical info
+                _clean_name = re.sub(r"\s*\(.*?\)", "", _clean_name)
+                # Remove common designation keywords to isolate the name
+                _DESIGNATION_KW = [
+                    "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
+                    "register", "face", "selfie", "attendance", "register me",
+                    "my photo", "my face", "economics", "physics", "chemistry",
+                    "biology", "maths", "mathematics", "english", "hindi",
+                    "science", "social", "computer", "art", "music", "dance",
+                    "sports", "physical education", "commerce", "accounts",
+                    "business", "history", "geography", "sanskrit", "french",
+                    "coordinator", "hod", "head of department", "staff",
+                    "librarian", "counselor", "counsellor", "nurse",
+                    "receptionist", "security", "guard", "driver", "ayah",
+                    "principal", "vice principal", "admin",
+                ]
+                for _kw in _DESIGNATION_KW:
+                    _clean_name = re.sub(r"\b" + re.escape(_kw) + r"\b", "", _clean_name, flags=re.IGNORECASE)
+                _clean_name = re.sub(r"\s+", " ", _clean_name).strip(" ,-./")
+                if not _clean_name:
+                    _clean_name = f"Staff_{sender[-10:]}"
 
                 logger.info(
-                    f"[IMAGE HANDLER] Teacher face reg (not in TEACHER_DATA) "
-                    f"sender={sender} name='{teacher_name_from_caption}' caption='{caption_raw[:80]}'"
+                    f"[IMAGE HANDLER] Face registration from caption name "
+                    f"sender={sender} name='{_clean_name}' caption='{caption_raw[:80]}'"
                 )
-                # Build a synthetic teacher_entry for _try_register_teacher_face
                 sender_digits = re.sub(r"\D", "", sender)
                 sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
                 synthetic_entry = {
-                    "teacher": teacher_name_from_caption,
+                    "teacher": _clean_name,
                     "grade": "",
                     "whatsapp": sender_last10,
                 }
@@ -4420,7 +4451,7 @@ async def receive_cloud_api_message(request: Request):
                     if handled:
                         return {"status": "ok"}
                 except Exception as e:
-                    logger.error(f"[IMAGE HANDLER] Non-TEACHER_DATA face reg error: {e}", exc_info=True)
+                    logger.error(f"[IMAGE HANDLER] Caption-based face reg error: {e}", exc_info=True)
 
         # Skip early media interception for remaining teacher media (docs, videos, etc).
         # These must reach the homework broadcast and teacher reply relay handlers below.
