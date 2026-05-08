@@ -156,6 +156,64 @@ def _match_photo_category(text: str) -> dict | None:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_person_name(caption: str) -> str:
+    """Extract a clean person name from a photo caption.
+
+    Handles captions like:
+    - "Sachi Thaper"
+    - "Ms. Sachi Thaper"
+    - "Good Morning This the photo of Ms Sachi Thaper (PGT Economics) as required. Regards"
+    - "Harpreet Kaur"
+    """
+    name = caption.strip()
+    # Remove parenthetical info first
+    name = re.sub(r"\s*\(.*?\)", "", name)
+    # Remove common greeting/filler phrases
+    _FILLER_PHRASES = [
+        r"good\s+morning\b", r"good\s+afternoon\b", r"good\s+evening\b",
+        r"\bthis\s+(?:is\s+)?the\s+photo\s+of\b",
+        r"\bthis\s+(?:is\s+)?(?:my|a)\s+photo\b",
+        r"\bphoto\s+(?:of|for)\b",
+        r"\bas\s+required\b", r"\bregards\b", r"\bkindly\b",
+        r"\bplease\s+(?:find|register)\b",
+        r"\bfor\s+(?:face\s+)?(?:recognition|attendance|registration)\b",
+        r"\bsharing\b", r"\bshared\b",
+    ]
+    for pat in _FILLER_PHRASES:
+        name = re.sub(pat, "", name, flags=re.IGNORECASE)
+    # Clean whitespace/punctuation, then re-check for honorifics
+    name = re.sub(r"\s+", " ", name).strip(" ,-./\n")
+    # Remove honorifics (may appear after filler removal)
+    for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
+                "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. "]:
+        if name.lower().startswith(_pf.lower()):
+            name = name[len(_pf):]
+            break
+    # Remove designation keywords
+    _DESIGNATION_KW = [
+        "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
+        "register", "face", "selfie", "attendance", "register me",
+        "my photo", "my face", "my", "economics", "physics", "chemistry",
+        "biology", "maths", "mathematics", "english", "hindi",
+        "science", "social", "computer", "art", "music", "dance",
+        "sports", "physical education", "commerce", "accounts",
+        "business", "history", "geography", "sanskrit", "french",
+        "coordinator", "hod", "head of department", "staff",
+        "librarian", "counselor", "counsellor", "nurse",
+        "receptionist", "security", "guard", "driver", "ayah",
+        "principal", "vice principal", "admin", "administration",
+        "incharge", "in-charge", "required",
+        "photo", "image", "regards", "morning", "afternoon",
+        "sharing", "shared",
+    ]
+    for _kw in _DESIGNATION_KW:
+        name = re.sub(r"\b" + re.escape(_kw) + r"\b", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s+", " ", name).strip(" ,-./\n")
+    return name
+
+
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
@@ -3358,20 +3416,7 @@ async def receive_whatsapp_message(request: Request):
                     logger.info(
                         f"[IMAGE BUFFER GREEN] Linking buffered image + name '{_name_text_g}' from {sender}"
                     )
-                    _clean_g = _name_text_g
-                    for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
-                                "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. ",
-                                "Good Morning ", "Good Afternoon ", "Good Evening ",
-                                "good morning ", "good afternoon ", "good evening "]:
-                        if _clean_g.lower().startswith(_pf.lower()):
-                            _clean_g = _clean_g[len(_pf):]
-                    _clean_g = re.sub(r"\s*\(.*?\)", "", _clean_g)
-                    for _kw in ["pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
-                                "register", "face", "selfie", "attendance",
-                                "economics", "physics", "chemistry", "biology", "maths",
-                                "english", "hindi", "science", "required", "regards", "photo"]:
-                        _clean_g = re.sub(r"\b" + re.escape(_kw) + r"\b", "", _clean_g, flags=re.IGNORECASE)
-                    _clean_g = re.sub(r"\s+", " ", _clean_g).strip(" ,-./\n")
+                    _clean_g = _extract_person_name(_name_text_g)
                     if _clean_g:
                         sender_digits_g = re.sub(r"\D", "", sender)
                         sender_last10_g = sender_digits_g[-10:] if len(sender_digits_g) >= 10 else sender_digits_g
@@ -3432,26 +3477,7 @@ async def receive_whatsapp_message(request: Request):
             _g_has_class = bool(_CAPTION_CLASS_RE.search(_gcap_raw)) if _gcap_raw else False
 
             if _g_has_name and not _g_has_class:
-                _tname = _gcap_raw
-                for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
-                            "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. "]:
-                    if _tname.lower().startswith(_pf.lower()):
-                        _tname = _tname[len(_pf):]
-                _tname = re.sub(r"\s*\(.*?\)", "", _tname)
-                _G_DESIG_KW = [
-                    "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
-                    "register", "face", "selfie", "attendance", "register me",
-                    "my photo", "my face", "economics", "physics", "chemistry",
-                    "biology", "maths", "mathematics", "english", "hindi",
-                    "science", "social", "computer", "art", "music", "dance",
-                    "sports", "physical education", "commerce", "accounts",
-                    "business", "history", "geography", "sanskrit", "french",
-                    "coordinator", "hod", "staff", "librarian", "counselor",
-                    "counsellor", "nurse", "receptionist", "principal",
-                ]
-                for _kw in _G_DESIG_KW:
-                    _tname = re.sub(r"\b" + re.escape(_kw) + r"\b", "", _tname, flags=re.IGNORECASE)
-                _tname = re.sub(r"\s+", " ", _tname).strip(" ,-./")
+                _tname = _extract_person_name(_gcap_raw)
                 if not _tname:
                     _tname = f"Staff_{sender[-10:]}"
                 _sd = re.sub(r"\D", "", sender)
@@ -4429,28 +4455,7 @@ async def receive_cloud_api_message(request: Request):
                         f"[IMAGE BUFFER] Linking buffered image + name text '{_name_text}' "
                         f"from {sender} for face registration"
                     )
-                    # Clean the name
-                    _clean_buf_name = _name_text
-                    for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
-                                "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. ",
-                                "Good Morning ", "Good Afternoon ", "Good Evening ",
-                                "good morning ", "good afternoon ", "good evening "]:
-                        if _clean_buf_name.lower().startswith(_pf.lower()):
-                            _clean_buf_name = _clean_buf_name[len(_pf):]
-                    _clean_buf_name = re.sub(r"\s*\(.*?\)", "", _clean_buf_name)
-                    _DESIGNATION_KW_BUF = [
-                        "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
-                        "register", "face", "selfie", "attendance",
-                        "economics", "physics", "chemistry", "biology", "maths",
-                        "english", "hindi", "science", "required", "regards",
-                        "as required", "photo",
-                    ]
-                    for _kw in _DESIGNATION_KW_BUF:
-                        _clean_buf_name = re.sub(
-                            r"\b" + re.escape(_kw) + r"\b", "",
-                            _clean_buf_name, flags=re.IGNORECASE,
-                        )
-                    _clean_buf_name = re.sub(r"\s+", " ", _clean_buf_name).strip(" ,-./\n")
+                    _clean_buf_name = _extract_person_name(_name_text)
                     if _clean_buf_name:
                         sender_digits = re.sub(r"\D", "", sender)
                         sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
@@ -4527,32 +4532,7 @@ async def receive_cloud_api_message(request: Request):
             has_class_indicator = bool(_CAPTION_CLASS_RE.search(caption_raw)) if caption_raw else False
 
             if has_name_in_caption and not has_class_indicator:
-                # Extract the person's name from caption
-                _clean_name = caption_raw
-                # Remove honorifics
-                for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
-                            "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. "]:
-                    if _clean_name.lower().startswith(_pf.lower()):
-                        _clean_name = _clean_name[len(_pf):]
-                # Remove parenthetical info
-                _clean_name = re.sub(r"\s*\(.*?\)", "", _clean_name)
-                # Remove common designation keywords to isolate the name
-                _DESIGNATION_KW = [
-                    "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
-                    "register", "face", "selfie", "attendance", "register me",
-                    "my photo", "my face", "economics", "physics", "chemistry",
-                    "biology", "maths", "mathematics", "english", "hindi",
-                    "science", "social", "computer", "art", "music", "dance",
-                    "sports", "physical education", "commerce", "accounts",
-                    "business", "history", "geography", "sanskrit", "french",
-                    "coordinator", "hod", "head of department", "staff",
-                    "librarian", "counselor", "counsellor", "nurse",
-                    "receptionist", "security", "guard", "driver", "ayah",
-                    "principal", "vice principal", "admin",
-                ]
-                for _kw in _DESIGNATION_KW:
-                    _clean_name = re.sub(r"\b" + re.escape(_kw) + r"\b", "", _clean_name, flags=re.IGNORECASE)
-                _clean_name = re.sub(r"\s+", " ", _clean_name).strip(" ,-./")
+                _clean_name = _extract_person_name(caption_raw)
                 if not _clean_name:
                     _clean_name = f"Staff_{sender[-10:]}"
 
