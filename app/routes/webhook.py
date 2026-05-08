@@ -3194,12 +3194,33 @@ async def receive_whatsapp_message(request: Request):
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
 
-        # --- Parent photo / image handling (MUST run BEFORE text handlers) ---
-        # IMPORTANT: Skip for teachers — their images must reach the homework
-        # broadcast and teacher reply relay handlers below.
+        # --- Photo / image handling (MUST run BEFORE text handlers) ---
         has_image_green = media_info and media_info.get("type") == "imageMessage"
         is_teacher_green = _is_teacher_phone(sender)
         logger.info(f"[GREEN IMAGE CHECK] sender={sender} has_image={has_image_green} is_teacher={is_teacher_green} media_type={media_info.get('type') if media_info else 'None'}")
+
+        # Teacher face registration: if a teacher sends a photo, register for attendance
+        if has_image_green and is_teacher_green:
+            caption_lower = (media_info.get("caption", "") or "").strip().lower()
+            # Register if no caption or caption suggests face/selfie/register
+            is_face_photo = (
+                not caption_lower
+                or any(kw in caption_lower for kw in [
+                    "register", "face", "selfie", "photo", "attendance",
+                    "my photo", "my face", "register me", "chk",
+                ])
+            )
+            if is_face_photo:
+                logger.info(f"[GREEN IMAGE HANDLER] Teacher face registration for {sender}")
+                try:
+                    handled = await _try_register_teacher_face(
+                        sender, reply_to, bot_phone, media_info, is_teacher_green,
+                    )
+                    if handled:
+                        return {"status": "ok"}
+                except Exception as e:
+                    logger.error(f"[GREEN IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
+
         if has_image_green and not is_teacher_green:
             logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, url={media_info.get('url', '')[:80]}")
             try:
@@ -3906,6 +3927,98 @@ async def _try_register_child_face(
     return True
 
 
+async def _try_register_teacher_face(
+    sender: str, reply_to: str, bot_phone: str,
+    media_info: dict, teacher_entry: dict,
+) -> bool:
+    """Register a teacher's face when they send a photo to the bot.
+
+    Teachers send selfies for face recognition attendance via reception
+    and entry gate cameras.
+    """
+    teacher_name = teacher_entry["teacher"].split("/")[0].strip()
+    teacher_grade = teacher_entry.get("grade", "")
+    teacher_phone = teacher_entry.get("whatsapp", "")
+
+    # Normalize phone
+    phone_digits = re.sub(r"\D", "", teacher_phone)
+    if len(phone_digits) == 10:
+        phone_digits = "91" + phone_digits
+
+    person_id = "TEACHER_" + re.sub(r"[^a-zA-Z0-9]", "_", teacher_name.upper())
+
+    # Download the image
+    cloud_media_id = media_info.get("cloud_media_id", "")
+    direct_url = media_info.get("url", "")
+    img_bytes = None
+
+    if cloud_media_id:
+        from app.services.whatsapp_service import download_cloud_media
+        img_bytes, _ = await download_cloud_media(cloud_media_id)
+    elif direct_url:
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(direct_url)
+                if resp.status_code == 200:
+                    img_bytes = resp.content
+        except Exception as e:
+            logger.error(f"Teacher face registration: download error: {e}")
+
+    if not img_bytes:
+        logger.error(f"Teacher face registration: failed to download image from {sender}")
+        return False
+
+    # Store the face image in the cloud DB
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM agent_registered_faces WHERE person_id = ?",
+            (person_id,),
+        )
+        count_row = await cursor.fetchone()
+        existing_count = count_row[0] if count_row else 0
+
+        angle = "front" if existing_count == 0 else f"angle_{existing_count + 1}"
+
+        await db.execute(
+            "INSERT INTO agent_registered_faces "
+            "(person_id, name, role, phone, angle, image_data) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (person_id, teacher_name, "Teacher", phone_digits, angle, img_bytes),
+        )
+        await db.commit()
+        photo_num = existing_count + 1
+
+        logger.info(
+            f"Teacher face registered: {teacher_name} ({teacher_grade}) "
+            f"person_id={person_id} photo #{photo_num} phone={phone_digits}"
+        )
+    finally:
+        await db.close()
+
+    del img_bytes
+
+    if photo_num == 1:
+        confirm_msg = (
+            f"Thank you, *{teacher_name}*! Your face has been registered "
+            f"for automatic attendance tracking.\n\n"
+            f"You will receive a WhatsApp notification when you arrive "
+            f"at school each morning.\n\n"
+            f"You can send more photos from different angles to improve "
+            f"recognition accuracy."
+        )
+    else:
+        confirm_msg = (
+            f"Photo #{photo_num} for *{teacher_name}* added successfully.\n\n"
+            f"More photos from different angles help improve recognition accuracy."
+        )
+
+    await save_message(bot_phone, sender, confirm_msg, "whatsapp", "outgoing")
+    await send_whatsapp_message(reply_to, confirm_msg)
+    return True
+
+
 @router.post("/webhook/cloud")
 async def receive_cloud_api_message(request: Request):
     """Handle incoming WhatsApp messages from Meta Cloud API webhook."""
@@ -4052,9 +4165,29 @@ async def receive_cloud_api_message(request: Request):
         is_non_image_media = media_info and media_info.get("type") in ("documentMessage", "videoMessage")
         logger.info(f"[IMAGE CHECK] sender={sender} has_media={has_media} has_image={has_image} is_teacher={is_teacher} is_non_image={is_non_image_media}")
 
-        # Skip early media interception for ALL teacher media (images, docs, videos).
-        # Teacher media must reach the homework broadcast and teacher reply relay
-        # handlers below, which handle forwarding to parents correctly.
+        # Teacher face registration: if teacher sends an image, register for attendance
+        if has_image and is_teacher:
+            caption_lower = (media_info.get("caption", "") or "").strip().lower()
+            is_face_photo = (
+                not caption_lower
+                or any(kw in caption_lower for kw in [
+                    "register", "face", "selfie", "photo", "attendance",
+                    "my photo", "my face", "register me", "chk",
+                ])
+            )
+            if is_face_photo:
+                logger.info(f"[IMAGE HANDLER] Teacher face registration for {sender}")
+                try:
+                    handled = await _try_register_teacher_face(
+                        sender, reply_to, bot_phone, media_info, is_teacher,
+                    )
+                    if handled:
+                        return {"status": "ok"}
+                except Exception as e:
+                    logger.error(f"[IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
+
+        # Skip early media interception for remaining teacher media (docs, videos, etc).
+        # These must reach the homework broadcast and teacher reply relay handlers below.
         if has_media and not is_teacher:
             content_class = _classify_media_content(media_info)
             logger.info(f"[IMAGE HANDLER] Content classified as '{content_class}' for {sender}")

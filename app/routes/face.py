@@ -157,6 +157,27 @@ async def get_face_image(face_id: int):
         await db.close()
 
 
+@router.get("/teachers")
+async def list_registered_teachers():
+    """List all registered teachers (no auth required — public status endpoint)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT person_id, name, phone,
+                   COUNT(*) as photo_count,
+                   GROUP_CONCAT(angle) as angles,
+                   MIN(registered_at) as registered_at
+            FROM agent_registered_faces
+            WHERE role = 'Teacher'
+            GROUP BY person_id
+            ORDER BY name
+        """)
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
 @router.patch("/{person_id}/phone", dependencies=[Depends(verify_agent_secret)])
 async def update_phone(person_id: str, phone: str = Form(...)):
     """Update the phone number for all face entries of a person."""
