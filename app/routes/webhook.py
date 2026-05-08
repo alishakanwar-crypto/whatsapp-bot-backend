@@ -700,8 +700,6 @@ async def forward_to_teachers_and_confirm(
             from app.services.whatsapp_service import (
                 send_cloud_template_message as _send_tmpl,
                 forward_cloud_media_to_recipient,
-                upload_media_bytes_cloud,
-                download_cloud_media,
             )
             chat_id = _teacher_chat_id(teacher_phone)
             t_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
@@ -714,63 +712,37 @@ async def forward_to_teachers_and_confirm(
                 f"Reply to this message — your response will be forwarded to the parent."
             )
 
-            # Upload media for template header
-            h_img_id = None
-            h_doc_id = None
-            m_fname = None
-            has_att = False
-            if media_info:
-                _cmid = media_info.get("cloud_media_id", "")
-                _mtype = media_info.get("type", "")
-                m_fname = media_info.get("filename", "file")
-                if _cmid:
-                    try:
-                        _mb, _mt = await download_cloud_media(_cmid)
-                        if _mb:
-                            _nmid = await upload_media_bytes_cloud(_mb, _mt, m_fname)
-                            del _mb
-                            if _nmid:
-                                has_att = True
-                                if _mtype == "imageMessage":
-                                    h_img_id = _nmid
-                                else:
-                                    h_doc_id = _nmid
-                    except Exception as _e:
-                        logger.error(f"[FWD MEDIA] Template upload error: {_e}")
-
+            # NONE of our templates have header components — send text
+            # template first, then media as a separate message.
             wa_success = await _send_tmpl(
                 t_recipient, "ppis_class_assignment",
                 body_params=[tmpl_title, tmpl_body],
-                header_image_id=h_img_id,
-                header_document_id=h_doc_id,
-                header_document_filename=m_fname if h_doc_id else None,
             )
             if wa_success:
                 logger.info(f"[FWD] Template sent to {entry['teacher']}")
-                # Template ppis_class_assignment has no header — always
-                # send media as a separate message after the template.
+                # Send media separately (template opens conversation window)
                 if media_info:
                     await _asyncio_relay.sleep(2)
-                    _cmid = media_info.get("cloud_media_id", "")
-                    _gurl = media_info.get("url", "")
                     _mcap = media_info.get("caption", "")
                     _mok = False
-                    if _cmid:
-                        try:
-                            _mok = await forward_cloud_media_to_recipient(media_info, chat_id, caption=_mcap)
-                        except Exception as _me:
-                            logger.error(f"[FWD MEDIA] Cloud error: {_me}")
-                    if not _mok and _gurl:
-                        try:
-                            _mok = await forward_file_by_url(chat_id, _gurl, media_info.get("filename", "file"), _mcap)
-                        except Exception as _me2:
-                            logger.error(f"[FWD MEDIA] Green error: {_me2}")
+                    try:
+                        _mok = await forward_cloud_media_to_recipient(media_info, chat_id, caption=_mcap)
+                    except Exception as _me:
+                        logger.error(f"[FWD MEDIA] Cloud error: {_me}")
                     if _mok:
-                        logger.info(f"[FWD MEDIA] Separate media sent to {entry['teacher']}")
+                        logger.info(f"[FWD MEDIA] Media sent to {entry['teacher']}")
+                    else:
+                        logger.error(f"[FWD MEDIA] FAILED media to {entry['teacher']}")
             else:
-                # Template failed — fallback to regular message
+                # Template failed — fallback to regular message + media
                 logger.warning(f"[FWD] Template failed for {entry['teacher']}, trying regular msg")
                 wa_success = await send_whatsapp_message(chat_id, notification)
+                if wa_success and media_info:
+                    await _asyncio_relay.sleep(2)
+                    try:
+                        await forward_cloud_media_to_recipient(media_info, chat_id, caption=media_info.get("caption", ""))
+                    except Exception as _fme:
+                        logger.error(f"[FWD MEDIA] Fallback media error: {_fme}")
 
         # Always send email too (Cloud API text may not deliver outside 24h window)
         email_success = False
@@ -1993,15 +1965,12 @@ async def _forward_query_to_class_teacher(
         from app.services.whatsapp_service import (
             send_cloud_template_message,
             forward_cloud_media_to_recipient,
-            upload_media_bytes_cloud,
-            download_cloud_media,
         )
         chat_id = _teacher_chat_id(teacher_phone)
         teacher_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
         if len(teacher_recipient) == 10:
             teacher_recipient = "91" + teacher_recipient
 
-        # Prepare template body text (truncated to fit template params)
         tmpl_title = f"Query from {parent_label}"
         tmpl_body = (
             f"{message_text[:400]}\n\n"
@@ -2009,73 +1978,33 @@ async def _forward_query_to_class_teacher(
             f"forwarded back to the parent."
         )
 
-        # Try to upload media for template header if present
-        header_img_id = None
-        header_doc_id = None
-        media_filename = None
-        has_attachment = False
-        if media_info:
-            cloud_mid = media_info.get("cloud_media_id", "")
-            media_type = media_info.get("type", "")
-            media_filename = media_info.get("filename", "file")
-            if cloud_mid:
-                try:
-                    media_bytes, mime_type = await download_cloud_media(cloud_mid)
-                    if media_bytes:
-                        new_mid = await upload_media_bytes_cloud(media_bytes, mime_type, media_filename)
-                        del media_bytes
-                        if new_mid:
-                            has_attachment = True
-                            if media_type == "imageMessage":
-                                header_img_id = new_mid
-                            else:
-                                header_doc_id = new_mid
-                except Exception as _dl_err:
-                    logger.error(f"[PARENT→TEACHER] Media upload for template failed: {_dl_err}")
-
-        # Send via ppis_class_assignment template (UTILITY, APPROVED)
+        # NONE of our templates have header components — send text
+        # template first, then media as a separate message.
         wa_success = await send_cloud_template_message(
             teacher_recipient,
             "ppis_class_assignment",
             body_params=[tmpl_title, tmpl_body],
-            header_image_id=header_img_id,
-            header_document_id=header_doc_id,
-            header_document_filename=media_filename if header_doc_id else None,
         )
 
         if wa_success:
             logger.info(
                 f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})"
             )
-            # Template ppis_class_assignment has no header component, so
-            # attachments MUST be sent as a separate message after the
-            # template (which opens a conversation window).
+            # Send media separately after template (opens conversation window)
             if media_info:
                 await _asyncio.sleep(2)
-                cloud_mid = media_info.get("cloud_media_id", "")
-                green_url = media_info.get("url", "")
                 media_caption = media_info.get("caption", "")
                 media_fwd_ok = False
-                if cloud_mid:
-                    try:
-                        media_fwd_ok = await forward_cloud_media_to_recipient(
-                            media_info, chat_id, caption=media_caption,
-                        )
-                    except Exception as mf_exc:
-                        logger.error(f"[PARENT→TEACHER] Media forward error: {mf_exc}")
-                if not media_fwd_ok and green_url:
-                    try:
-                        media_fwd_ok = await forward_file_by_url(
-                            chat_id, green_url,
-                            media_info.get("filename", "file"),
-                            media_caption,
-                        )
-                    except Exception as mf_exc2:
-                        logger.error(f"[PARENT→TEACHER] Green URL fallback error: {mf_exc2}")
+                try:
+                    media_fwd_ok = await forward_cloud_media_to_recipient(
+                        media_info, chat_id, caption=media_caption,
+                    )
+                except Exception as mf_exc:
+                    logger.error(f"[PARENT→TEACHER] Media forward error: {mf_exc}")
                 if media_fwd_ok:
-                    logger.info(f"[PARENT→TEACHER] Media sent separately to {teacher_name}")
-                elif cloud_mid or green_url:
-                    logger.error(f"[PARENT→TEACHER] FAILED separate media to {teacher_name}")
+                    logger.info(f"[PARENT→TEACHER] Media sent to {teacher_name}")
+                else:
+                    logger.error(f"[PARENT→TEACHER] FAILED media to {teacher_name}")
         else:
             # Template failed — try regular message as fallback
             logger.warning(f"[PARENT→TEACHER] Template failed, trying regular message to {teacher_name}")
@@ -4683,8 +4612,6 @@ async def receive_cloud_api_message(request: Request):
                             from app.services.whatsapp_service import (
                                 send_cloud_template_message as _send_tmpl3,
                                 forward_cloud_media_to_recipient,
-                                upload_media_bytes_cloud as _upload3,
-                                download_cloud_media as _dl3,
                             )
                             chat_id = _teacher_chat_id(teacher_phone)
                             _trec = teacher_phone
@@ -4697,52 +4624,25 @@ async def receive_cloud_api_message(request: Request):
                                 f"Reply to this message — your response will be forwarded to the parent."
                             )
 
-                            # Upload media for template header
-                            _hi3 = None
-                            _hd3 = None
-                            _fn3 = media_info.get("filename", "file")
-                            _ha3 = False
-                            _cmid3 = media_info.get("cloud_media_id", "")
-                            if _cmid3:
-                                try:
-                                    _mb3, _mt3 = await _dl3(_cmid3)
-                                    if _mb3:
-                                        _nm3 = await _upload3(_mb3, _mt3, _fn3)
-                                        del _mb3
-                                        if _nm3:
-                                            _ha3 = True
-                                            if media_info.get("type") == "imageMessage":
-                                                _hi3 = _nm3
-                                            else:
-                                                _hd3 = _nm3
-                                except Exception as _e3:
-                                    logger.error(f"[CLOUD FILE FWD] Upload error: {_e3}")
-
+                            # NONE of our templates have header components —
+                            # send text template, then media separately.
                             _fwd_ok = await _send_tmpl3(
                                 _trec, "ppis_class_assignment",
                                 body_params=[_tt, _tb],
-                                header_image_id=_hi3,
-                                header_document_id=_hd3,
-                                header_document_filename=_fn3 if _hd3 else None,
                             )
                             if _fwd_ok:
                                 logger.info(f"[CLOUD FILE FWD] Template sent to {teacher_name}")
-                                # Template has no header — always send media separately
+                                # Send media separately after template
                                 await _asyncio_fwd.sleep(2)
-                                _gurl3 = media_info.get("url", "")
                                 _mok3 = False
-                                if _cmid3:
-                                    try:
-                                        _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
-                                    except Exception as _me3:
-                                        logger.error(f"[CLOUD FILE FWD] Media forward error: {_me3}")
-                                if not _mok3 and _gurl3:
-                                    try:
-                                        _mok3 = await forward_file_by_url(chat_id, _gurl3, _fn3, caption)
-                                    except Exception as _me4:
-                                        logger.error(f"[CLOUD FILE FWD] Green fallback: {_me4}")
+                                try:
+                                    _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
+                                except Exception as _me3:
+                                    logger.error(f"[CLOUD FILE FWD] Media forward error: {_me3}")
                                 if _mok3:
-                                    logger.info(f"[CLOUD FILE FWD] Media sent separately to {teacher_name}")
+                                    logger.info(f"[CLOUD FILE FWD] Media sent to {teacher_name}")
+                                else:
+                                    logger.error(f"[CLOUD FILE FWD] FAILED media to {teacher_name}")
                             else:
                                 logger.warning(f"[CLOUD FILE FWD] Template failed for {teacher_name}, using regular msg")
                                 fwd_msg = (
@@ -4753,7 +4653,13 @@ async def receive_cloud_api_message(request: Request):
                                     f"will be forwarded back to the parent.\n\n"
                                     f"Warm regards,\nPP International School"
                                 )
-                                await send_whatsapp_message(chat_id, fwd_msg)
+                                _txt_ok = await send_whatsapp_message(chat_id, fwd_msg)
+                                if _txt_ok:
+                                    await _asyncio_fwd.sleep(2)
+                                    try:
+                                        await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
+                                    except Exception as _mef:
+                                        logger.error(f"[CLOUD FILE FWD] Fallback media error: {_mef}")
                             # Save conversation for 2-way relay
                             await save_forwarded_conversation(
                                 teacher_phone=teacher_phone,
