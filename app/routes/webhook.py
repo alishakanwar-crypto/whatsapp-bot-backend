@@ -159,6 +159,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
+# Recent image buffer: When a sender sends an image without a caption and then
+# sends a text message with their name, we link them for face registration.
+# Maps sender -> {"media_info": ..., "timestamp": ..., "reply_to": ..., "bot_phone": ...}
+# ---------------------------------------------------------------------------
+import time as _time_mod
+_recent_images: dict[str, dict] = {}
+_RECENT_IMAGE_TTL = 30  # seconds — link image + name within 30s
+
+# ---------------------------------------------------------------------------
 # Global kill switch: when True the bot will NOT reply to any incoming message.
 # Toggle via POST /webhook/bot-enabled {"enabled": true/false}
 # ---------------------------------------------------------------------------
@@ -3333,6 +3342,50 @@ async def receive_whatsapp_message(request: Request):
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
 
+        # --- Check for buffered image + name text combo (Green API path) ---
+        if not media_info and message_text.strip():
+            _buffered_g = _recent_images.pop(sender, None)
+            if _buffered_g and (_time_mod.time() - _buffered_g["timestamp"]) < _RECENT_IMAGE_TTL:
+                _name_text_g = message_text.strip()
+                _name_words_g = [
+                    w for w in re.sub(r"[^\w\s]", " ", _name_text_g).split()
+                    if len(w) >= 2 and w.isalpha()
+                    and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my",
+                                          "show", "check", "hi", "hello", "help", "please",
+                                          "homework", "thanks", "ok", "yes", "no"}
+                ]
+                if len(_name_words_g) >= 1:
+                    logger.info(
+                        f"[IMAGE BUFFER GREEN] Linking buffered image + name '{_name_text_g}' from {sender}"
+                    )
+                    _clean_g = _name_text_g
+                    for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
+                                "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. ",
+                                "Good Morning ", "Good Afternoon ", "Good Evening ",
+                                "good morning ", "good afternoon ", "good evening "]:
+                        if _clean_g.lower().startswith(_pf.lower()):
+                            _clean_g = _clean_g[len(_pf):]
+                    _clean_g = re.sub(r"\s*\(.*?\)", "", _clean_g)
+                    for _kw in ["pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
+                                "register", "face", "selfie", "attendance",
+                                "economics", "physics", "chemistry", "biology", "maths",
+                                "english", "hindi", "science", "required", "regards", "photo"]:
+                        _clean_g = re.sub(r"\b" + re.escape(_kw) + r"\b", "", _clean_g, flags=re.IGNORECASE)
+                    _clean_g = re.sub(r"\s+", " ", _clean_g).strip(" ,-./\n")
+                    if _clean_g:
+                        sender_digits_g = re.sub(r"\D", "", sender)
+                        sender_last10_g = sender_digits_g[-10:] if len(sender_digits_g) >= 10 else sender_digits_g
+                        try:
+                            handled = await _try_register_teacher_face(
+                                sender, reply_to, bot_phone,
+                                _buffered_g["media_info"],
+                                {"teacher": _clean_g, "grade": "", "whatsapp": sender_last10_g},
+                            )
+                            if handled:
+                                return {"status": "ok"}
+                        except Exception as e:
+                            logger.error(f"[IMAGE BUFFER GREEN] Face reg error: {e}", exc_info=True)
+
         # --- Photo / image handling (MUST run BEFORE text handlers) ---
         has_image_green = media_info and media_info.get("type") == "imageMessage"
         is_teacher_green = _is_teacher_phone(sender)
@@ -3361,7 +3414,7 @@ async def receive_whatsapp_message(request: Request):
                     logger.error(f"[GREEN IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
 
         # Face registration for ANYONE who sends a photo WITH a name (Green API path)
-        if has_image_green and not is_teacher_green:
+        if has_image_green:
             _gcap_raw = (media_info.get("caption", "") or "").strip()
             _gcap_low = _gcap_raw.lower()
             _G_NON_NAME = [
@@ -3413,6 +3466,16 @@ async def receive_whatsapp_message(request: Request):
                         return {"status": "ok"}
                 except Exception as _e:
                     logger.error(f"[GREEN] Caption-based face reg error: {_e}", exc_info=True)
+
+            # Buffer image if no caption — wait for follow-up name text
+            if not _gcap_raw or _g_is_non_name:
+                _recent_images[sender] = {
+                    "media_info": media_info,
+                    "timestamp": _time_mod.time(),
+                    "reply_to": reply_to,
+                    "bot_phone": bot_phone,
+                }
+                logger.info(f"[IMAGE BUFFER GREEN] Buffered image from {sender} (no caption)")
 
         if has_image_green and not is_teacher_green:
             logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, url={media_info.get('url', '')[:80]}")
@@ -4346,6 +4409,66 @@ async def receive_cloud_api_message(request: Request):
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming", wa_message_id=msg_id)
 
+        # --- Check for buffered image + name text combo (face registration) ---
+        # When someone sends a photo without caption, then sends their name as
+        # a separate text message, link them together for face registration.
+        if not media_info and message_text.strip():
+            _buffered = _recent_images.pop(sender, None)
+            if _buffered and (_time_mod.time() - _buffered["timestamp"]) < _RECENT_IMAGE_TTL:
+                _name_text = message_text.strip()
+                # Check if this text looks like a person's name
+                _name_words_buf = [
+                    w for w in re.sub(r"[^\w\s]", " ", _name_text).split()
+                    if len(w) >= 2 and w.isalpha()
+                    and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my",
+                                          "show", "check", "hi", "hello", "help", "please",
+                                          "homework", "thanks", "ok", "yes", "no"}
+                ]
+                if len(_name_words_buf) >= 1:
+                    logger.info(
+                        f"[IMAGE BUFFER] Linking buffered image + name text '{_name_text}' "
+                        f"from {sender} for face registration"
+                    )
+                    # Clean the name
+                    _clean_buf_name = _name_text
+                    for _pf in ["Ms ", "Ms. ", "Mrs ", "Mrs. ", "Mr ", "Mr. ", "Dr ", "Dr. ",
+                                "ms ", "ms. ", "mrs ", "mrs. ", "mr ", "mr. ", "dr ", "dr. ",
+                                "Good Morning ", "Good Afternoon ", "Good Evening ",
+                                "good morning ", "good afternoon ", "good evening "]:
+                        if _clean_buf_name.lower().startswith(_pf.lower()):
+                            _clean_buf_name = _clean_buf_name[len(_pf):]
+                    _clean_buf_name = re.sub(r"\s*\(.*?\)", "", _clean_buf_name)
+                    _DESIGNATION_KW_BUF = [
+                        "pgt", "tgt", "ntt", "teacher", "ma'am", "maam", "sir",
+                        "register", "face", "selfie", "attendance",
+                        "economics", "physics", "chemistry", "biology", "maths",
+                        "english", "hindi", "science", "required", "regards",
+                        "as required", "photo",
+                    ]
+                    for _kw in _DESIGNATION_KW_BUF:
+                        _clean_buf_name = re.sub(
+                            r"\b" + re.escape(_kw) + r"\b", "",
+                            _clean_buf_name, flags=re.IGNORECASE,
+                        )
+                    _clean_buf_name = re.sub(r"\s+", " ", _clean_buf_name).strip(" ,-./\n")
+                    if _clean_buf_name:
+                        sender_digits = re.sub(r"\D", "", sender)
+                        sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
+                        synthetic_entry = {
+                            "teacher": _clean_buf_name,
+                            "grade": "",
+                            "whatsapp": sender_last10,
+                        }
+                        try:
+                            handled = await _try_register_teacher_face(
+                                sender, reply_to, bot_phone,
+                                _buffered["media_info"], synthetic_entry,
+                            )
+                            if handled:
+                                return {"status": "ok"}
+                        except Exception as e:
+                            logger.error(f"[IMAGE BUFFER] Face reg error: {e}", exc_info=True)
+
         # --- Image/media handling with strict content classification ---
         # RULE: Only treat as student photo if caption has Name + Class.
         #       Everything else → "File received" or forward to teacher.
@@ -4383,7 +4506,7 @@ async def receive_cloud_api_message(request: Request):
         # Teachers, staff, etc. who are NOT in TEACHER_DATA can register by sending
         # a selfie with their name. If caption has Name+Class → student face reg (below).
         # If caption has just a name (no class indicator) → teacher/staff face reg.
-        if has_image and not is_teacher:
+        if has_image:
             caption_raw = (media_info.get("caption", "") or "").strip()
             caption_lower = caption_raw.lower()
             # Skip captions that are clearly NOT a person's name
@@ -4452,6 +4575,17 @@ async def receive_cloud_api_message(request: Request):
                         return {"status": "ok"}
                 except Exception as e:
                     logger.error(f"[IMAGE HANDLER] Caption-based face reg error: {e}", exc_info=True)
+
+            # If image has no caption (or only generic caption), buffer it so a
+            # follow-up text message with a name can be linked for face registration.
+            if not caption_raw or is_non_name:
+                _recent_images[sender] = {
+                    "media_info": media_info,
+                    "timestamp": _time_mod.time(),
+                    "reply_to": reply_to,
+                    "bot_phone": bot_phone,
+                }
+                logger.info(f"[IMAGE BUFFER] Buffered image from {sender} (no caption) — waiting for name text")
 
         # Skip early media interception for remaining teacher media (docs, videos, etc).
         # These must reach the homework broadcast and teacher reply relay handlers below.
