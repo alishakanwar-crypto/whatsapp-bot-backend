@@ -658,6 +658,27 @@ def start_scheduler() -> None:
     else:
         logger.info("Meal monitoring auto-trigger DISABLED (toggle from control panel)")
 
+    # --- Teacher Attendance Excel ---
+    # Generate/update daily after attendance window closes (9:30 AM IST = 4:00 UTC)
+    from app.services.teacher_attendance_excel import generate_teacher_attendance_excel_sync
+    scheduler.add_job(
+        generate_teacher_attendance_excel_sync,
+        trigger=CronTrigger(hour=4, minute=5, second=0),
+        id="teacher_attendance_excel_daily",
+        replace_existing=True,
+    )
+    logger.info("Scheduled teacher attendance Excel generation at 9:35 AM IST daily")
+
+    # Also generate on startup (after 180s to let attendance data settle)
+    scheduler.add_job(
+        generate_teacher_attendance_excel_sync,
+        trigger="date",
+        run_date=datetime.now() + timedelta(seconds=180),
+        id="teacher_attendance_excel_initial",
+        replace_existing=True,
+    )
+    logger.info("Scheduled initial teacher attendance Excel generation in 180 seconds")
+
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
     # Times are offset by +3 minutes to give teachers time to update.

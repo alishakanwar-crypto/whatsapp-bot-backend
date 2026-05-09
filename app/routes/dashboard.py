@@ -1,9 +1,11 @@
 """Dashboard API routes for the PPIS School Command Center web app."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import FileResponse
 
 from app.database import get_db
 
@@ -586,3 +588,41 @@ async def dashboard_overview():
         }
     finally:
         await db.close()
+
+
+# ── Teacher Attendance Excel ─────────────────────────────────────────────────
+
+@router.get("/teacher-attendance-excel")
+async def download_teacher_attendance_excel(month: str | None = None):
+    """Download the teacher attendance Excel workbook.
+
+    Optional query param `month` in YYYY-MM format regenerates for that month.
+    Without it, regenerates for the current month and returns the file.
+    """
+    from app.services.teacher_attendance_excel import (
+        generate_teacher_attendance_excel,
+        EXCEL_PATH,
+    )
+
+    try:
+        if month:
+            parts = month.split("-")
+            target = date(int(parts[0]), int(parts[1]), 1)
+        else:
+            from app.services.teacher_attendance_excel import IST
+            target = datetime.now(IST).date()
+
+        await generate_teacher_attendance_excel(target)
+    except Exception as e:
+        logger.error(f"Teacher attendance Excel generation failed: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+    if not Path(str(EXCEL_PATH)).exists():
+        return {"status": "error", "message": "Excel file not found"}
+
+    filename = f"PPIS_Teacher_Attendance_{target.strftime('%B_%Y')}.xlsx"
+    return FileResponse(
+        path=str(EXCEL_PATH),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
