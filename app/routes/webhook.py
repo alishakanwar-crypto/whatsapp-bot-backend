@@ -4155,10 +4155,21 @@ async def _try_register_teacher_face(
     teacher_grade = teacher_entry.get("grade", "")
     teacher_phone = teacher_entry.get("whatsapp", "")
 
-    # Normalize phone
+    # Normalize PI Sheet phone
     phone_digits = re.sub(r"\D", "", teacher_phone)
     if len(phone_digits) == 10:
         phone_digits = "91" + phone_digits
+
+    # Always include the sender's WhatsApp number (the number they registered from).
+    # This ensures teachers who aren't in the PI Sheet still get notifications.
+    sender_digits = re.sub(r"\D", "", sender)
+    sender_normalized = "91" + sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
+    if sender_normalized and len(sender_normalized) >= 12:
+        if phone_digits and phone_digits != sender_normalized:
+            # Combine PI Sheet phone + sender phone (deduped)
+            phone_digits = f"{phone_digits},{sender_normalized}"
+        elif not phone_digits:
+            phone_digits = sender_normalized
 
     person_id = "TEACHER_" + re.sub(r"[^a-zA-Z0-9]", "_", teacher_name.upper())
 
@@ -4188,11 +4199,18 @@ async def _try_register_teacher_face(
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM agent_registered_faces WHERE person_id = ?",
+            "SELECT COUNT(*), phone FROM agent_registered_faces WHERE person_id = ?",
             (person_id,),
         )
         count_row = await cursor.fetchone()
         existing_count = count_row[0] if count_row else 0
+        existing_phone = count_row[1] if count_row and count_row[1] else ""
+
+        # Merge sender's phone into existing phone list if not already there
+        if existing_phone and sender_normalized not in existing_phone:
+            phone_digits = f"{existing_phone},{sender_normalized}"
+        elif not existing_phone:
+            phone_digits = phone_digits  # use the one we computed above
 
         angle = "front" if existing_count == 0 else f"angle_{existing_count + 1}"
 
@@ -4202,6 +4220,15 @@ async def _try_register_teacher_face(
             "VALUES (?, ?, ?, ?, ?, ?)",
             (person_id, teacher_name, "Teacher", phone_digits, angle, img_bytes),
         )
+
+        # Also update phone on ALL existing entries for this person
+        if phone_digits:
+            await db.execute(
+                "UPDATE agent_registered_faces SET phone = ? "
+                "WHERE person_id = ? COLLATE NOCASE",
+                (phone_digits, person_id),
+            )
+
         await db.commit()
         photo_num = existing_count + 1
 
