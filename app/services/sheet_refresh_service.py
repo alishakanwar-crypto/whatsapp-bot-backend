@@ -440,6 +440,86 @@ async def fetch_and_update_pi_sheet() -> bool:
         return False
 
 
+async def sync_pi_sheet_phones_to_face_db() -> int:
+    """Sync phone numbers from PI Sheet TEACHER_DATA into the face recognition DB.
+
+    Matches teachers by first name (case-insensitive) and updates phone numbers
+    for any face DB entries that are missing one. Returns number of entries updated.
+    """
+    from app.services.openai_service import TEACHER_DATA
+    from app.database import get_db
+
+    if not TEACHER_DATA:
+        logger.info("FACE-PHONE SYNC: No TEACHER_DATA available, skipping")
+        return 0
+
+    # Build name -> phone mapping from PI sheet (only entries with WhatsApp numbers)
+    pi_phones: dict[str, str] = {}
+    for entry in TEACHER_DATA:
+        name = entry.get("teacher", "").strip().lower()
+        phone = entry.get("whatsapp", "").strip()
+        if name and phone:
+            # Normalize phone
+            digits = _re.sub(r"[^0-9]", "", phone.split(",")[0])
+            if len(digits) == 10:
+                digits = "91" + digits
+            if len(digits) >= 12:
+                pi_phones[name] = digits
+                # Also store first name for partial matching
+                first = name.split()[0]
+                if first not in pi_phones:
+                    pi_phones[first] = digits
+
+    if not pi_phones:
+        logger.info("FACE-PHONE SYNC: No phone numbers found in TEACHER_DATA")
+        return 0
+
+    db = await get_db()
+    try:
+        # Get face DB teachers without phone numbers
+        cursor = await db.execute(
+            "SELECT DISTINCT person_id, name, phone FROM agent_registered_faces "
+            "WHERE person_id LIKE 'TEACHER_%'"
+        )
+        rows = await cursor.fetchall()
+
+        updated = 0
+        for row in rows:
+            pid, face_name, current_phone = row[0], row[1], row[2]
+            if current_phone and current_phone.strip():
+                continue  # Already has phone
+
+            face_lower = face_name.strip().lower()
+
+            # Try exact full name match
+            matched_phone = pi_phones.get(face_lower)
+
+            # Try first name match (only if unambiguous)
+            if not matched_phone:
+                first = face_lower.split()[0] if face_lower.split() else ""
+                if first:
+                    matched_phone = pi_phones.get(first)
+
+            if matched_phone:
+                await db.execute(
+                    "UPDATE agent_registered_faces SET phone = ? "
+                    "WHERE person_id = ? COLLATE NOCASE",
+                    (matched_phone, pid),
+                )
+                updated += 1
+                logger.info(f"FACE-PHONE SYNC: {face_name} ({pid}) -> {matched_phone}")
+
+        if updated:
+            await db.commit()
+        logger.info(f"FACE-PHONE SYNC: Updated {updated} teacher phone numbers from PI Sheet")
+        return updated
+    except Exception as e:
+        logger.error(f"FACE-PHONE SYNC: Error: {e}")
+        return 0
+    finally:
+        await db.close()
+
+
 def refresh_teacher_data_sync() -> None:
     """Synchronous wrapper for the scheduler — refreshes both teacher data AND PI Sheet."""
     import asyncio
@@ -457,6 +537,9 @@ def refresh_teacher_data_sync() -> None:
             logger.info("PI SHEET REFRESH: Scheduled refresh completed successfully")
         else:
             logger.error("PI SHEET REFRESH: Scheduled refresh failed")
+
+        # Sync teacher phone numbers from PI Sheet to face DB
+        loop.run_until_complete(sync_pi_sheet_phones_to_face_db())
     except Exception as e:
         logger.error(f"SHEET REFRESH: Scheduled refresh error: {e}")
     finally:

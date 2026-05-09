@@ -479,6 +479,28 @@ async def dashboard_delete_face(person_id: str):
         await db.close()
 
 
+@router.patch("/faces/{person_id}/phone")
+async def dashboard_update_face_phone(person_id: str, request: Request):
+    """Update the phone number for a face entry from the dashboard."""
+    body = await request.json()
+    phone = body.get("phone", "")
+    if not phone:
+        return {"status": "error", "message": "Missing phone"}
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE agent_registered_faces SET phone = ? "
+            "WHERE person_id = ? COLLATE NOCASE",
+            (phone, person_id),
+        )
+        await db.commit()
+        updated = cursor.rowcount
+        logger.info(f"Dashboard: updated phone for {person_id}: {phone} ({updated} rows)")
+        return {"status": "ok", "updated": updated, "person_id": person_id, "phone": phone}
+    finally:
+        await db.close()
+
+
 # ── Cameras ──────────────────────────────────────────────────────────────────
 
 @router.get("/cameras")

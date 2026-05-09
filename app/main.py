@@ -46,12 +46,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Populate parent phone numbers in pi_sheet_students on startup
     logger = logging.getLogger(__name__)
     logger.info("STARTUP: About to populate parent phone numbers...")
-    from app.services.sheet_refresh_service import populate_parent_phones
+    from app.services.sheet_refresh_service import populate_parent_phones, sync_pi_sheet_phones_to_face_db
     try:
         result = await populate_parent_phones()
         logger.info(f"STARTUP: populate_parent_phones returned {result}")
     except Exception as e:
         logger.error(f"STARTUP: parent phone population failed: {e}", exc_info=True)
+    try:
+        synced = await sync_pi_sheet_phones_to_face_db()
+        logger.info(f"STARTUP: synced {synced} teacher phone numbers from PI Sheet to face DB")
+    except Exception as e:
+        logger.error(f"STARTUP: face-phone sync failed: {e}", exc_info=True)
     start_scheduler()
     yield
     stop_scheduler()
