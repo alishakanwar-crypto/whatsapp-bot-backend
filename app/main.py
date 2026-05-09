@@ -595,8 +595,16 @@ async def api_send_whatsapp(request: Request):
     _student_name = template_params[0] if template_params else ""
 
     if is_attendance_msg:
-        # Block on Saturdays and Sundays
-        if today_day in ("Saturday", "Sunday"):
+        # Block on Sundays always; block on 2nd Saturday only
+        _block_day = False
+        if today_day == "Sunday":
+            _block_day = True
+        elif today_day == "Saturday":
+            _today_date = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+            _sat_number = (_today_date.day - 1) // 7 + 1
+            if _sat_number == 2:
+                _block_day = True
+        if _block_day:
             await _log_attendance_audit(
                 phone, _student_name, "blocked", f"{today_day} — school closed"
             )

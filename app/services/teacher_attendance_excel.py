@@ -262,12 +262,16 @@ async def generate_teacher_attendance_excel(target_date: date | None = None) -> 
                 cell.font = HOLIDAY_FONT
                 continue
 
-            # Saturday (2nd and 4th Saturdays are typically off)
+            # Only 2nd Saturday of the month is off
             if dt.weekday() == 5:  # Saturday
-                cell.value = "SAT"
-                cell.fill = HOLIDAY_FILL
-                cell.font = HOLIDAY_FONT
-                continue
+                # Which Saturday of the month? (1st, 2nd, 3rd, 4th, 5th)
+                saturday_number = (day - 1) // 7 + 1
+                if saturday_number == 2:
+                    cell.value = "2nd SAT"
+                    cell.fill = HOLIDAY_FILL
+                    cell.font = HOLIDAY_FONT
+                    continue
+                # All other Saturdays are working days — fall through
 
             # Working day
             working_days += 1
