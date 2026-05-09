@@ -157,20 +157,13 @@ async def generate_teacher_attendance_excel(target_date: date | None = None) -> 
     if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
         del wb["Sheet"]
 
-    # Create or get month sheet
+    # Create or replace month sheet (delete + recreate to avoid merged-cell issues)
     if sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        # Clear existing content to rebuild
-        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
-            for cell in row:
-                cell.value = None
-                cell.fill = PatternFill()
-                cell.font = Font()
-    else:
-        ws = wb.create_sheet(title=sheet_name)
-        # Remove default sheet if this is the first real sheet
-        if "Sheet" in wb.sheetnames:
-            del wb["Sheet"]
+        del wb[sheet_name]
+    ws = wb.create_sheet(title=sheet_name)
+    # Remove default sheet if this is the first real sheet
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
 
     # --- Write headers ---
     # Row 1: Title
