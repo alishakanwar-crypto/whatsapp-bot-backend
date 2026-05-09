@@ -534,12 +534,32 @@ async def api_send_email(request: Request):
     return {"status": "ok" if success else "error", "sent_to": to}
 
 
+async def _log_attendance_audit(phone: str, student_name: str,
+                                status: str, details: str = ""):
+    """Log attendance notification to the notification_log table for auditing."""
+    try:
+        from app.database import get_db
+        adb = await get_db()
+        try:
+            await adb.execute(
+                """INSERT INTO notification_log
+                   (phone, message_type, student_name, status, wa_message_id)
+                   VALUES (?, 'attendance', ?, ?, ?)""",
+                (phone, student_name, status, details),
+            )
+            await adb.commit()
+        finally:
+            await adb.close()
+    except Exception:
+        pass
+
+
 @app.post("/api/send-whatsapp")
 async def api_send_whatsapp(request: Request):
     """Send a WhatsApp message (used by Campus Agent for attendance notifications).
 
     Requires X-Agent-Secret header when AGENT_SECRET is configured.
-    Blocks attendance notifications on school holidays and Sundays.
+    Blocks attendance notifications on school holidays, Saturdays, and Sundays.
     """
     import os
     from datetime import datetime, timezone, timedelta
@@ -566,10 +586,16 @@ async def api_send_whatsapp(request: Request):
         template_name == "ppis_attendance_alert"
         or "marked present" in message.lower()
     )
+    # Extract student name from template params for audit logging
+    _student_name = template_params[0] if template_params else ""
+
     if is_attendance_msg:
-        # Block on Sundays
-        if today_day == "Sunday":
-            return {"status": "blocked", "reason": "Sunday — school is closed"}
+        # Block on Saturdays and Sundays
+        if today_day in ("Saturday", "Sunday"):
+            await _log_attendance_audit(
+                phone, _student_name, "blocked", f"{today_day} — school closed"
+            )
+            return {"status": "blocked", "reason": f"{today_day} — school is closed"}
         # Block on holidays in the school_holidays table
         try:
             db = await get_db()
@@ -580,6 +606,9 @@ async def api_send_whatsapp(request: Request):
                 )
                 row = await cur.fetchone()
                 if row:
+                    await _log_attendance_audit(
+                        phone, _student_name, "blocked", f"Holiday: {row[0]}"
+                    )
                     return {
                         "status": "blocked",
                         "reason": f"Holiday: {row[0]}",
@@ -614,6 +643,14 @@ async def api_send_whatsapp(request: Request):
             results.append({"phone": digits, "status": "error", "error": "no message"})
             continue
         results.append({"phone": digits, "status": "ok" if success else "error"})
+
+        # Audit log for attendance notifications
+        if is_attendance_msg:
+            await _log_attendance_audit(
+                digits, _student_name,
+                "sent" if success else "failed",
+                f"template={template_name}" if template_name else "direct_message",
+            )
 
     if not results:
         return {"status": "error", "error": "No valid phone numbers to send to", "results": []}
@@ -673,6 +710,26 @@ async def remove_holiday(date: str):
         return {"status": "ok", "removed": date}
     finally:
         await db.close()
+
+
+@app.get("/api/attendance-audit")
+async def attendance_audit(limit: int = 50):
+    """View attendance notification audit log."""
+    from app.database import get_db
+    adb = await get_db()
+    try:
+        cur = await adb.execute(
+            """SELECT id, phone, student_name, status, wa_message_id as details,
+                      created_at
+               FROM notification_log
+               WHERE message_type = 'attendance'
+               ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
+        )
+        rows = await cur.fetchall()
+        return {"audit": [dict(r) for r in rows]}
+    finally:
+        await adb.close()
 
 
 async def _run_broadcast(phone_list: list[str], message: str, batch_delay: float):
