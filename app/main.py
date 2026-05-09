@@ -539,8 +539,10 @@ async def api_send_whatsapp(request: Request):
     """Send a WhatsApp message (used by Campus Agent for attendance notifications).
 
     Requires X-Agent-Secret header when AGENT_SECRET is configured.
+    Blocks attendance notifications on school holidays and Sundays.
     """
     import os
+    from datetime import datetime, timezone, timedelta
     from fastapi import HTTPException
     agent_secret = os.environ.get("AGENT_SECRET", "")
     if agent_secret:
@@ -549,11 +551,43 @@ async def api_send_whatsapp(request: Request):
             raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
     from app.services.whatsapp_service import send_whatsapp_message, send_cloud_template_message
+    from app.database import get_db
     body = await request.json()
     phone = body.get("phone", "")
     message = body.get("message", "")
     template_name = body.get("template_name", "")
     template_params = body.get("template_params", [])
+
+    # --- Block attendance notifications on holidays and Sundays ---
+    ist = timezone(timedelta(hours=5, minutes=30))
+    today_ist = datetime.now(ist).strftime("%Y-%m-%d")
+    today_day = datetime.now(ist).strftime("%A")
+    is_attendance_msg = (
+        template_name == "ppis_attendance_alert"
+        or "marked present" in message.lower()
+    )
+    if is_attendance_msg:
+        # Block on Sundays
+        if today_day == "Sunday":
+            return {"status": "blocked", "reason": "Sunday — school is closed"}
+        # Block on holidays in the school_holidays table
+        try:
+            db = await get_db()
+            try:
+                cur = await db.execute(
+                    "SELECT reason FROM school_holidays WHERE date = ?",
+                    (today_ist,),
+                )
+                row = await cur.fetchone()
+                if row:
+                    return {
+                        "status": "blocked",
+                        "reason": f"Holiday: {row[0]}",
+                    }
+            finally:
+                await db.close()
+        except Exception:
+            pass  # If DB fails, allow the message through
 
     if not phone:
         return {"status": "error", "error": "Missing phone"}
@@ -588,6 +622,57 @@ async def api_send_whatsapp(request: Request):
 
 
 _broadcast_status: dict = {}
+
+
+# ---- Holiday Management APIs ----
+
+@app.get("/api/holidays")
+async def list_holidays():
+    """List all school holidays."""
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT id, date, reason, created_at FROM school_holidays ORDER BY date"
+        )
+        rows = await cur.fetchall()
+        return {"holidays": [dict(r) for r in rows]}
+    finally:
+        await db.close()
+
+
+@app.post("/api/holidays")
+async def add_holiday(request: Request):
+    """Add a school holiday. Body: {date: 'YYYY-MM-DD', reason: 'Holiday name'}"""
+    from app.database import get_db
+    body = await request.json()
+    date = body.get("date", "")
+    reason = body.get("reason", "Holiday")
+    if not date:
+        return {"status": "error", "error": "Missing date (format: YYYY-MM-DD)"}
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO school_holidays (date, reason) VALUES (?, ?)",
+            (date, reason),
+        )
+        await db.commit()
+        return {"status": "ok", "date": date, "reason": reason}
+    finally:
+        await db.close()
+
+
+@app.delete("/api/holidays/{date}")
+async def remove_holiday(date: str):
+    """Remove a school holiday by date."""
+    from app.database import get_db
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM school_holidays WHERE date = ?", (date,))
+        await db.commit()
+        return {"status": "ok", "removed": date}
+    finally:
+        await db.close()
 
 
 async def _run_broadcast(phone_list: list[str], message: str, batch_delay: float):

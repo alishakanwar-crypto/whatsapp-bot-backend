@@ -4336,6 +4336,77 @@ async def receive_cloud_api_message(request: Request):
         logger.info(f"[SKIP] Ignoring {_msg_type_cloud} message from {sender}")
         return {"status": "ok"}
 
+    # --- Admin holiday commands ---
+    # Admins can type: "holiday today", "holiday tomorrow",
+    # "holiday 2026-05-09 Summer break", "remove holiday 2026-05-09"
+    if message_text and _is_admin_panel(sender):
+        _hl = message_text.strip().lower()
+        if _hl.startswith("holiday") or _hl.startswith("remove holiday"):
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            from app.database import get_db as _gdb
+            _ist = _tz(_td(hours=5, minutes=30))
+            _today = _dt.now(_ist)
+            _removing = _hl.startswith("remove holiday")
+            _rest = message_text.strip()
+            if _removing:
+                _rest = _rest[len("remove holiday"):].strip()
+            else:
+                _rest = _rest[len("holiday"):].strip()
+
+            # Parse date
+            _hol_date = None
+            _reason = "Holiday"
+            if not _rest or _rest.lower() == "today":
+                _hol_date = _today.strftime("%Y-%m-%d")
+            elif _rest.lower() == "tomorrow":
+                _hol_date = (_today + _td(days=1)).strftime("%Y-%m-%d")
+            else:
+                # Try YYYY-MM-DD format
+                _parts = _rest.split(None, 1)
+                try:
+                    _dt.strptime(_parts[0], "%Y-%m-%d")
+                    _hol_date = _parts[0]
+                    if len(_parts) > 1:
+                        _reason = _parts[1]
+                except ValueError:
+                    # Try DD-MM-YYYY
+                    try:
+                        _parsed = _dt.strptime(_parts[0], "%d-%m-%Y")
+                        _hol_date = _parsed.strftime("%Y-%m-%d")
+                        if len(_parts) > 1:
+                            _reason = _parts[1]
+                    except ValueError:
+                        _reason = _rest
+                        _hol_date = _today.strftime("%Y-%m-%d")
+
+            if _hol_date:
+                _hdb = await _gdb()
+                try:
+                    if _removing:
+                        await _hdb.execute(
+                            "DELETE FROM school_holidays WHERE date = ?",
+                            (_hol_date,),
+                        )
+                        await _hdb.commit()
+                        await send_whatsapp_message(
+                            reply_to,
+                            f"Holiday removed for {_hol_date}. Attendance will resume on this date.",
+                        )
+                    else:
+                        await _hdb.execute(
+                            "INSERT OR REPLACE INTO school_holidays (date, reason) VALUES (?, ?)",
+                            (_hol_date, _reason),
+                        )
+                        await _hdb.commit()
+                        await send_whatsapp_message(
+                            reply_to,
+                            f"Holiday marked for {_hol_date}: {_reason}\n\n"
+                            f"No attendance notifications will be sent on this date.",
+                        )
+                finally:
+                    await _hdb.close()
+                return {"status": "ok"}
+
     # --- Voice message transcription (Cloud API) ---
     if media_info and media_info.get("type") == "audioMessage":
         cloud_media_id = media_info.get("cloud_media_id", "")
