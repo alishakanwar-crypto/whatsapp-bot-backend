@@ -453,6 +453,32 @@ async def get_registered_faces():
         await db.close()
 
 
+@router.delete("/faces/{person_id}")
+async def dashboard_delete_face(person_id: str):
+    """Delete a face entry from the dashboard (no agent secret needed)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT person_id FROM agent_registered_faces "
+            "WHERE person_id = ? COLLATE NOCASE LIMIT 1",
+            (person_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {"status": "error", "message": "Person not found"}
+        original_pid = row[0]
+        cursor = await db.execute(
+            "DELETE FROM agent_registered_faces WHERE person_id = ? COLLATE NOCASE",
+            (person_id,),
+        )
+        await db.commit()
+        deleted = cursor.rowcount
+        logger.info(f"Dashboard: deleted {deleted} face(s) for {original_pid}")
+        return {"status": "ok", "deleted": deleted, "person_id": original_pid}
+    finally:
+        await db.close()
+
+
 # ── Cameras ──────────────────────────────────────────────────────────────────
 
 @router.get("/cameras")
