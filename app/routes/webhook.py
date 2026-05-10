@@ -741,6 +741,14 @@ async def forward_to_teachers_and_confirm(
             f"PP International School"
         )
 
+        # Build a contextualized media caption so the teacher knows WHO
+        # sent the file and WHAT they're asking.
+        _media_caption_for_teacher = (
+            f"📩 Message from {parent_label}:\n\n"
+            f"\"{message_text[:400]}\"\n\n"
+            f"Please reply — your response will be forwarded to the parent."
+        )
+
         wa_success = False
         if teacher_phone:
             import asyncio as _asyncio_relay
@@ -753,27 +761,32 @@ async def forward_to_teachers_and_confirm(
             if len(t_recipient) == 10:
                 t_recipient = "91" + t_recipient
 
-            tmpl_title = f"Query from {parent_label}"
-            tmpl_body = (
-                f"{message_text[:400]}\n\n"
-                f"Reply to this message — your response will be forwarded to the parent."
-            )
-
-            # NONE of our templates have header components — send text
-            # template first, then media as a separate message.
-            wa_success = await _send_tmpl(
-                t_recipient, "ppis_class_assignment",
-                body_params=[tmpl_title, tmpl_body],
-            )
-            if wa_success:
-                logger.info(f"[FWD] Template sent to {entry['teacher']}")
-                # Send media separately (template opens conversation window)
-                if media_info:
+            if media_info:
+                # When there's media: send the notification text first,
+                # then the media with a contextualized caption.
+                wa_success = await send_whatsapp_message(chat_id, notification)
+                if wa_success:
+                    logger.info(f"[FWD] Notification text sent to {entry['teacher']}")
+                else:
+                    # Try template as fallback to open the conversation window
+                    tmpl_title = f"Query from {parent_label}"
+                    tmpl_body = (
+                        f"{message_text[:400]}\n\n"
+                        f"Reply to this message — your response will be forwarded to the parent."
+                    )
+                    wa_success = await _send_tmpl(
+                        t_recipient, "ppis_class_assignment",
+                        body_params=[tmpl_title, tmpl_body],
+                    )
+                # Send media with parent context caption
+                if wa_success:
                     await _asyncio_relay.sleep(2)
-                    _mcap = media_info.get("caption", "")
                     _mok = False
                     try:
-                        _mok = await forward_cloud_media_to_recipient(media_info, chat_id, caption=_mcap)
+                        _mok = await forward_cloud_media_to_recipient(
+                            media_info, chat_id,
+                            caption=_media_caption_for_teacher,
+                        )
                     except Exception as _me:
                         logger.error(f"[FWD MEDIA] Cloud error: {_me}")
                     if _mok:
@@ -781,15 +794,18 @@ async def forward_to_teachers_and_confirm(
                     else:
                         logger.error(f"[FWD MEDIA] FAILED media to {entry['teacher']}")
             else:
-                # Template failed — fallback to regular message + media
-                logger.warning(f"[FWD] Template failed for {entry['teacher']}, trying regular msg")
-                wa_success = await send_whatsapp_message(chat_id, notification)
-                if wa_success and media_info:
-                    await _asyncio_relay.sleep(2)
-                    try:
-                        await forward_cloud_media_to_recipient(media_info, chat_id, caption=media_info.get("caption", ""))
-                    except Exception as _fme:
-                        logger.error(f"[FWD MEDIA] Fallback media error: {_fme}")
+                # No media — just send the text notification
+                tmpl_title = f"Query from {parent_label}"
+                tmpl_body = (
+                    f"{message_text[:400]}\n\n"
+                    f"Reply to this message — your response will be forwarded to the parent."
+                )
+                wa_success = await _send_tmpl(
+                    t_recipient, "ppis_class_assignment",
+                    body_params=[tmpl_title, tmpl_body],
+                )
+                if not wa_success:
+                    wa_success = await send_whatsapp_message(chat_id, notification)
 
         # Always send email too (Cloud API text may not deliver outside 24h window)
         email_success = False
@@ -890,19 +906,27 @@ async def try_relay_teacher_reply(
         "[Audio shared]", "[Sticker shared]",
     )
 
-    # If teacher sent media, forward the actual media file first
+    # If teacher sent media, forward with the teacher's actual reply text
     media_forwarded = False
     if media_info:
-        caption = f"From {teacher_name} (Class Teacher, {teacher_grade})"
+        # Include the teacher's actual text in the media caption so the
+        # parent sees the reply + attachment together (like normal WhatsApp).
+        if actual_text and not is_placeholder:
+            media_caption = (
+                f"Reply from {teacher_name} ({teacher_grade}):\n\n"
+                f"{actual_text}"
+            )
+        else:
+            media_caption = f"Reply from {teacher_name} ({teacher_grade})"
+
         cloud_media_id = media_info.get("cloud_media_id", "")
         if cloud_media_id:
-            # Cloud API path: download and re-upload the media
             logger.info(
                 f"Relay: forwarding cloud media {cloud_media_id} "
                 f"from {teacher_name} to {original_chat_id}"
             )
             media_forwarded = await forward_cloud_media_to_recipient(
-                media_info, original_chat_id, caption=caption
+                media_info, original_chat_id, caption=media_caption
             )
             if not media_forwarded:
                 logger.warning(
@@ -910,17 +934,19 @@ async def try_relay_teacher_reply(
                     f"will send text fallback"
                 )
         elif media_info.get("url"):
-            # Green API path: forward by URL
             media_forwarded = await forward_file_by_url(
                 original_chat_id,
                 media_info["url"],
                 media_info.get("filename", "file"),
-                caption,
+                media_caption,
             )
 
-    # Send the text part (skip if it's just a placeholder and media was sent)
+    # Send text part only if:
+    # - No media was involved, OR
+    # - Media forwarding failed and we need a text fallback
+    # (If media was forwarded with the teacher's text as caption, skip text)
     text_success = True
-    if not is_placeholder or not media_forwarded:
+    if not media_forwarded:
         relay_msg = (
             f"Reply from {teacher_name} (Class Teacher, {teacher_grade}):\n\n"
             f"{actual_text}\n\n"
@@ -2006,7 +2032,14 @@ async def _forward_query_to_class_teacher(
     wa_success = False
     email_success = False
 
-    # Forward via WhatsApp using approved template (works outside 24-hr window)
+    # Contextualized media caption so teacher knows WHO sent it
+    _ct_media_caption = (
+        f"\U0001f4e9 Message from {parent_label}:\n\n"
+        f"\"{message_text[:400]}\"\n\n"
+        f"Please reply — your response will be forwarded to the parent."
+    )
+
+    # Forward via WhatsApp
     if teacher_phone:
         import asyncio as _asyncio
         from app.services.whatsapp_service import (
@@ -2018,33 +2051,28 @@ async def _forward_query_to_class_teacher(
         if len(teacher_recipient) == 10:
             teacher_recipient = "91" + teacher_recipient
 
-        tmpl_title = f"Query from {parent_label}"
-        tmpl_body = (
-            f"{message_text[:400]}\n\n"
-            f"Kindly reply to this message and your response will be "
-            f"forwarded back to the parent."
-        )
-
-        # NONE of our templates have header components — send text
-        # template first, then media as a separate message.
-        wa_success = await send_cloud_template_message(
-            teacher_recipient,
-            "ppis_class_assignment",
-            body_params=[tmpl_title, tmpl_body],
-        )
-
-        if wa_success:
-            logger.info(
-                f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})"
-            )
-            # Send media separately after template (opens conversation window)
-            if media_info:
+        if media_info:
+            # When there's media: send notification text first, then media
+            # with contextualized caption showing parent identity + query.
+            wa_success = await send_whatsapp_message(chat_id, notification)
+            if not wa_success:
+                tmpl_title = f"Query from {parent_label}"
+                tmpl_body = (
+                    f"{message_text[:400]}\n\n"
+                    f"Kindly reply to this message and your response will be "
+                    f"forwarded back to the parent."
+                )
+                wa_success = await send_cloud_template_message(
+                    teacher_recipient, "ppis_class_assignment",
+                    body_params=[tmpl_title, tmpl_body],
+                )
+            if wa_success:
+                logger.info(f"[PARENT→TEACHER] Notification sent to {teacher_name}")
                 await _asyncio.sleep(2)
-                media_caption = media_info.get("caption", "")
                 media_fwd_ok = False
                 try:
                     media_fwd_ok = await forward_cloud_media_to_recipient(
-                        media_info, chat_id, caption=media_caption,
+                        media_info, chat_id, caption=_ct_media_caption,
                     )
                 except Exception as mf_exc:
                     logger.error(f"[PARENT→TEACHER] Media forward error: {mf_exc}")
@@ -2053,14 +2081,19 @@ async def _forward_query_to_class_teacher(
                 else:
                     logger.error(f"[PARENT→TEACHER] FAILED media to {teacher_name}")
         else:
-            # Template failed — try regular message as fallback
-            logger.warning(f"[PARENT→TEACHER] Template failed, trying regular message to {teacher_name}")
-            wa_success = await send_whatsapp_message(chat_id, notification)
-            if wa_success and media_info:
-                await _asyncio.sleep(2)
-                cloud_mid = media_info.get("cloud_media_id", "")
-                if cloud_mid:
-                    await forward_cloud_media_to_recipient(media_info, chat_id, caption=media_info.get("caption", ""))
+            # No media — text-only query
+            tmpl_title = f"Query from {parent_label}"
+            tmpl_body = (
+                f"{message_text[:400]}\n\n"
+                f"Kindly reply to this message and your response will be "
+                f"forwarded back to the parent."
+            )
+            wa_success = await send_cloud_template_message(
+                teacher_recipient, "ppis_class_assignment",
+                body_params=[tmpl_title, tmpl_body],
+            )
+            if not wa_success:
+                wa_success = await send_whatsapp_message(chat_id, notification)
 
         if wa_success:
             # Save conversation for reply relay
