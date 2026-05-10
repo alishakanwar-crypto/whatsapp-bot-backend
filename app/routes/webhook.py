@@ -4735,9 +4735,20 @@ async def receive_cloud_api_message(request: Request):
                 forward_text = caption if caption else "Shared a file/image"
 
                 # --- Automatic Homework Review (for images only) ---
+                # Skip homework review if caption has forwarding intent —
+                # the parent just wants the image relayed, not analyzed.
+                _cap_lower = caption.lower() if caption else ""
+                _is_forward_request = any(
+                    p in _cap_lower for p in [
+                        "convey to", "forward to", "send to", "tell to",
+                        "relay to", "pass to", "give to",
+                        "class teacher", " ct ", " ct.", " ct,",
+                        "convey to ct", "forward to ct",
+                    ]
+                )
                 is_image_msg = media_info.get("type") == "imageMessage"
                 cloud_mid = media_info.get("cloud_media_id", "")
-                if is_image_msg and cloud_mid:
+                if is_image_msg and cloud_mid and not _is_forward_request:
                     logger.info(f"[HOMEWORK REVIEW] Auto-reviewing image from parent {sender}")
                     try:
                         from app.services.whatsapp_service import download_cloud_media
