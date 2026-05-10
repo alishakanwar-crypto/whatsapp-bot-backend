@@ -3913,13 +3913,17 @@ _FORWARDING_REGEX_PATTERNS = [
         r"\bconvey\b.{0,20}\bto\b",       # "convey to", "convey this to", "convey it to"
         r"\bforward\b.{0,20}\bto\b",      # "forward to", "forward this to"
         r"\bsend\b.{0,20}\bto\b",         # "send to", "send this to", "send it to"
+        r"\bshare\b.{0,20}\bwith\b",      # "share with", "share this with", "share it with"
         r"\btell\b.{0,20}\bto\b",         # "tell to", "tell this to"
         r"\brelay\b.{0,20}\bto\b",        # "relay to", "relay this to"
         r"\bpass\b.{0,20}\bto\b",         # "pass to", "pass this to"
         r"\bgive\b.{0,20}\bto\b",         # "give to", "give this to"
+        r"\bshow\b.{0,20}\bto\b",         # "show to", "show this to"
         r"\binform\b",                     # "inform X"
-        r"\bask\b\s+\w+\s+(?:ma'?am|maam|sir|teacher|madam)\b",  # "ask reva ma'am"
+        r"\bask\b\s+\w+\s*(?:ma'?am|maam|sir|teacher|madam)\b",  # "ask reva ma'am"
+        r"\bask\b.{0,20}\babout\b",       # "ask X about this"
         r"\bclass\s*teacher\b",            # "class teacher"
+        r"\b(?:ct|CT)\b",                  # "CT" as abbreviation
         r"\b(?:i\s+)?don'?t\s+know\b",    # "I don't know", "dont know"
         r"\bwhat(?:'s|\s+is)\s+(?:this|that|is)\b",  # "what's this", "what is this"
         r"\bkya\s+hai\b",                 # Hindi
@@ -4836,8 +4840,22 @@ async def receive_cloud_api_message(request: Request):
                     except Exception as hw_exc:
                         logger.error(f"[HOMEWORK REVIEW] Error: {hw_exc}", exc_info=True)
 
-                # Forward attachment + text to class teacher (all file types)
-                # Try parent→teacher routing (works for non-admin parents)
+                # Forward attachment + text to teacher
+                # FIRST: if caption mentions a specific teacher by name,
+                # route to THAT teacher (not the default class teacher).
+                # e.g. "Share this with Reva Rajput" → forward to Reva Rajput
+                _mentioned = find_mentioned_teachers(forward_text)
+                if _mentioned:
+                    logger.info(
+                        f"[IMAGE HANDLER] Caption mentions teacher(s): "
+                        f"{[t['teacher'] for t in _mentioned]} — routing to them"
+                    )
+                    await forward_to_teachers_and_confirm(
+                        sender, forward_text, reply_to, media_info,
+                    )
+                    return {"status": "ok"}
+
+                # Fallback: route to class teacher (works for non-admin parents)
                 routed = await try_route_parent_to_class_teacher(
                     sender, forward_text, reply_to, media_info,
                 )
