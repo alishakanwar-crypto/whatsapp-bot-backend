@@ -3399,12 +3399,28 @@ async def receive_whatsapp_message(request: Request):
                 "homework", "check", "check this", "please check", "hi", "hello",
                 "help", "thanks", "thank you", "ok", "yes", "no", "please",
                 "good morning", "good afternoon", "good evening", "show",
+                "convey", "forward", "fwd", "relay", "inform",
+                "convey to ct", "convey to class teacher",
+                "forward to ct", "send to ct", "tell ct",
+            ]
+            _G_FWD_PHRASES = [
+                "convey to", "forward to", "send to", "tell to",
+                "class teacher", "ct ", " ct.", " ct,",
+                "i don't know", "i dont know", "don't know",
+                "what is this", "what's this", "kya hai", "pata nahi",
             ]
             _g_is_non_name = _gcap_low in _G_NON_NAME or not _gcap_raw
+            if not _g_is_non_name:
+                for _gp in _G_FWD_PHRASES:
+                    if _gp in _gcap_low:
+                        _g_is_non_name = True
+                        break
             _g_name_words = [
                 w for w in re.sub(r"[^\w\s]", " ", _gcap_raw).split()
                 if len(w) >= 2 and w.isalpha()
-                and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my"}
+                and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my",
+                                       "convey", "forward", "class", "teacher", "know", "what",
+                                       "dont", "this", "that"}
             ]
             _g_has_name = len(_g_name_words) >= 1 and not _g_is_non_name
             _g_has_class = bool(_CAPTION_CLASS_RE.search(_gcap_raw)) if _gcap_raw else False
@@ -3882,6 +3898,9 @@ _NON_NAME_WORDS = {
     "morning", "evening", "thank", "thanks", "okay", "yes", "hi",
     # Command words (not student names)
     "register", "add", "enroll", "enrol", "signup",
+    # Forwarding/routing words
+    "convey", "forward", "fwd", "relay", "inform", "notify", "pass",
+    "class", "dont", "doesn", "won",
 }
 
 
@@ -4527,12 +4546,31 @@ async def receive_cloud_api_message(request: Request):
         # Teacher face registration: if teacher sends an image, register for attendance
         if has_image and is_teacher:
             caption_lower = (media_info.get("caption", "") or "").strip().lower()
+            # Only treat as face registration if caption is empty or
+            # explicitly mentions face/selfie/registration keywords.
+            # Captions with forwarding intent, questions, or long sentences
+            # are NOT face registration requests.
+            _teacher_fwd_phrases = [
+                "convey to", "forward to", "send to", "tell to",
+                "class teacher", " ct ", " ct.", " ct,",
+                "i don't know", "i dont know", "don't know",
+                "what is this", "what's this", "kya hai",
+            ]
+            _has_fwd_intent = any(p in caption_lower for p in _teacher_fwd_phrases)
+            _is_sentence = (
+                len(caption_lower.split()) >= 4
+                and any(c in caption_lower for c in ".?!,")
+            )
             is_face_photo = (
                 not caption_lower
-                or any(kw in caption_lower for kw in [
-                    "register", "face", "selfie", "photo", "attendance",
-                    "my photo", "my face", "register me", "chk",
-                ])
+                or (
+                    not _has_fwd_intent
+                    and not _is_sentence
+                    and any(kw in caption_lower for kw in [
+                        "register", "face", "selfie", "attendance",
+                        "my photo", "my face", "register me",
+                    ])
+                )
             )
             if is_face_photo:
                 logger.info(f"[IMAGE HANDLER] Teacher face registration for {sender}")
@@ -4570,8 +4608,33 @@ async def receive_cloud_api_message(request: Request):
                 "sir", "mam", "madam", "ma'am", "teacher",
                 "kindly", "urgent", "asap", "imp", "important",
                 "today", "tomorrow", "kal", "aaj", "abhi",
+                # Forwarding requests
+                "convey", "forward", "fwd", "relay", "inform",
+                "convey to ct", "convey to class teacher",
+                "forward to ct", "forward to class teacher",
+                "send to ct", "send to class teacher",
+                "tell ct", "tell class teacher",
+            ]
+            # Phrases that indicate forwarding intent — NOT a name
+            _FORWARDING_PHRASES = [
+                "convey to", "forward to", "send to", "tell to",
+                "relay to", "inform to", "pass to", "give to",
+                "class teacher", "ct ", " ct.", " ct,",
+                "i don't know", "i dont know", "don't know",
+                "what is this", "what's this", "what's is this",
+                "kya hai", "pata nahi", "samajh nahi",
             ]
             is_non_name = caption_lower in _NON_NAME_CAPTIONS or not caption_raw
+            # Also block if caption contains any forwarding phrase
+            if not is_non_name:
+                for phrase in _FORWARDING_PHRASES:
+                    if phrase in caption_lower:
+                        is_non_name = True
+                        logger.info(
+                            f"[IMAGE HANDLER] Caption blocked from face reg — "
+                            f"contains forwarding phrase '{phrase}': '{caption_raw[:80]}'"
+                        )
+                        break
             # Check if caption looks like a person's name — must have at
             # least 2 name-like words (first + last name) to avoid false
             # positives from single words like "Chk", "Look", etc.
@@ -4582,9 +4645,25 @@ async def receive_cloud_api_message(request: Request):
                                        "this", "that", "from", "with", "pgt", "tgt", "ntt",
                                        "teacher", "sir", "mam", "madam", "mrs", "mr", "ms",
                                        "regards", "good", "morning", "evening", "photo",
-                                       "required", "please", "kindly"}
+                                       "required", "please", "kindly",
+                                       # Forwarding/action/question words
+                                       "convey", "forward", "class", "know", "what",
+                                       "dont", "doesn", "won", "can", "will", "should",
+                                       "need", "want", "tell", "give", "send", "check",
+                                       "look", "see", "how", "why", "where", "when",
+                                       "not", "but", "also", "just", "only", "very",
+                                       "all", "any", "our", "your", "his", "her"}
             ]
-            has_name_in_caption = len(_name_words) >= 2 and not is_non_name
+            # A real name is 2-5 words. Long captions with punctuation
+            # are sentences/requests, not names.
+            _caption_word_count = len(caption_raw.split())
+            _has_punctuation = any(c in caption_raw for c in ".?!,;:")
+            _looks_like_sentence = _caption_word_count >= 5 and _has_punctuation
+            has_name_in_caption = (
+                len(_name_words) >= 2
+                and not is_non_name
+                and not _looks_like_sentence
+            )
             # Exclude if it looks like a student photo (has class indicator)
             has_class_indicator = bool(_CAPTION_CLASS_RE.search(caption_raw)) if caption_raw else False
 
