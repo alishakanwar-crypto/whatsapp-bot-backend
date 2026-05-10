@@ -8,6 +8,7 @@ from app.services.whatsapp_service import (
     parse_cloud_api_message,
     get_cloud_media_url,
     send_whatsapp_message,
+    send_whatsapp_force,
     send_whatsapp_image,
     send_whatsapp_image_file,
     forward_file_by_url,
@@ -595,11 +596,11 @@ async def try_handle_pending_query(
         f"— PPIS Bot"
     )
 
-    # Forward via WhatsApp
+    # Forward via WhatsApp (force-send — teacher may not have messaged bot recently)
     wa_success = False
     if teacher_phone:
         chat_id = _teacher_chat_id(teacher_phone)
-        wa_success = await send_whatsapp_message(chat_id, notification)
+        wa_success = await send_whatsapp_force(chat_id, notification)
         if wa_success:
             logger.info(f"Forwarded pending query via WhatsApp to {teacher_name} ({teacher_phone})")
 
@@ -786,14 +787,8 @@ async def forward_to_teachers_and_confirm(
             if len(t_recipient) == 10:
                 t_recipient = "91" + t_recipient
 
-            # Open the 24-hour conversation window with a template
-            # (regular messages silently fail if window is closed —
-            # Meta returns 200 OK but never delivers them).
-            wa_success = await _ensure_conversation_window(t_recipient)
-            if wa_success:
-                # Window is open — send the real notification text
-                await _asyncio_relay.sleep(1)
-                await send_whatsapp_message(chat_id, notification)
+            # Force-send: opens conversation window if needed, then sends content
+            wa_success = await send_whatsapp_force(chat_id, notification)
 
             # Send media after text (window is now open)
             if wa_success and media_info:
@@ -958,7 +953,7 @@ async def try_relay_teacher_reply(
             f"Warm regards,\n"
             f"PP International School"
         )
-        text_success = await send_whatsapp_message(original_chat_id, relay_msg)
+        text_success = await send_whatsapp_force(original_chat_id, relay_msg)
 
     success = text_success or media_forwarded
 
@@ -1323,7 +1318,7 @@ async def try_direct_message(
             f"You can reply to this message and your response will be forwarded back.\n\n"
             f"— PPIS Bot"
         )
-        wa_success = await send_whatsapp_message(chat_id, dm_text)
+        wa_success = await send_whatsapp_force(chat_id, dm_text)
 
         if wa_success:
             # Also forward media if present
@@ -1571,10 +1566,10 @@ async def detect_and_handle_homework_query(
     wa_success = False
     email_success = False
 
-    # Send via WhatsApp
+    # Send via WhatsApp (force-send — teacher may not have 24h window open)
     if teacher_phone:
         teacher_chat = _teacher_chat_id(teacher_phone)
-        wa_success = await send_whatsapp_message(teacher_chat, forward_msg)
+        wa_success = await send_whatsapp_force(teacher_chat, forward_msg)
         if wa_success:
             # Forward any attached media (document, image, etc.) to the teacher
             if media_info:
@@ -1789,7 +1784,7 @@ async def detect_and_handle_leave_application(
 
     if teacher_phone:
         teacher_chat = _teacher_chat_id(teacher_phone)
-        wa_success = await send_whatsapp_message(teacher_chat, forward_msg)
+        wa_success = await send_whatsapp_force(teacher_chat, forward_msg)
         if wa_success:
             # Forward any attached media (e.g. medical certificate) to the teacher
             if media_info:
@@ -2053,12 +2048,8 @@ async def _forward_query_to_class_teacher(
         if len(teacher_recipient) == 10:
             teacher_recipient = "91" + teacher_recipient
 
-        # Open conversation window with template
-        wa_success = await _ensure_conversation_window(teacher_recipient)
-        if wa_success:
-            # Window open — send real notification text
-            await _asyncio.sleep(1)
-            await send_whatsapp_message(chat_id, notification)
+        # Force-send: opens conversation window if needed, then sends content
+        wa_success = await send_whatsapp_force(chat_id, notification)
 
         # Send media after text
         if wa_success and media_info:
@@ -2397,8 +2388,8 @@ async def detect_and_handle_teacher_homework_broadcast(
                 f"Thank you for your cooperation.\n"
                 f"Warm regards,\nPP International School"
             )
-            success = await send_whatsapp_message(recipient, parent_msg)
-            # Forward media via Green API
+            success = await send_whatsapp_force(recipient, parent_msg)
+            # Forward media after template opens window
             if success and media_info and media_info.get("url"):
                 await forward_file_by_url(
                     recipient, media_info["url"],
@@ -3027,7 +3018,7 @@ async def detect_and_handle_snapshot_request(
             admin_phones = ["919971166562", "919599488106", "918076455224"]
             for admin_phone in admin_phones:
                 try:
-                    await send_whatsapp_message(
+                    await send_whatsapp_force(
                         admin_phone,
                         "PPIS Bot — Camera System Alert\n\n"
                         f"The campus camera system has failed {consecutive} "
@@ -4921,11 +4912,9 @@ async def receive_cloud_api_message(request: Request):
                                 f"Warm regards,\nPP International School"
                             )
 
-                            # Open 24h window with template, then send real content
-                            _fwd_ok = await _ensure_conversation_window(_trec)
+                            # Force-send to teacher (opens 24h window automatically)
+                            _fwd_ok = await send_whatsapp_force(chat_id, fwd_msg)
                             if _fwd_ok:
-                                await _asyncio_fwd.sleep(1)
-                                await send_whatsapp_message(chat_id, fwd_msg)
                                 logger.info(f"[CLOUD FILE FWD] Notification sent to {teacher_name}")
                                 # Send media separately
                                 await _asyncio_fwd.sleep(2)

@@ -575,7 +575,7 @@ async def api_send_whatsapp(request: Request):
         if header_secret != agent_secret:
             raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
-    from app.services.whatsapp_service import send_whatsapp_message, send_cloud_template_message
+    from app.services.whatsapp_service import send_whatsapp_message, send_whatsapp_force, send_cloud_template_message
     from app.database import get_db
     body = await request.json()
     phone = body.get("phone", "")
@@ -651,7 +651,7 @@ async def api_send_whatsapp(request: Request):
                 digits, template_name, body_params=template_params or None,
             )
         elif message:
-            success = await send_whatsapp_message(digits, message)
+            success = await send_whatsapp_force(digits, message)
         else:
             results.append({"phone": digits, "status": "error", "error": "no message"})
             continue
@@ -748,14 +748,14 @@ async def attendance_audit(limit: int = 50):
 async def _run_broadcast(phone_list: list[str], message: str, batch_delay: float):
     """Background task to send broadcast messages."""
     import asyncio
-    from app.services.whatsapp_service import send_whatsapp_message
+    from app.services.whatsapp_service import send_whatsapp_force
 
     global _broadcast_status
     _broadcast_status["running"] = True
 
     for i, phone in enumerate(phone_list):
         try:
-            success = await send_whatsapp_message(phone, message)
+            success = await send_whatsapp_force(phone, message)
             if success:
                 _broadcast_status["sent"] += 1
             else:

@@ -365,6 +365,9 @@ async def send_whatsapp_message(to: str, message: str) -> bool:
 
     Returns True on success. The sent message's WhatsApp ID (if available)
     is stored in send_whatsapp_message.last_wa_id after each call.
+
+    NOTE: This only works within the 24-hour conversation window.
+    For proactive/outbound messages, use ``send_whatsapp_force()`` instead.
     """
     provider = get_whatsapp_provider()
     if provider == "cloud":
@@ -374,6 +377,40 @@ async def send_whatsapp_message(to: str, message: str) -> bool:
 
 # Attribute to store the last sent message ID (set by _send_cloud_text)
 send_whatsapp_message.last_wa_id = ""  # type: ignore[attr-defined]
+
+
+async def send_whatsapp_force(to: str, message: str) -> bool:
+    """Force-send a WhatsApp message, opening the conversation window first.
+
+    Meta Cloud API silently drops regular messages when the 24-hour
+    conversation window is closed (returns 200 OK but never delivers).
+    This function sends the approved ``ppis_class_assignment`` template
+    first to guarantee the window is open, then sends the actual message
+    as a regular text.
+
+    Use this for ALL proactive/outbound messages where the recipient may
+    not have messaged the bot recently (teacher forwarding, attendance
+    notifications, homework broadcasts, etc.).
+    """
+    import asyncio
+
+    recipient = to.split("@")[0] if "@" in to else to
+    if len(recipient) == 10:
+        recipient = "91" + recipient
+
+    # Open conversation window with the single approved template
+    window_ok = await send_cloud_template_message(
+        recipient,
+        "ppis_class_assignment",
+        body_params=["New message", "for you via PPIS Bot"],
+    )
+    if not window_ok:
+        logger.error(f"[FORCE] Template failed for {recipient}, trying regular send")
+        return await send_whatsapp_message(to, message)
+
+    # Window is open — send the real content
+    await asyncio.sleep(1)
+    return await send_whatsapp_message(to, message)
 
 
 async def _send_cloud_text(to: str, message: str) -> bool:
