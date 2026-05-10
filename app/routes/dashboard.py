@@ -98,7 +98,38 @@ async def attendance_history(
 
 @router.post("/attendance/report")
 async def report_attendance(request: Request):
-    """Receive attendance records from the campus agent."""
+    """Receive attendance records from the campus agent.
+
+    Blocks attendance on Sundays, 2nd Saturdays, and school holidays.
+    """
+    from datetime import timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    day_name = now_ist.strftime("%A")
+
+    # Block on Sundays
+    if day_name == "Sunday":
+        return {"status": "blocked", "reason": "Sunday — school is closed", "inserted": 0}
+    # Block on 2nd Saturday only
+    if day_name == "Saturday":
+        sat_number = (now_ist.day - 1) // 7 + 1
+        if sat_number == 2:
+            return {"status": "blocked", "reason": "2nd Saturday — school is closed", "inserted": 0}
+    # Block on holidays
+    today_str = now_ist.strftime("%Y-%m-%d")
+    try:
+        _hdb = await get_db()
+        try:
+            _hcur = await _hdb.execute(
+                "SELECT reason FROM school_holidays WHERE date = ?", (today_str,))
+            _hrow = await _hcur.fetchone()
+            if _hrow:
+                return {"status": "blocked", "reason": f"Holiday: {_hrow[0]}", "inserted": 0}
+        finally:
+            await _hdb.close()
+    except Exception:
+        pass
+
     body = await request.json()
     records = body.get("records", [])
     if not records:
