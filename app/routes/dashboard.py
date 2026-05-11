@@ -1208,12 +1208,23 @@ async def get_today_summary():
         cameras_online = cam_status.get("online", 0)
         cameras_offline = cam_status.get("offline", 0) + cam_status.get("error", 0)
 
-        # Grade breakdown for absent tracking
+        # Grade breakdown for absent tracking — extract grade from person_id
+        # person_id format: NAME_GRADE (e.g. SUHAAN_AHUJA_GRADE3C)
         cursor = await db.execute(
-            "SELECT grade, COUNT(DISTINCT person_id) FROM agent_registered_faces "
-            "WHERE person_id NOT LIKE 'TEACHER_%' GROUP BY grade"
+            "SELECT DISTINCT person_id FROM agent_registered_faces "
+            "WHERE person_id NOT LIKE 'TEACHER_%'"
         )
-        registered_by_grade = {r[0]: r[1] for r in await cursor.fetchall()}
+        registered_by_grade: dict[str, int] = {}
+        for r in await cursor.fetchall():
+            pid = r[0]
+            # Extract grade: last segment that starts with common grade patterns
+            parts = pid.split("_")
+            grade_part = ""
+            for p in parts:
+                if p.startswith("GRADE") or p.startswith("PREP"):
+                    grade_part = p
+            if grade_part:
+                registered_by_grade[grade_part] = registered_by_grade.get(grade_part, 0) + 1
 
         cursor = await db.execute(
             "SELECT grade, COUNT(DISTINCT person_id) FROM attendance_records "
