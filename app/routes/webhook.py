@@ -3789,10 +3789,21 @@ async def receive_whatsapp_message(request: Request):
                 except Exception as vis_exc:
                     logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
 
-            # PRIORITY 3: Face registration — ONLY when caption is clearly
-            # a short name (already handled above at lines 3663-3724 for
-            # name-based captions). This secondary call is for captionless
-            # images that were NOT buffered (edge case).
+            # PRIORITY 3: Face registration — for name+class captions
+            # (e.g. "Aarav Sharma Grade 5A"). The earlier block at ~3709
+            # only handles name-only (no class), so name+class is handled here.
+            if _g_has_name and _g_has_class:
+                logger.info(f"[GREEN IMAGE] Name+class caption — attempting child face registration")
+                try:
+                    face_reg_handled = await _try_register_child_face(
+                        sender, reply_to, bot_phone, media_info,
+                    )
+                    if face_reg_handled:
+                        return {"status": "ok"}
+                except Exception as img_exc:
+                    logger.error(f"[GREEN IMAGE] Child face reg error: {img_exc}", exc_info=True)
+
+            # No caption → already buffered above, just acknowledge
             if not _hw_caption_g:
                 # No caption → already buffered above, just acknowledge
                 _ask_msg = (
