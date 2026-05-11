@@ -1467,7 +1467,7 @@ async def report_manual_review(request: Request):
 # ── Teacher/Staff Attendance Report ──────────────────────────────────────────
 
 REPORT_RECIPIENTS = os.environ.get(
-    "ATTENDANCE_REPORT_EMAIL", "alisha.kanwar@ppischool.in"
+    "ATTENDANCE_REPORT_EMAIL", "alisha.kanwar@ppischool.in,leave@ppischool.in"
 )
 
 
