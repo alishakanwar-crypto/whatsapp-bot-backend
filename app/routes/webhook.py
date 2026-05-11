@@ -4111,30 +4111,143 @@ def _caption_has_name_and_class(caption: str) -> bool:
 
 
 def _classify_media_content(media_info: dict) -> str:
-    """Classify incoming media into: 'student_photo' or 'document'.
+    """Classify incoming media into two strictly separate categories:
 
-    Strict rule:
-    - student_photo ONLY if caption has Name + Class/Section
-    - Everything else is 'document' (no GPT, no guessing)
+    CATEGORY 1 — 'face_registration'
+      Triggered ONLY when the image caption is tagged as:
+        - name + class (e.g. "Aarav Sharma Grade 5A")
+        - name only (e.g. "Alisha Ahuja") — 2+ name words, no forwarding intent
+        - name + staff/teacher indicator (e.g. "Alisha Ahuja Staff : PPIS")
+        - explicit registration keywords ("register", "face", "selfie", "attendance")
+      These images go ONLY to the face-recognition pipeline.
+      They are NEVER forwarded as normal media to teachers or parents.
 
-    NOTE: This function does NOT check sender context (teacher vs parent).
-    The caller (Cloud API handler) is responsible for skipping early
-    media interception when the sender is a teacher, so that documents
-    from teachers reach the homework broadcast and relay handlers.
+    CATEGORY 2 — 'document'
+      Everything else: homework photos, PDFs, worksheets, screenshots,
+      voice notes, announcements, any normal parent-teacher shared media.
+      These are forwarded normally. Face recognition is NEVER run on them.
+
+    Returns: 'face_registration' or 'document'
     """
     media_type = media_info.get("type", "")
     caption = (media_info.get("caption", "") or "").strip()
+    caption_lower = caption.lower()
 
-    # Non-image media types are always documents
-    if media_type in ("documentMessage", "videoMessage"):
+    # Non-image media types are ALWAYS Category 2 (documents)
+    if media_type in ("documentMessage", "videoMessage", "audioMessage"):
         return "document"
 
-    # Check caption for Name + Class
-    if caption and _caption_has_name_and_class(caption):
-        return "student_photo"
+    # --- Category 1 checks (face registration) ---
 
-    # Everything else: no name+class = document/general file
+    # Check 1: Caption has Name + Class → student face registration
+    if caption and _caption_has_name_and_class(caption):
+        return "face_registration"
+
+    # Check 2: Caption has explicit registration keywords
+    _REG_KEYWORDS = ["register", "face reg", "selfie", "attendance photo",
+                     "my photo", "my face", "register me"]
+    if caption_lower and any(kw in caption_lower for kw in _REG_KEYWORDS):
+        return "face_registration"
+
+    # Check 3: Caption has staff/designation indicators
+    _STAFF_INDICATORS = ["staff", "ppis", "pgt", "tgt", "ntt", "coordinator",
+                         "principal", "vice principal", "hod"]
+    if caption_lower and any(ind in caption_lower for ind in _STAFF_INDICATORS):
+        return "face_registration"
+
+    # Check 4: Caption looks like a person's name (2+ name words, no
+    # forwarding intent, no document/action keywords, no sentence structure)
+    if caption and _caption_is_name_only(caption):
+        return "face_registration"
+
+    # --- Everything else is Category 2 (general media/document) ---
     return "document"
+
+
+# Forwarding phrases that indicate the caption is a query, NOT a person's name
+_FORWARDING_PHRASES = [
+    "convey to", "forward to", "send to", "tell to",
+    "relay to", "inform to", "pass to", "give to",
+    "ask maam", "ask ma'am", "ask sir", "ask teacher",
+    "share with", "share this with",
+    "class teacher", "ct ", " ct.", " ct,",
+    "i don't know", "i dont know", "don't know",
+    "what is this", "what's this", "kya hai", "pata nahi", "samajh nahi",
+]
+
+# Single-word or short captions that are clearly NOT a name
+_NON_NAME_CAPTIONS = {
+    "homework", "check", "check this", "please check", "hi", "hello",
+    "help", "thanks", "thank you", "ok", "yes", "no", "please",
+    "good morning", "good afternoon", "good evening", "show",
+    "chk", "chck", "pls", "plz", "plz check", "pls check",
+    "hw", "hmwk", "hmw", "see", "look", "dekho", "dekhiye",
+    "dekhna", "btao", "bataiye", "verify", "review", "done",
+    "send", "share", "shared", "forwarded", "fwd", "correction",
+    "correct", "wrong", "right", "marks", "grade", "test", "exam",
+    "pic", "photo", "image", "screenshot", "ss", "file", "doc",
+    "document", "pdf", "page", "pg", "note", "notes",
+    "sir", "mam", "madam", "ma'am", "teacher",
+    "kindly", "urgent", "asap", "imp", "important",
+    "today", "tomorrow", "kal", "aaj", "abhi",
+    "convey", "forward", "relay", "inform",
+}
+
+# Words to exclude when detecting name-like tokens in a caption
+_NON_NAME_WORDS = {
+    "the", "of", "is", "at", "in", "for", "and", "as", "my",
+    "this", "that", "from", "with", "staff", "ppis",
+    "teacher", "sir", "mam", "madam", "mrs", "mr", "ms",
+    "regards", "good", "morning", "evening", "photo",
+    "required", "please", "kindly",
+    "ask", "convey", "forward", "class", "know", "what",
+    "dont", "doesn", "won", "can", "will", "should",
+    "need", "want", "tell", "give", "send", "check",
+    "look", "see", "how", "why", "where", "when",
+    "not", "but", "also", "just", "only", "very",
+    "all", "any", "our", "your", "his", "her",
+}
+
+
+def _caption_is_name_only(caption: str) -> bool:
+    """Check if a caption looks like ONLY a person's name (no query/command).
+
+    Returns True for: "Alisha Ahuja", "Aarav Sharma", "Riya Singh"
+    Returns False for: "check this", "ask harnoor maam if this is final",
+                       "homework", "convey to teacher", sentences with punctuation
+    """
+    caption_lower = caption.lower().strip()
+    if not caption_lower or len(caption_lower) < 3:
+        return False
+
+    # Exact match against known non-name captions
+    if caption_lower in _NON_NAME_CAPTIONS:
+        return False
+
+    # Contains a forwarding/question phrase → it's a query, not a name
+    for phrase in _FORWARDING_PHRASES:
+        if phrase in caption_lower:
+            return False
+    if caption_lower.startswith("ask "):
+        return False
+
+    # Extract name-like words (alphabetic, 2+ chars, not common filler words)
+    name_words = [
+        w for w in re.sub(r"[^\w\s]", " ", caption).split()
+        if len(w) >= 2 and w.isalpha() and w.lower() not in _NON_NAME_WORDS
+    ]
+
+    # Must have at least 2 name words (first + last name)
+    if len(name_words) < 2:
+        return False
+
+    # Long captions with punctuation are sentences/requests, not names
+    word_count = len(caption.split())
+    has_punctuation = any(c in caption for c in ".?!,;:")
+    if word_count >= 5 and has_punctuation:
+        return False
+
+    return True
 
 
 async def _try_register_child_face(
@@ -4708,231 +4821,113 @@ async def receive_cloud_api_message(request: Request):
                         except Exception as e:
                             logger.error(f"[IMAGE BUFFER] Face reg error: {e}", exc_info=True)
 
-        # --- Image/media handling with strict content classification ---
-        # RULE: Only treat as student photo if caption has Name + Class.
-        #       Everything else → "File received" or forward to teacher.
-        # IMPORTANT: Documents/videos from teachers must NOT be intercepted here.
-        #       They must fall through to detect_and_handle_teacher_homework_broadcast()
-        #       and try_relay_teacher_reply() which handle media forwarding correctly.
+        # ================================================================
+        # MEDIA CLASSIFICATION — TWO STRICTLY SEPARATE PIPELINES
+        # ================================================================
+        # CATEGORY 1 — Face Registration (name/name+class/name+staff)
+        #   → Face-recognition pipeline ONLY. NEVER forwarded as media.
+        # CATEGORY 2 — General Media/Documents (homework, PDFs, etc.)
+        #   → Forward normally. NEVER triggers face recognition.
+        # ================================================================
         has_media = media_info and media_info.get("type") in ("imageMessage", "documentMessage", "videoMessage")
         has_image = media_info and media_info.get("type") == "imageMessage" and media_info.get("cloud_media_id")
         is_teacher = _is_teacher_phone(sender)
         is_non_image_media = media_info and media_info.get("type") in ("documentMessage", "videoMessage")
-        logger.info(f"[IMAGE CHECK] sender={sender} has_media={has_media} has_image={has_image} is_teacher={is_teacher} is_non_image={is_non_image_media}")
+        logger.info(f"[MEDIA CHECK] sender={sender} has_media={has_media} has_image={has_image} is_teacher={is_teacher} is_non_image={is_non_image_media}")
 
-        # Teacher face registration: if teacher sends an image, register for attendance
-        if has_image and is_teacher:
-            caption_lower = (media_info.get("caption", "") or "").strip().lower()
-            # Only treat as face registration if caption is empty or
-            # explicitly mentions face/selfie/registration keywords.
-            # Captions with forwarding intent, questions, or long sentences
-            # are NOT face registration requests.
-            _teacher_fwd_phrases = [
-                "convey to", "forward to", "send to", "tell to",
-                "ask maam", "ask ma'am", "ask sir", "ask teacher",
-                "class teacher", " ct ", " ct.", " ct,",
-                "i don't know", "i dont know", "don't know",
-                "what is this", "what's this", "kya hai",
-            ]
-            _has_fwd_intent = (
-                any(p in caption_lower for p in _teacher_fwd_phrases)
-                or caption_lower.startswith("ask ")
-            )
-            _is_sentence = (
-                len(caption_lower.split()) >= 4
-                and any(c in caption_lower for c in ".?!,")
-            )
-            is_face_photo = (
-                not caption_lower
-                or (
-                    not _has_fwd_intent
-                    and not _is_sentence
-                    and any(kw in caption_lower for kw in [
-                        "register", "face", "selfie", "attendance",
-                        "my photo", "my face", "register me",
-                    ])
-                )
-            )
-            if is_face_photo:
-                logger.info(f"[IMAGE HANDLER] Teacher face registration for {sender}")
-                try:
-                    handled = await _try_register_teacher_face(
-                        sender, reply_to, bot_phone, media_info, is_teacher,
-                    )
-                    if handled:
-                        return {"status": "ok"}
-                except Exception as e:
-                    logger.error(f"[IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
-
-        # Face registration for ANYONE who sends a photo WITH a name in the caption.
-        # Teachers, staff, etc. who are NOT in TEACHER_DATA can register by sending
-        # a selfie with their name. If caption has Name+Class → student face reg (below).
-        # If caption has just a name (no class indicator) → teacher/staff face reg.
-        if has_image:
-            caption_raw = (media_info.get("caption", "") or "").strip()
-            caption_lower = caption_raw.lower()
-            # Skip captions that are clearly NOT a person's name.
-            # This must be comprehensive — any short action/request word
-            # that parents commonly use as image captions.
-            _NON_NAME_CAPTIONS = [
-                "homework", "check", "check this", "please check", "hi", "hello",
-                "help", "thanks", "thank you", "ok", "yes", "no", "please",
-                "good morning", "good afternoon", "good evening", "show",
-                # Common abbreviations parents use
-                "chk", "chck", "pls", "plz", "plz check", "pls check",
-                "hw", "hmwk", "hmw", "see", "look", "dekho", "dekhiye",
-                "dekhna", "btao", "bataiye", "verify", "review", "done",
-                "send", "share", "shared", "forwarded", "fwd", "correction",
-                "correct", "wrong", "right", "marks", "grade", "test", "exam",
-                "pic", "photo", "image", "screenshot", "ss", "file", "doc",
-                "document", "pdf", "page", "pg", "note", "notes",
-                "sir", "mam", "madam", "ma'am", "teacher",
-                "kindly", "urgent", "asap", "imp", "important",
-                "today", "tomorrow", "kal", "aaj", "abhi",
-                # Forwarding requests
-                "convey", "forward", "fwd", "relay", "inform",
-                "convey to ct", "convey to class teacher",
-                "forward to ct", "forward to class teacher",
-                "send to ct", "send to class teacher",
-                "tell ct", "tell class teacher",
-            ]
-            # Phrases that indicate forwarding intent — NOT a name
-            _FORWARDING_PHRASES = [
-                "convey to", "forward to", "send to", "tell to",
-                "relay to", "inform to", "pass to", "give to",
-                "ask maam", "ask ma'am", "ask sir", "ask teacher",
-                "class teacher", "ct ", " ct.", " ct,",
-                "i don't know", "i dont know", "don't know",
-                "what is this", "what's this", "what's is this",
-                "kya hai", "pata nahi", "samajh nahi",
-            ]
-            is_non_name = caption_lower in _NON_NAME_CAPTIONS or not caption_raw
-            # Also block if caption contains any forwarding phrase
-            if not is_non_name:
-                _matched_phrase = None
-                for phrase in _FORWARDING_PHRASES:
-                    if phrase in caption_lower:
-                        _matched_phrase = phrase
-                        break
-                if not _matched_phrase and caption_lower.startswith("ask "):
-                    _matched_phrase = "ask ..."
-                if _matched_phrase:
-                    is_non_name = True
-                    logger.info(
-                        f"[IMAGE HANDLER] Caption blocked from face reg — "
-                        f"contains forwarding phrase '{_matched_phrase}': '{caption_raw[:80]}'"
-                    )
-            # Check if caption looks like a person's name — must have at
-            # least 2 name-like words (first + last name) to avoid false
-            # positives from single words like "Chk", "Look", etc.
-            _name_words = [
-                w for w in re.sub(r"[^\w\s]", " ", caption_raw).split()
-                if len(w) >= 2 and w.isalpha()
-                and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my",
-                                       "this", "that", "from", "with", "pgt", "tgt", "ntt",
-                                       "teacher", "sir", "mam", "madam", "mrs", "mr", "ms",
-                                       "regards", "good", "morning", "evening", "photo",
-                                       "required", "please", "kindly",
-                                       # Forwarding/action/question words
-                                       "ask", "convey", "forward", "class", "know", "what",
-                                       "dont", "doesn", "won", "can", "will", "should",
-                                       "need", "want", "tell", "give", "send", "check",
-                                       "look", "see", "how", "why", "where", "when",
-                                       "not", "but", "also", "just", "only", "very",
-                                       "all", "any", "our", "your", "his", "her"}
-            ]
-            # A real name is 2-5 words. Long captions with punctuation
-            # are sentences/requests, not names.
-            _caption_word_count = len(caption_raw.split())
-            _has_punctuation = any(c in caption_raw for c in ".?!,;:")
-            _looks_like_sentence = _caption_word_count >= 5 and _has_punctuation
-            has_name_in_caption = (
-                len(_name_words) >= 2
-                and not is_non_name
-                and not _looks_like_sentence
-            )
-            # Exclude if it looks like a student photo (has class indicator)
-            has_class_indicator = bool(_CAPTION_CLASS_RE.search(caption_raw)) if caption_raw else False
-
-            # Also detect staff photos: "Name\nStaff : PPIS", "Name Staff",
-            # "Name\nDesignation" patterns — these are face registration, not forwarding.
-            _STAFF_INDICATORS = ["staff", "ppis", "pgt", "tgt", "ntt", "coordinator",
-                                 "principal", "vice principal", "hod", "admin"]
-            _has_staff_indicator = any(ind in caption_lower for ind in _STAFF_INDICATORS)
-
-            if (has_name_in_caption and not has_class_indicator) or _has_staff_indicator:
-                _clean_name = _extract_person_name(caption_raw)
-                if not _clean_name:
-                    _clean_name = f"Staff_{sender[-10:]}"
-
-                logger.info(
-                    f"[IMAGE HANDLER] Face registration from caption name "
-                    f"sender={sender} name='{_clean_name}' caption='{caption_raw[:80]}'"
-                )
-                sender_digits = re.sub(r"\D", "", sender)
-                sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
-                synthetic_entry = {
-                    "teacher": _clean_name,
-                    "grade": "",
-                    "whatsapp": sender_last10,
-                }
-                try:
-                    handled = await _try_register_teacher_face(
-                        sender, reply_to, bot_phone, media_info, synthetic_entry,
-                    )
-                    if handled:
-                        return {"status": "ok"}
-                except Exception as e:
-                    logger.error(f"[IMAGE HANDLER] Caption-based face reg error: {e}", exc_info=True)
-                # Face registration was attempted but failed — still do NOT forward
-                # to teacher. This is a face photo, not a document/query.
-                _ack_msg = (
-                    f"Photo received for *{_clean_name}*. "
-                    f"Face registration is being processed."
-                )
-                await save_message(bot_phone, sender, _ack_msg, "whatsapp", "outgoing")
-                await send_whatsapp_message(reply_to, _ack_msg)
-                return {"status": "ok"}
-
-            # If image has no caption (or only generic caption), buffer it so a
-            # follow-up text message with a name can be linked for face registration.
-            if not caption_raw or is_non_name:
-                _recent_images[sender] = {
-                    "media_info": media_info,
-                    "timestamp": _time_mod.time(),
-                    "reply_to": reply_to,
-                    "bot_phone": bot_phone,
-                }
-                logger.info(f"[IMAGE BUFFER] Buffered image from {sender} (no caption) — waiting for name text")
-
-        # Skip early media interception for remaining teacher media (docs, videos, etc).
-        # These must reach the homework broadcast and teacher reply relay handlers below.
-        if has_media and not is_teacher:
+        # --- STEP 1: Classify ALL media using the unified classifier ---
+        if has_media:
             content_class = _classify_media_content(media_info)
-            logger.info(f"[IMAGE HANDLER] Content classified as '{content_class}' for {sender}")
+            logger.info(f"[MEDIA CLASSIFY] Classified as '{content_class}' for sender={sender} caption='{(media_info.get('caption','') or '')[:80]}'")
 
-            if content_class == "student_photo":
-                # Caption has Name + Class → attempt face registration
-                logger.info(f"[IMAGE HANDLER] Student photo with name+class from {sender}")
-                try:
-                    face_reg_handled = await _try_register_child_face(
-                        sender, reply_to, bot_phone, media_info,
+            # ==============================================================
+            # PIPELINE 1 — FACE REGISTRATION (Category 1)
+            # ==============================================================
+            # Triggered for: name+class, name-only, name+staff, registration keywords
+            # Action: Send to face-recognition module ONLY.
+            # NEVER forward as normal media. NEVER store as document.
+            if content_class == "face_registration":
+                caption_raw = (media_info.get("caption", "") or "").strip()
+                has_class_indicator = bool(_CAPTION_CLASS_RE.search(caption_raw)) if caption_raw else False
+
+                if has_class_indicator:
+                    # Name + Class → student/child face registration
+                    logger.info(f"[FACE REG] Student photo (name+class) from {sender}")
+                    try:
+                        face_reg_handled = await _try_register_child_face(
+                            sender, reply_to, bot_phone, media_info,
+                        )
+                        if face_reg_handled:
+                            return {"status": "ok"}
+                    except Exception as img_exc:
+                        logger.error(f"[FACE REG] Child face registration error: {img_exc}", exc_info=True)
+                    _ack_msg = "Photo received for face registration."
+                    await save_message(bot_phone, sender, _ack_msg, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _ack_msg)
+                    return {"status": "ok"}
+                else:
+                    # Name-only or name+staff → teacher/staff face registration
+                    _clean_name = _extract_person_name(caption_raw)
+                    if not _clean_name:
+                        _clean_name = f"Staff_{sender[-10:]}"
+                    logger.info(f"[FACE REG] Staff/teacher photo from {sender} name='{_clean_name}'")
+                    sender_digits = re.sub(r"\D", "", sender)
+                    sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
+
+                    # If sender is a known teacher, use their TEACHER_DATA entry
+                    _teacher_entry = is_teacher if isinstance(is_teacher, dict) else None
+                    if _teacher_entry:
+                        reg_entry = _teacher_entry
+                    else:
+                        reg_entry = {
+                            "teacher": _clean_name,
+                            "grade": "",
+                            "whatsapp": sender_last10,
+                        }
+                    try:
+                        handled = await _try_register_teacher_face(
+                            sender, reply_to, bot_phone, media_info, reg_entry,
+                        )
+                        if handled:
+                            return {"status": "ok"}
+                    except Exception as e:
+                        logger.error(f"[FACE REG] Teacher/staff face reg error: {e}", exc_info=True)
+                    _ack_msg = (
+                        f"Photo received for *{_clean_name}*. "
+                        f"Face registration is being processed."
                     )
-                    if face_reg_handled:
-                        return {"status": "ok"}
-                except Exception as img_exc:
-                    logger.error(f"[IMAGE HANDLER] Face registration error: {img_exc}", exc_info=True)
-                # If face reg failed, respond with generic ack
-                doc_msg = "File received successfully."
-                await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
-                await send_whatsapp_message(reply_to, doc_msg)
-                return {"status": "ok"}
+                    await save_message(bot_phone, sender, _ack_msg, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _ack_msg)
+                    return {"status": "ok"}
 
-            else:
-                # No Name+Class in caption → general file/document
-                # For images from parents: auto-review as homework
-                # Also forward to class teacher
-                logger.info(f"[IMAGE HANDLER] General file/document from {sender}")
+            # ==============================================================
+            # PIPELINE 2 — GENERAL MEDIA / DOCUMENT SHARING (Category 2)
+            # ==============================================================
+            # Triggered for: homework photos, PDFs, worksheets, screenshots,
+            # voice notes, announcements, any normal parent-teacher media.
+            # Action: Forward normally. NEVER run face recognition.
+            # Teacher media must fall through to homework broadcast / relay handlers.
+            if content_class == "document":
+                # Buffer captionless images for potential follow-up name text
+                if has_image:
+                    caption_raw = (media_info.get("caption", "") or "").strip()
+                    if not caption_raw or caption_raw.lower() in _NON_NAME_CAPTIONS:
+                        _recent_images[sender] = {
+                            "media_info": media_info,
+                            "timestamp": _time_mod.time(),
+                            "reply_to": reply_to,
+                            "bot_phone": bot_phone,
+                        }
+                        logger.info(f"[IMAGE BUFFER] Buffered image from {sender} (no/generic caption) — waiting for name text")
+
+                # Teacher media: let it fall through to homework broadcast
+                # and teacher reply relay handlers below
+                if is_teacher:
+                    logger.info(f"[MEDIA] Teacher document/media from {sender} — passing to broadcast/relay handlers")
+                    # Do NOT intercept — fall through to handlers below
+                else:
+                    # Parent media: forward to teacher(s)
+                    logger.info(f"[MEDIA] General file/document from parent {sender}")
                 caption = (media_info.get("caption", "") or "").strip()
                 forward_text = caption if caption else "Shared a file/image"
 
