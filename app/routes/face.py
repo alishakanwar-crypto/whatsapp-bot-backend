@@ -21,6 +21,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/face", tags=["face"])
 
 
+MIN_IMAGE_SIZE = 10_000  # 10 KB — reject tiny/corrupt images
+MAX_IMAGE_SIZE = 10_000_000  # 10 MB — reject unreasonably large uploads
+MIN_IMAGE_DIMENSION = 100  # pixels — reject images smaller than 100x100
+
+
+def _validate_image_quality(image_data: bytes) -> dict:
+    """Basic image quality validation. Returns {"ok": True} or {"ok": False, "reason": ...}."""
+    size = len(image_data)
+    if size < MIN_IMAGE_SIZE:
+        return {"ok": False, "reason": f"Image too small ({size} bytes < {MIN_IMAGE_SIZE} min)"}
+    if size > MAX_IMAGE_SIZE:
+        return {"ok": False, "reason": f"Image too large ({size} bytes > {MAX_IMAGE_SIZE} max)"}
+    try:
+        from PIL import Image as PILImage
+        import io
+        img = PILImage.open(io.BytesIO(image_data))
+        w, h = img.size
+        if w < MIN_IMAGE_DIMENSION or h < MIN_IMAGE_DIMENSION:
+            return {"ok": False, "reason": f"Image too small ({w}x{h}px, min {MIN_IMAGE_DIMENSION}px)"}
+    except ImportError:
+        # PIL not available — skip dimension check, accept based on file size only
+        return {"ok": True, "width": 0, "height": 0, "size_bytes": size}
+    except Exception as e:
+        return {"ok": False, "reason": f"Invalid image: {e}"}
+    return {"ok": True, "width": w, "height": h, "size_bytes": size}
+
+
 @router.post("/register", dependencies=[Depends(verify_agent_secret)])
 async def register_face(
     person_id: str = Form(...),
@@ -32,6 +59,7 @@ async def register_face(
 ):
     """Register a face image in the cloud database.
 
+    Validates image quality (size, dimensions) before storing.
     The Campus Agent downloads these images on startup and computes
     face encodings locally for recognition.
     """
@@ -39,8 +67,37 @@ async def register_face(
     if not image_data:
         raise HTTPException(status_code=400, detail="Empty image file")
 
+    quality = _validate_image_quality(image_data)
+    if not quality["ok"]:
+        raise HTTPException(status_code=400, detail=quality["reason"])
+
     db = await get_db()
     try:
+        # Check for duplicate person_id + angle
+        cursor = await db.execute(
+            "SELECT id FROM agent_registered_faces "
+            "WHERE person_id = ? AND angle = ?",
+            (person_id, angle),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            # Update existing registration instead of duplicating
+            await db.execute(
+                "UPDATE agent_registered_faces SET name = ?, role = ?, "
+                "phone = ?, image_data = ?, registered_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (name, role, phone, image_data, existing[0]),
+            )
+            await db.commit()
+            logger.info(f"Updated face: {name} ({person_id}), angle={angle}, id={existing[0]}")
+            return {
+                "success": True,
+                "face_id": existing[0],
+                "person_id": person_id,
+                "angle": angle,
+                "updated": True,
+            }
+
         cursor = await db.execute(
             "INSERT INTO agent_registered_faces "
             "(person_id, name, role, phone, angle, image_data) "
