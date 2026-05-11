@@ -112,8 +112,8 @@ async def attendance_history(
 
 MINIMUM_CONFIDENCE = 0.30  # Backend rejects anything below 30%
 ATTENDANCE_WINDOW_START = 7  # 7:00 AM IST
-ATTENDANCE_WINDOW_END_HOUR = 9
-ATTENDANCE_WINDOW_END_MIN = 30  # 9:30 AM IST
+ATTENDANCE_WINDOW_END_HOUR = 11  # Extended for testing 2026-05-11 (normally 9)
+ATTENDANCE_WINDOW_END_MIN = 30  # 11:30 AM IST (normally 9:30 AM)
 
 
 @router.post("/attendance/report")
