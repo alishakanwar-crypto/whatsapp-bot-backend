@@ -4679,6 +4679,7 @@ async def receive_cloud_api_message(request: Request):
             _FORWARDING_PHRASES = [
                 "convey to", "forward to", "send to", "tell to",
                 "relay to", "inform to", "pass to", "give to",
+                "share with", "share this with",
                 "ask maam", "ask ma'am", "ask sir", "ask teacher",
                 "class teacher", "ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
@@ -4809,6 +4810,7 @@ async def receive_cloud_api_message(request: Request):
                         p in _cap_lower for p in [
                             "convey to", "forward to", "send to", "tell to",
                             "relay to", "pass to", "give to",
+                            "share with", "share this with",
                             "ask maam", "ask ma'am", "ask sir", "ask teacher",
                             "class teacher", " ct ", " ct.", " ct,",
                             "convey to ct", "forward to ct",
@@ -4846,11 +4848,14 @@ async def receive_cloud_api_message(request: Request):
 
                 # If caption mentions specific teachers by name, forward to
                 # ALL of them (not just the class teacher).
+                # Run in background so webhook returns quickly (multi-teacher
+                # forwarding with template retry can take 30+ seconds).
                 _mentioned = find_mentioned_teachers(forward_text)
                 if _mentioned:
-                    await forward_to_teachers_and_confirm(
+                    import asyncio as _asyncio_bg
+                    _asyncio_bg.create_task(forward_to_teachers_and_confirm(
                         sender, forward_text, reply_to, media_info,
-                    )
+                    ))
                     return {"status": "ok"}
 
                 # Forward attachment + text to class teacher (all file types)
