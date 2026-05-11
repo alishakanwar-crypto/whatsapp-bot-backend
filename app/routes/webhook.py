@@ -829,8 +829,62 @@ async def forward_to_teachers_and_confirm(
                     sender_phone=sender,
                     original_message=message_text[:500],
                 )
+            # --- Relay tracking: log this parent→teacher message ---
+            try:
+                from app.services.relay_service import (
+                    save_relay_message as _save_relay,
+                    update_delivery_status as _update_status,
+                    auto_tag_message as _auto_tag,
+                    log_audit_event as _log_audit,
+                )
+                from app.services.attachment_service import (
+                    save_attachment_metadata as _save_att,
+                    classify_media_type as _classify_att,
+                )
+                _tags = _auto_tag(message_text, media_info is not None)
+                _child_info = await _lookup_parent_child_class(sender)
+                _p_label = f"Parent of {_child_info[0]['student_name']}" if _child_info else ""
+                _r_id = await _save_relay(
+                    sender_phone=sender, sender_role="parent",
+                    receiver_phone=teacher_phone or "", receiver_role="teacher",
+                    direction="parent_to_teacher",
+                    message_text=message_text[:1000],
+                    message_type="attachment" if media_info else "text",
+                    grade=entry.get("grade", ""),
+                    student_name=_p_label,
+                    delivery_status="delivered" if (wa_success or email_success) else "failed",
+                    email_sent=email_success,
+                    tags=_tags,
+                )
+                if media_info and _r_id:
+                    await _save_att(
+                        relay_message_id=_r_id,
+                        file_type=_classify_att(media_info.get("mime_type", ""), media_info.get("filename", "")),
+                        file_name=media_info.get("filename", "attachment"),
+                        mime_type=media_info.get("mime_type", "application/octet-stream"),
+                        file_size=media_info.get("file_size", 0),
+                        cloud_media_id=media_info.get("cloud_media_id", ""),
+                    )
+            except Exception as _relay_err:
+                logger.error(f"Relay tracking error (forward_to_teachers): {_relay_err}")
         else:
             logger.error(f"Failed to forward to {entry['teacher']} (both WhatsApp and email failed)")
+            # Log failed delivery to relay system
+            try:
+                from app.services.relay_service import save_relay_message as _save_relay_fail, auto_tag_message as _auto_tag_fail
+                _tags_f = _auto_tag_fail(message_text, media_info is not None)
+                await _save_relay_fail(
+                    sender_phone=sender, sender_role="parent",
+                    receiver_phone=teacher_phone or "", receiver_role="teacher",
+                    direction="parent_to_teacher",
+                    message_text=message_text[:1000],
+                    message_type="attachment" if media_info else "text",
+                    grade=entry.get("grade", ""),
+                    delivery_status="failed",
+                    tags=_tags_f,
+                )
+            except Exception:
+                pass
 
     # Send confirmation back to the original chat
     if forwarded_names:
@@ -931,6 +985,40 @@ async def try_relay_teacher_reply(
         text_success = await send_whatsapp_message(original_chat_id, relay_msg)
 
     success = text_success or media_forwarded
+
+    # --- Relay tracking: log teacher→parent reply ---
+    try:
+        from app.services.relay_service import (
+            save_relay_message as _save_relay_t2p,
+            auto_tag_message as _auto_tag_t2p,
+        )
+        from app.services.attachment_service import (
+            save_attachment_metadata as _save_att_t2p,
+            classify_media_type as _classify_att_t2p,
+        )
+        _tags_t = _auto_tag_t2p(message_text, media_info is not None)
+        _rid_t = await _save_relay_t2p(
+            sender_phone=sender, sender_role="teacher",
+            receiver_phone=original_chat_id.replace("@c.us", "").replace("@s.whatsapp.net", ""),
+            receiver_role="parent",
+            direction="teacher_to_parent",
+            message_text=message_text[:1000],
+            message_type="attachment" if media_info else "text",
+            grade=teacher_grade,
+            delivery_status="delivered" if success else "failed",
+            tags=_tags_t,
+        )
+        if media_info and _rid_t:
+            await _save_att_t2p(
+                relay_message_id=_rid_t,
+                file_type=_classify_att_t2p(media_info.get("mime_type", ""), media_info.get("filename", "")),
+                file_name=media_info.get("filename", "attachment"),
+                mime_type=media_info.get("mime_type", "application/octet-stream"),
+                file_size=media_info.get("file_size", 0),
+                cloud_media_id=media_info.get("cloud_media_id", ""),
+            )
+    except Exception as _relay_t2p_err:
+        logger.error(f"Relay tracking error (teacher_reply): {_relay_t2p_err}")
 
     if success:
         logger.info(f"Relayed teacher reply from {teacher_name} to {original_chat_id} (media={media_forwarded})")
@@ -2102,6 +2190,41 @@ async def _forward_query_to_class_teacher(
             logger.info(
                 f"[PARENT→TEACHER] Forwarded to {teacher_name} ({teacher_email}) via email"
             )
+
+    # --- Relay tracking: log parent→teacher class teacher routing ---
+    try:
+        from app.services.relay_service import (
+            save_relay_message as _save_relay_ct,
+            auto_tag_message as _auto_tag_ct,
+        )
+        from app.services.attachment_service import (
+            save_attachment_metadata as _save_att_ct,
+            classify_media_type as _classify_att_ct,
+        )
+        _tags_ct = _auto_tag_ct(message_text, media_info is not None)
+        _rid_ct = await _save_relay_ct(
+            sender_phone=sender, sender_role="parent",
+            receiver_phone=teacher_phone or "", receiver_role="teacher",
+            direction="parent_to_teacher",
+            message_text=message_text[:1000],
+            message_type="attachment" if media_info else "text",
+            grade=teacher_grade,
+            student_name=child.get("student_name", ""),
+            delivery_status="delivered" if (wa_success or email_success) else "failed",
+            email_sent=email_success,
+            tags=_tags_ct,
+        )
+        if media_info and _rid_ct:
+            await _save_att_ct(
+                relay_message_id=_rid_ct,
+                file_type=_classify_att_ct(media_info.get("mime_type", ""), media_info.get("filename", "")),
+                file_name=media_info.get("filename", "attachment"),
+                mime_type=media_info.get("mime_type", "application/octet-stream"),
+                file_size=media_info.get("file_size", 0),
+                cloud_media_id=media_info.get("cloud_media_id", ""),
+            )
+    except Exception as _relay_ct_err:
+        logger.error(f"Relay tracking error (class_teacher_route): {_relay_ct_err}")
 
     # Confirm to the parent
     methods = []
