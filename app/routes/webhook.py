@@ -225,6 +225,11 @@ import time as _time_mod
 _recent_images: dict[str, dict] = {}
 _RECENT_IMAGE_TTL = 30  # seconds — link image + name within 30s
 
+# Buffer for forwarded messages — when a parent forwards content, we ask
+# them to clarify what they want before forwarding to the teacher.
+_recent_forwarded: dict[str, dict] = {}
+_FORWARDED_MSG_TTL = 120  # seconds — wait up to 2 minutes for parent's reply
+
 # ---------------------------------------------------------------------------
 # Global kill switch: when True the bot will NOT reply to any incoming message.
 # Toggle via POST /webhook/bot-enabled {"enabled": true/false}
@@ -4787,6 +4792,71 @@ async def receive_cloud_api_message(request: Request):
     _msg_type_cloud = msg_obj.get("type", "")
     if _msg_type_cloud in ("reaction", "sticker", "interactive", "button", "unsupported"):
         logger.info(f"[SKIP] Ignoring {_msg_type_cloud} message from {sender}")
+        return {"status": "ok"}
+
+    # --- Handle forwarded messages from parents ---
+    # When a parent forwards a message from another app (e.g. Claude, another
+    # WhatsApp chat), we should NOT send it to GPT. Instead, buffer it and ask
+    # the parent what they want done with it. When they reply, forward their
+    # query + the buffered content to the teacher.
+    _is_msg_forwarded = msg_obj.get("context", {}).get("forwarded", False)
+    if not _is_msg_forwarded:
+        # Also check for frequently_forwarded flag
+        _is_msg_forwarded = msg_obj.get("context", {}).get("frequently_forwarded", False)
+
+    # Check if this message is a reply to a buffered forwarded message.
+    # Only consume the buffer if the current message is NOT itself forwarded —
+    # otherwise two forwarded messages in a row would misinterpret the second
+    # as a "reply" to the first.
+    _buffered_fwd = None
+    if not _is_msg_forwarded:
+        _buffered_fwd = _recent_forwarded.pop(sender, None)
+    if _buffered_fwd and (_time_mod.time() - _buffered_fwd["timestamp"]) < _FORWARDED_MSG_TTL:
+        # Parent is replying with context for a previously forwarded message.
+        # Treat their reply as the query and include the forwarded content.
+        _fwd_content = _buffered_fwd["content"]
+        logger.info(f"[FORWARDED] Parent {sender} provided context for forwarded msg: {message_text[:80]}")
+        # Prepend forwarded content as quoted context for the teacher
+        _combined_text = (
+            f"{message_text}\n\n"
+            f"[Forwarded content: \"{_fwd_content[:500]}\"]"
+        )
+        # Route to class teacher with combined context
+        parent_routed = await try_route_parent_to_class_teacher(
+            sender, _combined_text, reply_to, _buffered_fwd.get("media_info"),
+        )
+        if parent_routed:
+            return {"status": "ok"}
+        # If not routed (parent not recognized), try mentioned teachers
+        _mentioned_fwd = find_mentioned_teachers(message_text)
+        if _mentioned_fwd:
+            await forward_to_teachers_and_confirm(
+                sender, _combined_text, reply_to, _buffered_fwd.get("media_info"),
+            )
+            return {"status": "ok"}
+        # Fall through to normal processing with the combined text
+        message_text = _combined_text
+
+    # If THIS message is forwarded (from another app), buffer it and ask parent
+    if _is_msg_forwarded and not _is_teacher_phone(sender) and not _is_admin_panel(sender):
+        # Buffer the forwarded content
+        _recent_forwarded[sender] = {
+            "content": message_text,
+            "media_info": media_info,
+            "timestamp": _time_mod.time(),
+            "reply_to": reply_to,
+        }
+        logger.info(f"[FORWARDED] Buffered forwarded message from {sender}: {message_text[:80]}")
+        bot_phone = "bot"
+        await save_message(sender, bot_phone, message_text, "whatsapp", "incoming")
+        _ask_msg = (
+            "I received a forwarded message. What would you like me to do with this?\n\n"
+            "Please share your query (e.g. _\"Ask Reva ma'am what is this\"_ or "
+            "_\"Forward this to class teacher\"_) and I will relay it along with the "
+            "forwarded content."
+        )
+        await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
+        await send_whatsapp_message(reply_to, _ask_msg)
         return {"status": "ok"}
 
     # --- Admin holiday commands ---
