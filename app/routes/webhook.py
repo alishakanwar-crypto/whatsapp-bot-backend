@@ -3697,28 +3697,36 @@ async def receive_whatsapp_message(request: Request):
             except Exception as img_exc:
                 logger.error(f"[GREEN IMAGE HANDLER] Exception: {img_exc}", exc_info=True)
 
-            # Homework review: auto-analyze notebook/homework photos from parents
-            try:
-                import httpx as _httpx
-                direct_url = media_info.get("url", "")
-                if direct_url:
-                    async with _httpx.AsyncClient(timeout=30) as _client:
-                        _resp = await _client.get(direct_url)
-                        if _resp.status_code == 200:
-                            from app.services.openai_service import generate_homework_review
-                            caption = media_info.get("caption", "")
-                            children_green = await _lookup_parent_child_class(sender)
-                            child_name = children_green[0]["student_name"] if children_green else ""
-                            child_grade = children_green[0]["grade"] if children_green else ""
-                            ai_response = await generate_homework_review(
-                                _resp.content, _resp.headers.get("content-type", "image/jpeg"),
-                                caption, student_name=child_name, grade=child_grade,
-                            )
-                            await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, ai_response)
-                            return {"status": "ok"}
-            except Exception as vis_exc:
-                logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
+            # Homework review: ONLY when caption explicitly requests it
+            _hw_caption = (media_info.get("caption", "") or "").strip().lower()
+            _is_hw_check = any(
+                _hw_caption.startswith(kw) for kw in [
+                    "check please", "please check", "check homework",
+                    "check hw", "check h.w.", "check h.w",
+                ]
+            )
+            if _is_hw_check:
+                try:
+                    import httpx as _httpx
+                    direct_url = media_info.get("url", "")
+                    if direct_url:
+                        async with _httpx.AsyncClient(timeout=30) as _client:
+                            _resp = await _client.get(direct_url)
+                            if _resp.status_code == 200:
+                                from app.services.openai_service import generate_homework_review
+                                caption = media_info.get("caption", "")
+                                children_green = await _lookup_parent_child_class(sender)
+                                child_name = children_green[0]["student_name"] if children_green else ""
+                                child_grade = children_green[0]["grade"] if children_green else ""
+                                ai_response = await generate_homework_review(
+                                    _resp.content, _resp.headers.get("content-type", "image/jpeg"),
+                                    caption, student_name=child_name, grade=child_grade,
+                                )
+                                await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
+                                await send_whatsapp_message(reply_to, ai_response)
+                                return {"status": "ok"}
+                except Exception as vis_exc:
+                    logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
 
             # If all image processing fails, acknowledge receipt
             err_msg = "Your image has been received. Please try sending it again if needed."
@@ -5095,31 +5103,20 @@ async def receive_cloud_api_message(request: Request):
                     caption = (media_info.get("caption", "") or "").strip()
                     forward_text = caption if caption else "Shared a file/image"
 
-                    # --- Automatic Homework Review (for images only) ---
-                    # Skip homework review if caption has forwarding intent —
-                    # the parent just wants the image relayed, not analyzed.
+                    # --- Homework Review (for images only) ---
+                    # ONLY trigger when caption explicitly requests a homework check.
+                    # Keywords: "check please", "please check", "check homework",
+                    # "check hw", "check h.w."
                     _cap_lower = caption.lower() if caption else ""
-                    _is_forward_request = (
-                        any(
-                            p in _cap_lower for p in [
-                                "convey to", "forward to", "send to", "tell to",
-                                "relay to", "pass to", "give to",
-                                "share with", "share this with",
-                                "ask maam", "ask ma'am", "ask sir", "ask teacher",
-                                "class teacher", " ct ", " ct.", " ct,",
-                                "convey to ct", "forward to ct",
-                            ]
-                        )
-                        or _cap_lower.startswith("ask ")
-                        or _cap_lower.startswith("please ask")
-                        or _cap_lower.startswith("pls ask")
-                        or _cap_lower.startswith("plz ask")
-                        # "ask [name] maam/sir/teacher" pattern
-                        or bool(re.search(r"\bask\s+\w+\s+(?:ma'?am|maam|sir|teacher)\b", _cap_lower))
+                    _is_hw_check_request = any(
+                        _cap_lower.startswith(kw) for kw in [
+                            "check please", "please check", "check homework",
+                            "check hw", "check h.w.", "check h.w",
+                        ]
                     )
                     is_image_msg = media_info.get("type") == "imageMessage"
                     cloud_mid = media_info.get("cloud_media_id", "")
-                    if is_image_msg and cloud_mid and not _is_forward_request:
+                    if is_image_msg and cloud_mid and _is_hw_check_request:
                         logger.info(f"[HOMEWORK REVIEW] Auto-reviewing image from parent {sender}")
                         try:
                             from app.services.whatsapp_service import download_cloud_media
