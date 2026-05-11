@@ -112,8 +112,8 @@ async def attendance_history(
 
 MINIMUM_CONFIDENCE = 0.30  # Backend rejects anything below 30%
 ATTENDANCE_WINDOW_START = 7  # 7:00 AM IST
-ATTENDANCE_WINDOW_END_HOUR = 11  # Extended for testing 2026-05-11 (normally 9)
-ATTENDANCE_WINDOW_END_MIN = 30  # 11:30 AM IST (normally 9:30 AM)
+ATTENDANCE_WINDOW_END_HOUR = 9  # 9:00 AM IST
+ATTENDANCE_WINDOW_END_MIN = 0  # Matches student phase end
 
 
 @router.post("/attendance/report")
@@ -157,7 +157,7 @@ async def report_attendance(request: Request):
     if not (window_start <= now_ist <= window_end):
         return {
             "status": "blocked",
-            "reason": f"Outside attendance window (7:00-9:30 AM IST, current: {now_ist.strftime('%I:%M %p')})",
+            "reason": f"Outside attendance window (7:00-9:00 AM IST, current: {now_ist.strftime('%I:%M %p')})",
             "inserted": 0,
         }
 
