@@ -397,6 +397,37 @@ def _teacher_chat_id(phone: str) -> str:
     return f"91{phone}@c.us"
 
 
+async def _build_email_attachments(media_info: dict | None) -> list[tuple[bytes, str, str]]:
+    """Download Cloud API media and return as email attachment list.
+
+    Returns a list of (file_bytes, filename, mime_type) tuples ready for
+    send_email_async(). Returns an empty list if download fails or no media.
+    """
+    if not media_info:
+        return []
+    cloud_mid = media_info.get("cloud_media_id", "")
+    if not cloud_mid:
+        return []
+    try:
+        from app.services.whatsapp_service import download_cloud_media
+        media_bytes, mime_type = await download_cloud_media(cloud_mid)
+        if not media_bytes:
+            logger.error(f"[EMAIL ATTACH] Could not download media {cloud_mid}")
+            return []
+        filename = media_info.get("filename", "")
+        if not filename:
+            ext_map = {
+                "image/jpeg": "image.jpg", "image/png": "image.png",
+                "image/webp": "image.webp", "application/pdf": "document.pdf",
+                "video/mp4": "video.mp4",
+            }
+            filename = ext_map.get(mime_type, "attachment")
+        return [(media_bytes, filename, mime_type or "application/octet-stream")]
+    except Exception as exc:
+        logger.error(f"[EMAIL ATTACH] Failed to build attachment: {exc}")
+        return []
+
+
 async def save_forwarded_conversation(
     teacher_phone: str,
     teacher_name: str,
@@ -760,10 +791,12 @@ async def forward_to_teachers_and_confirm(
                 f"Kindly reply to this email and your response will be forwarded back to the parent.\n\n"
                 f"Regards,\nPPIS Bot"
             )
+            _email_attachments = await _build_email_attachments(media_info)
             email_success = await send_email_async(
                 teacher_email,
                 f"PPIS Bot: Query from {parent_label}",
                 email_body,
+                attachments=_email_attachments or None,
             )
             if email_success:
                 logger.info(f"Forwarded via email to {entry['teacher']} ({teacher_email})")
@@ -2045,11 +2078,13 @@ async def _forward_query_to_class_teacher(
             f"forwarded back to the parent.\n\n"
             f"Regards,\nPPIS Bot"
         )
+        _email_attachments2 = await _build_email_attachments(media_info)
         email_success = await send_email_async(
             teacher_email,
             f"PPIS Bot: Query from {parent_label}",
             email_body,
             "PP International School",
+            attachments=_email_attachments2 or None,
         )
         if email_success:
             logger.info(
@@ -4890,6 +4925,30 @@ async def receive_cloud_api_message(request: Request):
                                     logger.info(f"[CLOUD FILE FWD] Media sent to {teacher_name}")
                                 else:
                                     logger.error(f"[CLOUD FILE FWD] FAILED media to {teacher_name}")
+                            # Also forward via email with attachment
+                            if teacher_email:
+                                _email_body3 = (
+                                    f"Dear {teacher_name},\n\n"
+                                    f"{parent_label} has shared the following file/query "
+                                    f"via the PPIS Bot:\n\n"
+                                    f"\"{forward_text[:500]}\"\n\n"
+                                    f"Kindly reply to this email and your response will be "
+                                    f"forwarded back to the parent.\n\n"
+                                    f"Regards,\nPPIS Bot"
+                                )
+                                _ea3 = await _build_email_attachments(media_info)
+                                _eok3 = await send_email_async(
+                                    teacher_email,
+                                    f"PPIS Bot: File from {parent_label}",
+                                    _email_body3,
+                                    "PP International School",
+                                    attachments=_ea3 or None,
+                                )
+                                if _eok3:
+                                    logger.info(f"[CLOUD FILE FWD] Email with attachment sent to {teacher_name} ({teacher_email})")
+                                else:
+                                    logger.error(f"[CLOUD FILE FWD] Email FAILED for {teacher_name} ({teacher_email})")
+
                             # Save conversation for 2-way relay
                             await save_forwarded_conversation(
                                 teacher_phone=teacher_phone,
