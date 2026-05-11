@@ -4782,27 +4782,69 @@ async def receive_cloud_api_message(request: Request):
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming", wa_message_id=msg_id)
 
-        # --- Check for buffered image + name text combo (face registration) ---
-        # When someone sends a photo without caption, then sends their name as
-        # a separate text message, link them together for face registration.
+        # --- Check for buffered image + follow-up text (face registration prompt) ---
+        # When someone sends a photo without caption, the bot asks:
+        #   "What is this? Is this photo for face registration?"
+        # If the follow-up text is an affirmation (yes/haan/ji) or a person's
+        # name, register the buffered image for face recognition.
+        # If the follow-up is "no" or a non-name response, discard the buffer.
         if not media_info and message_text.strip():
             _buffered = _recent_images.pop(sender, None)
             if _buffered and (_time_mod.time() - _buffered["timestamp"]) < _RECENT_IMAGE_TTL:
-                _name_text = message_text.strip()
-                # Check if this text looks like a person's name
+                _reply_text = message_text.strip()
+                _reply_lower = _reply_text.lower()
+
+                # Check if reply is an affirmation (yes, haan, ji, etc.)
+                _AFFIRMATIVE_WORDS = {
+                    "yes", "y", "ya", "yeah", "yep", "yup", "sure",
+                    "haan", "haa", "ha", "ji", "ji haan", "haanji",
+                    "ok", "okay", "register", "register it",
+                    "registration", "face registration", "for registration",
+                }
+                _NEGATIVE_WORDS = {
+                    "no", "nah", "nahi", "na", "nope", "n",
+                    "not", "cancel", "skip", "ignore",
+                }
+
+                _is_affirmative = _reply_lower in _AFFIRMATIVE_WORDS
+                _is_negative = _reply_lower in _NEGATIVE_WORDS
+
+                # Check if reply looks like a person's name
                 _name_words_buf = [
-                    w for w in re.sub(r"[^\w\s]", " ", _name_text).split()
+                    w for w in re.sub(r"[^\w\s]", " ", _reply_text).split()
                     if len(w) >= 2 and w.isalpha()
                     and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my",
                                           "show", "check", "hi", "hello", "help", "please",
                                           "homework", "thanks", "ok", "yes", "no"}
                 ]
-                if len(_name_words_buf) >= 1:
+                _is_name_reply = len(_name_words_buf) >= 2 and not _is_negative
+
+                if _is_negative:
+                    logger.info(f"[IMAGE BUFFER] Sender {sender} said '{_reply_text}' — NOT for registration, discarding buffer")
+                    _discard_msg = "Okay, the photo will not be registered for face recognition."
+                    await save_message(bot_phone, sender, _discard_msg, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _discard_msg)
+                    return {"status": "ok"}
+
+                if _is_affirmative:
+                    # User confirmed registration but didn't provide a name yet.
+                    # Ask for the name.
+                    logger.info(f"[IMAGE BUFFER] Sender {sender} confirmed registration — asking for name")
+                    _ask_name_msg = "Please share the name of the person in the photo (e.g. *Firstname Lastname* or *Firstname Lastname Grade 5A*)."
+                    await save_message(bot_phone, sender, _ask_name_msg, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _ask_name_msg)
+                    # Re-buffer the image so the next text message (the name) can link to it
+                    _recent_images[sender] = _buffered
+                    _recent_images[sender]["timestamp"] = _time_mod.time()
+                    _recent_images[sender]["confirmed_registration"] = True
+                    return {"status": "ok"}
+
+                if _is_name_reply:
                     logger.info(
-                        f"[IMAGE BUFFER] Linking buffered image + name text '{_name_text}' "
+                        f"[IMAGE BUFFER] Linking buffered image + name text '{_reply_text}' "
                         f"from {sender} for face registration"
                     )
-                    _clean_buf_name = _extract_person_name(_name_text)
+                    _clean_buf_name = _extract_person_name(_reply_text)
                     if _clean_buf_name:
                         sender_digits = re.sub(r"\D", "", sender)
                         sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
@@ -4908,17 +4950,26 @@ async def receive_cloud_api_message(request: Request):
             # Action: Forward normally. NEVER run face recognition.
             # Teacher media must fall through to homework broadcast / relay handlers.
             if content_class == "document":
-                # Buffer captionless images for potential follow-up name text
+                # Buffer captionless images and ask sender if it's for registration
                 if has_image:
                     caption_raw = (media_info.get("caption", "") or "").strip()
-                    if not caption_raw or caption_raw.lower() in _NON_NAME_CAPTIONS:
+                    if not caption_raw:
                         _recent_images[sender] = {
                             "media_info": media_info,
                             "timestamp": _time_mod.time(),
                             "reply_to": reply_to,
                             "bot_phone": bot_phone,
                         }
-                        logger.info(f"[IMAGE BUFFER] Buffered image from {sender} (no/generic caption) — waiting for name text")
+                        logger.info(f"[IMAGE BUFFER] Buffered captionless image from {sender} — asking if for registration")
+                        _ask_msg = (
+                            "What is this? Is this photo for face registration?\n\n"
+                            "If *yes*, please reply with the person's name "
+                            "(e.g. *Firstname Lastname* or *Firstname Lastname Grade 5A*).\n"
+                            "If *no*, reply *no* and I will not register it."
+                        )
+                        await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
+                        await send_whatsapp_message(reply_to, _ask_msg)
+                        return {"status": "ok"}
 
                 # Teacher media: let it fall through to homework broadcast
                 # and teacher reply relay handlers below
@@ -4940,6 +4991,7 @@ async def receive_cloud_api_message(request: Request):
                         p in _cap_lower for p in [
                             "convey to", "forward to", "send to", "tell to",
                             "relay to", "pass to", "give to",
+                            "share with", "share this with",
                             "ask maam", "ask ma'am", "ask sir", "ask teacher",
                             "class teacher", " ct ", " ct.", " ct,",
                             "convey to ct", "forward to ct",
