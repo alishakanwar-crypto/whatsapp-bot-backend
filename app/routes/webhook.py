@@ -4571,12 +4571,15 @@ async def receive_cloud_api_message(request: Request):
             # are NOT face registration requests.
             _teacher_fwd_phrases = [
                 "convey to", "forward to", "send to", "tell to",
-                "ask ", "ask maam", "ask ma'am", "ask sir",
+                "ask maam", "ask ma'am", "ask sir", "ask teacher",
                 "class teacher", " ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
                 "what is this", "what's this", "kya hai",
             ]
-            _has_fwd_intent = any(p in caption_lower for p in _teacher_fwd_phrases)
+            _has_fwd_intent = (
+                any(p in caption_lower for p in _teacher_fwd_phrases)
+                or caption_lower.startswith("ask ")
+            )
             _is_sentence = (
                 len(caption_lower.split()) >= 4
                 and any(c in caption_lower for c in ".?!,")
@@ -4639,7 +4642,7 @@ async def receive_cloud_api_message(request: Request):
             _FORWARDING_PHRASES = [
                 "convey to", "forward to", "send to", "tell to",
                 "relay to", "inform to", "pass to", "give to",
-                "ask ", "ask maam", "ask ma'am", "ask sir",
+                "ask maam", "ask ma'am", "ask sir", "ask teacher",
                 "class teacher", "ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
                 "what is this", "what's this", "what's is this",
@@ -4648,14 +4651,19 @@ async def receive_cloud_api_message(request: Request):
             is_non_name = caption_lower in _NON_NAME_CAPTIONS or not caption_raw
             # Also block if caption contains any forwarding phrase
             if not is_non_name:
+                _matched_phrase = None
                 for phrase in _FORWARDING_PHRASES:
                     if phrase in caption_lower:
-                        is_non_name = True
-                        logger.info(
-                            f"[IMAGE HANDLER] Caption blocked from face reg — "
-                            f"contains forwarding phrase '{phrase}': '{caption_raw[:80]}'"
-                        )
+                        _matched_phrase = phrase
                         break
+                if not _matched_phrase and caption_lower.startswith("ask "):
+                    _matched_phrase = "ask ..."
+                if _matched_phrase:
+                    is_non_name = True
+                    logger.info(
+                        f"[IMAGE HANDLER] Caption blocked from face reg — "
+                        f"contains forwarding phrase '{_matched_phrase}': '{caption_raw[:80]}'"
+                    )
             # Check if caption looks like a person's name — must have at
             # least 2 name-like words (first + last name) to avoid false
             # positives from single words like "Chk", "Look", etc.
@@ -4759,14 +4767,17 @@ async def receive_cloud_api_message(request: Request):
                 # Skip homework review if caption has forwarding intent —
                 # the parent just wants the image relayed, not analyzed.
                 _cap_lower = caption.lower() if caption else ""
-                _is_forward_request = any(
-                    p in _cap_lower for p in [
-                        "convey to", "forward to", "send to", "tell to",
-                        "relay to", "pass to", "give to",
-                        "ask ", "ask maam", "ask ma'am", "ask sir",
-                        "class teacher", " ct ", " ct.", " ct,",
-                        "convey to ct", "forward to ct",
-                    ]
+                _is_forward_request = (
+                    any(
+                        p in _cap_lower for p in [
+                            "convey to", "forward to", "send to", "tell to",
+                            "relay to", "pass to", "give to",
+                            "ask maam", "ask ma'am", "ask sir", "ask teacher",
+                            "class teacher", " ct ", " ct.", " ct,",
+                            "convey to ct", "forward to ct",
+                        ]
+                    )
+                    or _cap_lower.startswith("ask ")
                 )
                 is_image_msg = media_info.get("type") == "imageMessage"
                 cloud_mid = media_info.get("cloud_media_id", "")
