@@ -4844,6 +4844,15 @@ async def receive_cloud_api_message(request: Request):
                     except Exception as hw_exc:
                         logger.error(f"[HOMEWORK REVIEW] Error: {hw_exc}", exc_info=True)
 
+                # If caption mentions specific teachers by name, forward to
+                # ALL of them (not just the class teacher).
+                _mentioned = find_mentioned_teachers(forward_text)
+                if _mentioned:
+                    await forward_to_teachers_and_confirm(
+                        sender, forward_text, reply_to, media_info,
+                    )
+                    return {"status": "ok"}
+
                 # Forward attachment + text to class teacher (all file types)
                 # Try parent→teacher routing (works for non-admin parents)
                 routed = await try_route_parent_to_class_teacher(
