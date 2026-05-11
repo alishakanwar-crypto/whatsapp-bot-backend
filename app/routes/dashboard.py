@@ -936,3 +936,517 @@ async def download_teacher_attendance_excel(month: str | None = None):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=filename,
     )
+
+
+# ── Manual Review Queue ──────────────────────────────────────────────────────
+
+@router.get("/review/pending")
+async def get_pending_reviews(limit: int = Query(50, ge=1, le=200)):
+    """Get low-confidence detections pending manual review."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, person_id, matched_name, grade, camera_label, "
+            "confidence, snapshot_path, created_at "
+            "FROM manual_review_queue WHERE status = 'pending' "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return {
+            "pending_count": len(rows),
+            "reviews": [
+                {
+                    "id": r[0], "person_id": r[1], "matched_name": r[2],
+                    "grade": r[3], "camera": r[4],
+                    "confidence": round(r[5] * 100, 1),
+                    "snapshot": r[6], "time": r[7],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        await db.close()
+
+
+@router.post("/review/{review_id}/approve")
+async def approve_review(review_id: int):
+    """Approve a manual review — marks attendance and sends notification."""
+    from app.services.whatsapp_service import send_cloud_template_message
+    from datetime import timezone
+
+    ist = timezone(timedelta(hours=5, minutes=30))
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT person_id, matched_name, grade, camera_label, confidence, "
+            "created_at FROM manual_review_queue WHERE id = ? AND status = 'pending'",
+            (review_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {"status": "error", "message": "Review not found or already processed"}
+
+        person_id, name, grade, camera, confidence, logged_at = row
+
+        # Mark as approved
+        await db.execute(
+            "UPDATE manual_review_queue SET status = 'approved', "
+            "reviewed_by = 'admin', reviewed_at = datetime('now') WHERE id = ?",
+            (review_id,),
+        )
+
+        # Insert attendance record
+        await db.execute(
+            "INSERT INTO attendance_records "
+            "(person_id, student_name, grade, camera_label, confidence, "
+            "notification_sent, logged_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+            (person_id, name, grade, camera, confidence, logged_at),
+        )
+
+        # Send notification
+        pcur = await db.execute(
+            "SELECT phone FROM agent_registered_faces "
+            "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' LIMIT 1",
+            (person_id,),
+        )
+        prow = await pcur.fetchone()
+        notified = False
+        if prow and prow[0]:
+            phones = prow[0]
+            try:
+                _ts = datetime.fromisoformat(logged_at)
+                time_str = _ts.strftime("%I:%M %p")
+            except Exception:
+                time_str = "this morning"
+
+            is_teacher = person_id.startswith("TEACHER_")
+            if is_teacher:
+                notif_name = f"Dear {name}, you have been"
+            else:
+                notif_name = f"Dear Parent, {name} has been"
+
+            phone_list = [p.strip() for p in phones.split(",") if p.strip()]
+            for ph in phone_list:
+                digits = "".join(c for c in ph if c.isdigit())
+                if len(digits) == 10:
+                    digits = "91" + digits
+                if len(digits) >= 12:
+                    ok = await send_cloud_template_message(
+                        digits, "ppis_attendance_alert",
+                        body_params=[notif_name, time_str],
+                    )
+                    if ok:
+                        notified = True
+
+            if notified:
+                await db.execute(
+                    "UPDATE attendance_records SET notification_sent = 1, "
+                    "parent_phones = ? WHERE person_id = ? "
+                    "AND date(logged_at) = date(?)",
+                    (phones, person_id, logged_at),
+                )
+
+        await db.commit()
+        return {"status": "ok", "person_id": person_id, "name": name, "notified": notified}
+    finally:
+        await db.close()
+
+
+@router.post("/review/{review_id}/reject")
+async def reject_review(review_id: int):
+    """Reject a manual review — false positive, do not mark attendance."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE manual_review_queue SET status = 'rejected', "
+            "reviewed_by = 'admin', reviewed_at = datetime('now') WHERE id = ?",
+            (review_id,),
+        )
+        await db.commit()
+        return {"status": "ok", "review_id": review_id}
+    finally:
+        await db.close()
+
+
+# ── Camera Status ────────────────────────────────────────────────────────────
+
+@router.get("/cameras/status")
+async def get_camera_status():
+    """Get current camera status summary."""
+    db = await get_db()
+    try:
+        # Get latest status for each camera
+        cursor = await db.execute(
+            "SELECT camera_label, dvr_ip, channel, status, error_code, "
+            "consecutive_failures, last_success_at, last_failure_at "
+            "FROM camera_status_log "
+            "WHERE id IN (SELECT MAX(id) FROM camera_status_log GROUP BY camera_label) "
+            "ORDER BY camera_label"
+        )
+        rows = await cursor.fetchall()
+        online = [r for r in rows if r[3] == "online"]
+        offline = [r for r in rows if r[3] != "online"]
+        return {
+            "total_cameras": len(rows),
+            "online": len(online),
+            "offline": len(offline),
+            "cameras": [
+                {
+                    "label": r[0], "dvr_ip": r[1], "channel": r[2],
+                    "status": r[3], "error": r[4],
+                    "failures": r[5], "last_success": r[6], "last_failure": r[7],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        await db.close()
+
+
+@router.post("/cameras/status/report")
+async def report_camera_status(request: Request):
+    """Receive camera status report from the campus agent."""
+    body = await request.json()
+    cameras = body.get("cameras", [])
+    if not cameras:
+        return {"status": "ok", "updated": 0}
+
+    db = await get_db()
+    try:
+        updated = 0
+        for cam in cameras:
+            label = cam.get("label", "")
+            dvr_ip = cam.get("dvr_ip", "")
+            channel = cam.get("channel", 0)
+            status = cam.get("status", "online")
+            error_code = cam.get("error_code", "")
+            failures = cam.get("consecutive_failures", 0)
+
+            now = datetime.now().isoformat()
+            last_success = now if status == "online" else None
+            last_failure = now if status != "online" else None
+
+            await db.execute(
+                "INSERT INTO camera_status_log "
+                "(camera_label, dvr_ip, channel, status, error_code, "
+                "consecutive_failures, last_success_at, last_failure_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (label, dvr_ip, channel, status, error_code,
+                 failures, last_success, last_failure),
+            )
+            updated += 1
+
+        await db.commit()
+        return {"status": "ok", "updated": updated}
+    finally:
+        await db.close()
+
+
+# ── Daily Summary ────────────────────────────────────────────────────────────
+
+@router.get("/summary/today")
+async def get_today_summary():
+    """Get comprehensive live dashboard data for today."""
+    from datetime import timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    today_str = now_ist.strftime("%Y-%m-%d")
+
+    db = await get_db()
+    try:
+        # Present count
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        present = (await cursor.fetchone())[0]
+
+        # Teachers present
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes') "
+            "AND person_id LIKE 'TEACHER_%'"
+        )
+        teachers_present = (await cursor.fetchone())[0]
+
+        # Students present
+        students_present = present - teachers_present
+
+        # Total registered
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) FROM agent_registered_faces"
+        )
+        total_registered = (await cursor.fetchone())[0]
+
+        # Notifications sent vs failed
+        cursor = await db.execute(
+            "SELECT "
+            "SUM(CASE WHEN notification_sent = 1 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN notification_sent = 0 THEN 1 ELSE 0 END) "
+            "FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        notif_row = await cursor.fetchone()
+        notifications_sent = notif_row[0] or 0
+        notifications_pending = notif_row[1] or 0
+
+        # Manual reviews pending
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM manual_review_queue "
+            "WHERE status = 'pending' AND date(created_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        reviews_pending = (await cursor.fetchone())[0]
+
+        # Camera status
+        cursor = await db.execute(
+            "SELECT status, COUNT(*) FROM camera_status_log "
+            "WHERE id IN (SELECT MAX(id) FROM camera_status_log GROUP BY camera_label) "
+            "GROUP BY status"
+        )
+        cam_status = {r[0]: r[1] for r in await cursor.fetchall()}
+        cameras_online = cam_status.get("online", 0)
+        cameras_offline = cam_status.get("offline", 0) + cam_status.get("error", 0)
+
+        # Grade breakdown for absent tracking
+        cursor = await db.execute(
+            "SELECT grade, COUNT(DISTINCT person_id) FROM agent_registered_faces "
+            "WHERE person_id NOT LIKE 'TEACHER_%' GROUP BY grade"
+        )
+        registered_by_grade = {r[0]: r[1] for r in await cursor.fetchall()}
+
+        cursor = await db.execute(
+            "SELECT grade, COUNT(DISTINCT person_id) FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes') "
+            "AND person_id NOT LIKE 'TEACHER_%' GROUP BY grade"
+        )
+        present_by_grade = {r[0]: r[1] for r in await cursor.fetchall()}
+
+        grade_summary = []
+        for grade, total in sorted(registered_by_grade.items()):
+            p = present_by_grade.get(grade, 0)
+            grade_summary.append({
+                "grade": grade, "registered": total,
+                "present": p, "absent": total - p,
+            })
+
+        return {
+            "date": today_str,
+            "time": now_ist.strftime("%I:%M %p"),
+            "students_present": students_present,
+            "teachers_present": teachers_present,
+            "total_present": present,
+            "total_registered": total_registered,
+            "notifications_sent": notifications_sent,
+            "notifications_pending": notifications_pending,
+            "manual_reviews_pending": reviews_pending,
+            "cameras_online": cameras_online,
+            "cameras_offline": cameras_offline,
+            "grade_summary": grade_summary,
+        }
+    finally:
+        await db.close()
+
+
+@router.post("/summary/generate")
+async def generate_daily_summary():
+    """Generate and store the daily summary report (call at end of school day)."""
+    from datetime import timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    today_str = now_ist.strftime("%Y-%m-%d")
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        total_present = (await cursor.fetchone())[0]
+
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes') "
+            "AND person_id LIKE 'TEACHER_%'"
+        )
+        teachers_present = (await cursor.fetchone())[0]
+
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT person_id) FROM agent_registered_faces "
+            "WHERE person_id NOT LIKE 'TEACHER_%'"
+        )
+        total_students = (await cursor.fetchone())[0]
+        total_absent = total_students - (total_present - teachers_present)
+
+        cursor = await db.execute(
+            "SELECT "
+            "SUM(CASE WHEN notification_sent = 1 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN notification_sent = 0 THEN 1 ELSE 0 END) "
+            "FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        n_row = await cursor.fetchone()
+        notif_sent = n_row[0] or 0
+        notif_failed = n_row[1] or 0
+
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM manual_review_queue "
+            "WHERE status = 'pending' AND date(created_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        reviews = (await cursor.fetchone())[0]
+
+        await db.execute(
+            "INSERT OR REPLACE INTO daily_summary "
+            "(report_date, total_present, total_absent, total_teachers_present, "
+            "total_notifications_sent, total_notifications_failed, "
+            "cameras_online, cameras_offline, manual_reviews_pending) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)",
+            (today_str, total_present, total_absent, teachers_present,
+             notif_sent, notif_failed, reviews),
+        )
+        await db.commit()
+        return {
+            "status": "ok",
+            "date": today_str,
+            "present": total_present,
+            "absent": total_absent,
+            "teachers": teachers_present,
+            "notifications_sent": notif_sent,
+            "notifications_failed": notif_failed,
+            "reviews_pending": reviews,
+        }
+    finally:
+        await db.close()
+
+
+# ── Notification Retry ───────────────────────────────────────────────────────
+
+@router.post("/notifications/retry-failed")
+async def retry_failed_notifications():
+    """Retry all failed notification deliveries from today."""
+    from app.services.whatsapp_service import send_cloud_template_message
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT nd.id, nd.person_id, nd.student_name, nd.phone, nd.attempts "
+            "FROM notification_delivery nd "
+            "WHERE nd.status = 'failed' AND nd.attempts < 3 "
+            "AND date(nd.created_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        rows = await cursor.fetchall()
+        retried = 0
+        still_failed = 0
+        for r in rows:
+            nd_id, person_id, name, phone, attempts = r
+
+            is_teacher = person_id.startswith("TEACHER_")
+            if is_teacher:
+                notif_name = f"Dear {name}, you have been"
+            else:
+                notif_name = f"Dear Parent, {name} has been"
+
+            ok = await send_cloud_template_message(
+                phone, "ppis_attendance_alert",
+                body_params=[notif_name, "this morning"],
+            )
+            if ok:
+                await db.execute(
+                    "UPDATE notification_delivery SET status = 'delivered', "
+                    "delivered_at = datetime('now'), attempts = ? WHERE id = ?",
+                    (attempts + 1, nd_id),
+                )
+                retried += 1
+            else:
+                new_status = "failed" if attempts + 1 < 3 else "permanently_failed"
+                await db.execute(
+                    "UPDATE notification_delivery SET status = ?, "
+                    "attempts = ?, last_attempt_at = datetime('now') WHERE id = ?",
+                    (new_status, attempts + 1, nd_id),
+                )
+                still_failed += 1
+
+        await db.commit()
+        return {"status": "ok", "retried": retried, "still_failed": still_failed}
+    finally:
+        await db.close()
+
+
+# ── Absent Students ──────────────────────────────────────────────────────────
+
+@router.get("/attendance/absent")
+async def get_absent_students(grade: str | None = None):
+    """Get students who are registered but NOT marked present today."""
+    db = await get_db()
+    try:
+        # Get all present person_ids today
+        cursor = await db.execute(
+            "SELECT DISTINCT person_id FROM attendance_records "
+            "WHERE date(logged_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        present_ids = {r[0] for r in await cursor.fetchall()}
+
+        # Get all registered faces (students only)
+        conditions = ["person_id NOT LIKE 'TEACHER_%'"]
+        params: list = []
+        if grade:
+            conditions.append("person_id LIKE ?")
+            params.append(f"%{grade}%")
+
+        where = " AND ".join(conditions)
+        cursor = await db.execute(
+            f"SELECT DISTINCT person_id, name FROM agent_registered_faces "
+            f"WHERE {where}",
+            params,
+        )
+        all_students = await cursor.fetchall()
+
+        absent = []
+        for r in all_students:
+            if r[0] not in present_ids:
+                # Extract grade from person_id
+                parts = r[0].rsplit("_", 1)
+                g = parts[-1] if len(parts) > 1 else ""
+                absent.append({"person_id": r[0], "name": r[1], "grade": g})
+
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "total_absent": len(absent),
+            "students": sorted(absent, key=lambda x: (x["grade"], x["name"])),
+        }
+    finally:
+        await db.close()
+
+
+# ── Manual Review Report from Agent ──────────────────────────────────────────
+
+@router.post("/review/report")
+async def report_manual_review(request: Request):
+    """Receive low-confidence detection from agent for manual review."""
+    body = await request.json()
+    records = body.get("records", [])
+    if not records:
+        return {"status": "ok", "queued": 0}
+
+    db = await get_db()
+    try:
+        queued = 0
+        for rec in records:
+            await db.execute(
+                "INSERT INTO manual_review_queue "
+                "(person_id, matched_name, grade, camera_label, confidence, snapshot_path) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    rec.get("person_id", ""),
+                    rec.get("name", ""),
+                    rec.get("grade", ""),
+                    rec.get("camera", ""),
+                    rec.get("confidence", 0),
+                    rec.get("snapshot_path", ""),
+                ),
+            )
+            queued += 1
+        await db.commit()
+        return {"status": "ok", "queued": queued}
+    finally:
+        await db.close()

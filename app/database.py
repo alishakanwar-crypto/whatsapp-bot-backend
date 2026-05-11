@@ -223,6 +223,124 @@ async def init_db():
                 reason TEXT NOT NULL DEFAULT 'Holiday',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- Manual review queue for low-confidence detections
+            CREATE TABLE IF NOT EXISTS manual_review_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_id TEXT NOT NULL,
+                matched_name TEXT NOT NULL DEFAULT '',
+                grade TEXT NOT NULL DEFAULT '',
+                camera_label TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0,
+                snapshot_path TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                reviewed_by TEXT DEFAULT NULL,
+                reviewed_at TIMESTAMP DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Camera health status tracking
+            CREATE TABLE IF NOT EXISTS camera_status_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                camera_label TEXT NOT NULL,
+                dvr_ip TEXT NOT NULL DEFAULT '',
+                channel INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'online',
+                error_code TEXT NOT NULL DEFAULT '',
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                last_success_at TIMESTAMP DEFAULT NULL,
+                last_failure_at TIMESTAMP DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Notification delivery tracking with retry support
+            CREATE TABLE IF NOT EXISTS notification_delivery (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_id TEXT NOT NULL,
+                student_name TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL,
+                template_name TEXT NOT NULL DEFAULT 'ppis_attendance_alert',
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TIMESTAMP DEFAULT NULL,
+                delivered_at TIMESTAMP DEFAULT NULL,
+                error_message TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Daily attendance summary reports
+            CREATE TABLE IF NOT EXISTS daily_summary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL UNIQUE,
+                total_present INTEGER NOT NULL DEFAULT 0,
+                total_absent INTEGER NOT NULL DEFAULT 0,
+                total_teachers_present INTEGER NOT NULL DEFAULT 0,
+                total_notifications_sent INTEGER NOT NULL DEFAULT 0,
+                total_notifications_failed INTEGER NOT NULL DEFAULT 0,
+                cameras_online INTEGER NOT NULL DEFAULT 0,
+                cameras_offline INTEGER NOT NULL DEFAULT 0,
+                manual_reviews_pending INTEGER NOT NULL DEFAULT 0,
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Audit trail for data modifications (security)
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL,
+                table_name TEXT NOT NULL,
+                record_id TEXT NOT NULL DEFAULT '',
+                details TEXT NOT NULL DEFAULT '',
+                performed_by TEXT NOT NULL DEFAULT 'system',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- ── Performance indexes ─────────────────────────────────
+            CREATE INDEX IF NOT EXISTS idx_attendance_person_date
+                ON attendance_records (person_id, date(logged_at));
+            CREATE INDEX IF NOT EXISTS idx_attendance_logged_at
+                ON attendance_records (logged_at);
+            CREATE INDEX IF NOT EXISTS idx_attendance_grade
+                ON attendance_records (grade);
+            CREATE INDEX IF NOT EXISTS idx_messages_sender
+                ON messages (sender);
+            CREATE INDEX IF NOT EXISTS idx_messages_receiver
+                ON messages (receiver);
+            CREATE INDEX IF NOT EXISTS idx_messages_timestamp
+                ON messages (timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_direction
+                ON messages (direction);
+            CREATE INDEX IF NOT EXISTS idx_notification_log_phone
+                ON notification_log (phone);
+            CREATE INDEX IF NOT EXISTS idx_notification_log_created
+                ON notification_log (created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_processed_messages_created
+                ON processed_messages (created_at);
+            CREATE INDEX IF NOT EXISTS idx_pi_sheet_father_mobile
+                ON pi_sheet_students (father_mobile);
+            CREATE INDEX IF NOT EXISTS idx_pi_sheet_mother_mobile
+                ON pi_sheet_students (mother_mobile);
+            CREATE INDEX IF NOT EXISTS idx_pi_sheet_grade
+                ON pi_sheet_students (grade);
+            CREATE INDEX IF NOT EXISTS idx_faces_person_id
+                ON agent_registered_faces (person_id);
+            CREATE INDEX IF NOT EXISTS idx_leave_parent_phone
+                ON leave_applications (parent_phone);
+            CREATE INDEX IF NOT EXISTS idx_forwarded_teacher_phone
+                ON forwarded_conversations (teacher_phone);
+            CREATE INDEX IF NOT EXISTS idx_forwarded_sender_phone
+                ON forwarded_conversations (sender_phone);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_created
+                ON audit_log (created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_table
+                ON audit_log (table_name, action);
+            CREATE INDEX IF NOT EXISTS idx_manual_review_status
+                ON manual_review_queue (status, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_camera_status_label
+                ON camera_status_log (camera_label);
+            CREATE INDEX IF NOT EXISTS idx_notification_delivery_status
+                ON notification_delivery (status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_daily_summary_date
+                ON daily_summary (report_date);
         """)
 
         # ------------------------------------------------------------------
