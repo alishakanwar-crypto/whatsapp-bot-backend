@@ -833,9 +833,7 @@ async def forward_to_teachers_and_confirm(
             try:
                 from app.services.relay_service import (
                     save_relay_message as _save_relay,
-                    update_delivery_status as _update_status,
                     auto_tag_message as _auto_tag,
-                    log_audit_event as _log_audit,
                 )
                 from app.services.attachment_service import (
                     save_attachment_metadata as _save_att,
