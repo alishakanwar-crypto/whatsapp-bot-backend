@@ -225,6 +225,12 @@ async def report_attendance(request: Request):
                     except Exception:
                         time_str = "this morning"
 
+                    is_teacher = person_id.startswith("TEACHER_")
+                    if is_teacher:
+                        notif_name = f"Dear {name}, you have been"
+                    else:
+                        notif_name = f"Dear Parent, {name} has been"
+
                     phone_list = [p.strip() for p in phones.split(",") if p.strip()]
                     for ph in phone_list:
                         digits = "".join(c for c in ph if c.isdigit())
@@ -233,7 +239,7 @@ async def report_attendance(request: Request):
                         if len(digits) >= 12:
                             ok = await send_cloud_template_message(
                                 digits, "ppis_attendance_alert",
-                                body_params=[name, time_str],
+                                body_params=[notif_name, time_str],
                             )
                             if ok:
                                 logger.info(
@@ -323,6 +329,12 @@ async def resend_missed_notifications():
             except Exception:
                 time_str = "this morning"
 
+            is_teacher = person_id.startswith("TEACHER_")
+            if is_teacher:
+                notif_name = f"Dear {name}, you have been"
+            else:
+                notif_name = f"Dear Parent, {name} has been"
+
             phone_list = [p.strip() for p in phones.split(",") if p.strip()]
             any_ok = False
             for ph in phone_list:
@@ -332,7 +344,7 @@ async def resend_missed_notifications():
                 if len(digits) >= 12:
                     ok = await send_cloud_template_message(
                         digits, "ppis_attendance_alert",
-                        body_params=[name, time_str],
+                        body_params=[notif_name, time_str],
                     )
                     if ok:
                         any_ok = True
@@ -349,6 +361,84 @@ async def resend_missed_notifications():
                 failed += 1
         await db.commit()
         return {"status": "ok", "sent": sent, "failed": failed, "total_missed": len(rows)}
+    finally:
+        await db.close()
+
+
+@router.post("/attendance/resend-all")
+async def resend_all_notifications():
+    """Send attendance notifications for ALL detected people today,
+    regardless of whether they were already notified. Useful for
+    ensuring no one was missed."""
+    from app.services.whatsapp_service import send_cloud_template_message
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT ar.person_id, ar.student_name, ar.logged_at "
+            "FROM attendance_records ar "
+            "WHERE date(ar.logged_at) = date('now', '+5 hours', '+30 minutes')"
+        )
+        rows = await cursor.fetchall()
+        sent = 0
+        failed = 0
+        no_phone = 0
+        for r in rows:
+            person_id, name, logged_at = r[0], r[1], r[2]
+            pcur = await db.execute(
+                "SELECT phone FROM agent_registered_faces "
+                "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' LIMIT 1",
+                (person_id,),
+            )
+            prow = await pcur.fetchone()
+            if not prow or not prow[0]:
+                logger.warning(f"Resend-all: no phone for {person_id}")
+                no_phone += 1
+                continue
+            phones = prow[0]
+            try:
+                _ts = datetime.fromisoformat(logged_at)
+                time_str = _ts.strftime("%I:%M %p")
+            except Exception:
+                time_str = "this morning"
+
+            is_teacher = person_id.startswith("TEACHER_")
+            if is_teacher:
+                notif_name = f"Dear {name}, you have been"
+            else:
+                notif_name = f"Dear Parent, {name} has been"
+
+            phone_list = [p.strip() for p in phones.split(",") if p.strip()]
+            any_ok = False
+            for ph in phone_list:
+                digits = "".join(c for c in ph if c.isdigit())
+                if len(digits) == 10:
+                    digits = "91" + digits
+                if len(digits) >= 12:
+                    ok = await send_cloud_template_message(
+                        digits, "ppis_attendance_alert",
+                        body_params=[notif_name, time_str],
+                    )
+                    if ok:
+                        any_ok = True
+            if any_ok:
+                await db.execute(
+                    "UPDATE attendance_records SET notification_sent = 1, "
+                    "parent_phones = ? WHERE person_id = ? "
+                    "AND date(logged_at) = date('now', '+5 hours', '+30 minutes')",
+                    (phones, person_id),
+                )
+                sent += 1
+            else:
+                failed += 1
+        await db.commit()
+        return {
+            "status": "ok",
+            "sent": sent,
+            "failed": failed,
+            "no_phone": no_phone,
+            "total_records": len(rows),
+        }
     finally:
         await db.close()
 
