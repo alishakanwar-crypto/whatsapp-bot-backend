@@ -4854,7 +4854,13 @@ async def receive_cloud_api_message(request: Request):
             # Exclude if it looks like a student photo (has class indicator)
             has_class_indicator = bool(_CAPTION_CLASS_RE.search(caption_raw)) if caption_raw else False
 
-            if has_name_in_caption and not has_class_indicator:
+            # Also detect staff photos: "Name\nStaff : PPIS", "Name Staff",
+            # "Name\nDesignation" patterns — these are face registration, not forwarding.
+            _STAFF_INDICATORS = ["staff", "ppis", "pgt", "tgt", "ntt", "coordinator",
+                                 "principal", "vice principal", "hod", "admin"]
+            _has_staff_indicator = any(ind in caption_lower for ind in _STAFF_INDICATORS)
+
+            if (has_name_in_caption and not has_class_indicator) or _has_staff_indicator:
                 _clean_name = _extract_person_name(caption_raw)
                 if not _clean_name:
                     _clean_name = f"Staff_{sender[-10:]}"
@@ -4878,6 +4884,15 @@ async def receive_cloud_api_message(request: Request):
                         return {"status": "ok"}
                 except Exception as e:
                     logger.error(f"[IMAGE HANDLER] Caption-based face reg error: {e}", exc_info=True)
+                # Face registration was attempted but failed — still do NOT forward
+                # to teacher. This is a face photo, not a document/query.
+                _ack_msg = (
+                    f"Photo received for *{_clean_name}*. "
+                    f"Face registration is being processed."
+                )
+                await save_message(bot_phone, sender, _ack_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, _ack_msg)
+                return {"status": "ok"}
 
             # If image has no caption (or only generic caption), buffer it so a
             # follow-up text message with a name can be linked for face registration.
