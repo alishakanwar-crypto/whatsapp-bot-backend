@@ -25,6 +25,16 @@ IMAP_PORT = int(os.getenv("IMAP_PORT", "993"))
 IMAP_USER = os.getenv("SMTP_USER", "info@ppischool.in")
 IMAP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 
+# Patterns that indicate a teacher is replying to a forwarded parent query email
+_REPLY_SUBJECT_PREFIXES = [
+    "re: ppis bot: parent query",
+    "re: ppis bot: query from",
+    "re: ppis bot: file from",
+    "re: ppis bot: message for",
+    "re: homework query from",
+    "re: leave application",
+]
+
 # Homework-related keywords (same as WhatsApp broadcast, plus email-specific)
 _HW_KEYWORDS = [
     "homework", "home work", "hw", "assignment", "classwork", "class work",
@@ -319,6 +329,37 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
             _processed_message_ids[message_id] = None
         return
 
+    # --- Check if this is a reply to a forwarded parent query ---
+    subject_lower = subject.lower().strip()
+    is_reply_to_parent_query = any(
+        subject_lower.startswith(prefix) for prefix in _REPLY_SUBJECT_PREFIXES
+    )
+    if is_reply_to_parent_query:
+        teacher_name = teacher_entry["teacher"].split("/")[0].strip()
+        teacher_grade = teacher_entry["grade"]
+        # Extract email attachments
+        att_list = _extract_email_attachments(msg)
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                _relay_teacher_email_reply_to_parent(
+                    teacher_entry=teacher_entry,
+                    teacher_name=teacher_name,
+                    teacher_grade=teacher_grade,
+                    subject=subject,
+                    body=body,
+                    attachments=att_list,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Error relaying teacher email reply to parent: {e}")
+        finally:
+            loop.close()
+        if message_id:
+            _processed_message_ids[message_id] = None
+            _mark_email_processed_in_db(message_id)
+        return
+
     # Check for homework keywords in subject or body
     combined_text = f"{subject}\n{body}"
     if not _HW_RE.search(combined_text):
@@ -368,6 +409,272 @@ def _process_single_email(mailbox: imaplib.IMAP4_SSL, email_id: bytes) -> None:
     if message_id:
         _processed_message_ids[message_id] = None
         _mark_email_processed_in_db(message_id)
+
+
+def _extract_email_attachments(
+    msg: email.message.Message,
+) -> list[tuple[bytes, str, str]]:
+    """Extract file attachments from an email message.
+
+    Returns a list of (file_bytes, filename, mime_type) tuples.
+    """
+    attachments: list[tuple[bytes, str, str]] = []
+    if not msg.is_multipart():
+        return attachments
+    for part in msg.walk():
+        disposition = str(part.get("Content-Disposition", ""))
+        if "attachment" not in disposition and "inline" not in disposition:
+            continue
+        content_type = part.get_content_type()
+        # Skip text parts that are part of the email body
+        if content_type in ("text/plain", "text/html") and "attachment" not in disposition:
+            continue
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        filename = part.get_filename()
+        if filename:
+            filename = _decode_mime_header(filename)
+        else:
+            # Generate a name from content type
+            ext = content_type.split("/")[-1] if "/" in content_type else "bin"
+            filename = f"attachment.{ext}"
+        attachments.append((payload, filename, content_type))
+    return attachments
+
+
+async def _relay_teacher_email_reply_to_parent(
+    teacher_entry: dict,
+    teacher_name: str,
+    teacher_grade: str,
+    subject: str,
+    body: str,
+    attachments: list[tuple[bytes, str, str]],
+) -> None:
+    """When a teacher replies to a forwarded parent query via email,
+    relay the reply (text + attachments) back to the parent via WhatsApp.
+
+    Looks up the original parent from the forwarded_conversations table
+    using the teacher's phone number.
+    """
+    from app.database import get_db
+    from app.services.whatsapp_service import (
+        send_whatsapp_message,
+        send_cloud_template_message,
+        get_whatsapp_provider,
+        upload_media_bytes_cloud,
+        send_cloud_media,
+    )
+
+    teacher_wa = (teacher_entry.get("whatsapp") or "").strip()
+
+    # Look up the most recent forwarded conversation for this teacher.
+    # Try by WhatsApp number first, then fall back to teacher_name LIKE match.
+    db = await get_db()
+    try:
+        row = None
+        if teacher_wa:
+            digits = re.sub(r"\D", "", teacher_wa)
+            last10 = digits[-10:] if len(digits) >= 10 else digits
+            cursor = await db.execute(
+                "SELECT original_chat_id, sender_phone, teacher_name, teacher_grade, original_message "
+                "FROM forwarded_conversations "
+                "WHERE teacher_phone LIKE ? "
+                "AND created_at > datetime('now', '-48 hours') "
+                "ORDER BY created_at DESC LIMIT 1",
+                (f"%{last10}%",),
+            )
+            row = await cursor.fetchone()
+        if not row:
+            # Fall back to matching by teacher name
+            cursor = await db.execute(
+                "SELECT original_chat_id, sender_phone, teacher_name, teacher_grade, original_message "
+                "FROM forwarded_conversations "
+                "WHERE teacher_name LIKE ? "
+                "AND created_at > datetime('now', '-48 hours') "
+                "ORDER BY created_at DESC LIMIT 1",
+                (f"%{teacher_name}%",),
+            )
+            row = await cursor.fetchone()
+    finally:
+        await db.close()
+
+    if not row:
+        logger.warning(
+            f"No forwarded conversation found for teacher {teacher_name} ({teacher_phone}) "
+            f"— cannot relay email reply to parent"
+        )
+        return
+
+    parent_chat_id = row[0]  # original_chat_id (e.g. "919876543210@c.us")
+    parent_phone = row[1]     # sender_phone
+    original_message = row[4] or ""
+
+    logger.info(
+        f"Relaying teacher email reply from {teacher_name} to parent {parent_chat_id}. "
+        f"Subject: {subject[:60]}. Attachments: {len(attachments)}"
+    )
+
+    # Clean up body: strip quoted text from the reply
+    reply_text = _strip_email_quoted_text(body).strip()
+    if len(reply_text) > 1500:
+        reply_text = reply_text[:1500] + "..."
+
+    # Build the relay message
+    relay_msg = (
+        f"Reply from {teacher_name} (Class Teacher, {teacher_grade}):\n\n"
+        f"{reply_text}\n\n"
+        f"Thank you for your cooperation.\n"
+        f"Warm regards,\nPP International School"
+    )
+
+    # Try to determine the parent's WhatsApp-compatible phone
+    # parent_chat_id might be "919876543210@c.us" or just a phone number
+    wa_recipient = parent_chat_id.replace("@c.us", "").replace("@s.whatsapp.net", "")
+    if not wa_recipient:
+        wa_recipient = re.sub(r"\D", "", parent_phone)
+        if len(wa_recipient) == 10:
+            wa_recipient = f"91{wa_recipient}"
+
+    # Send the text reply
+    text_sent = False
+    if get_whatsapp_provider() == "cloud":
+        text_sent = await send_whatsapp_message(wa_recipient, relay_msg)
+        if not text_sent:
+            # Fallback: send template first to open window, then retry
+            tmpl_ok = await send_cloud_template_message(
+                wa_recipient,
+                "ppis_class_assignment",
+                body_params=[f"Reply from {teacher_name}", teacher_grade],
+            )
+            if tmpl_ok:
+                await asyncio.sleep(4)
+                text_sent = await send_whatsapp_message(wa_recipient, relay_msg)
+    else:
+        text_sent = await send_whatsapp_message(wa_recipient, relay_msg)
+
+    # Send attachments
+    att_sent = 0
+    for file_bytes, filename, mime_type in attachments:
+        try:
+            if get_whatsapp_provider() == "cloud":
+                media_id = await upload_media_bytes_cloud(file_bytes, mime_type, filename)
+                if media_id:
+                    # Determine media type for Cloud API
+                    if mime_type.startswith("image/"):
+                        media_type = "image"
+                    elif mime_type.startswith("video/"):
+                        media_type = "video"
+                    elif mime_type.startswith("audio/"):
+                        media_type = "audio"
+                    else:
+                        media_type = "document"
+                    ok = await send_cloud_media(
+                        wa_recipient, media_type,
+                        media_id=media_id,
+                        caption=f"From {teacher_name}: {filename}",
+                        filename=filename,
+                    )
+                    if ok:
+                        att_sent += 1
+                    await asyncio.sleep(2)
+            else:
+                # Green API: write to temp file and send
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
+                    tmp.write(file_bytes)
+                    tmp_path = tmp.name
+                from app.services.whatsapp_service import forward_file_by_url
+                ok = await forward_file_by_url(
+                    wa_recipient, f"file://{tmp_path}", filename,
+                    f"From {teacher_name}: {filename}",
+                )
+                if ok:
+                    att_sent += 1
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Failed to send email attachment {filename} to parent: {e}")
+
+    # Log to relay tracking
+    try:
+        from app.services.relay_service import save_relay_message, auto_tag_message
+        from app.services.attachment_service import save_attachment_metadata, classify_media_type
+        tags = auto_tag_message(reply_text, len(attachments) > 0)
+        rid = await save_relay_message(
+            sender_phone=teacher_wa or teacher_name,
+            sender_role="teacher",
+            receiver_phone=wa_recipient,
+            receiver_role="parent",
+            direction="teacher_to_parent",
+            message_text=reply_text[:1000],
+            message_type="attachment" if attachments else "text",
+            grade=teacher_grade,
+            delivery_status="delivered" if text_sent else "failed",
+            tags=tags,
+        )
+        for file_bytes, filename, mime_type in attachments:
+            if rid:
+                await save_attachment_metadata(
+                    relay_message_id=rid,
+                    file_type=classify_media_type(mime_type, filename),
+                    file_name=filename,
+                    mime_type=mime_type,
+                    file_size=len(file_bytes),
+                )
+    except Exception as e:
+        logger.error(f"Relay tracking error (email reply): {e}")
+
+    logger.info(
+        f"Email reply relayed: {teacher_name} → parent {wa_recipient}. "
+        f"Text: {'OK' if text_sent else 'FAILED'}. "
+        f"Attachments: {att_sent}/{len(attachments)}"
+    )
+
+
+def _strip_email_quoted_text(body: str) -> str:
+    """Remove quoted text from an email reply body.
+
+    Strips everything after common reply markers like:
+    - 'On ... wrote:'
+    - '> ' quoted lines
+    - '--- Original Message ---'
+    """
+    # Remove "On <date> ... wrote:" block and everything after
+    on_wrote = re.search(
+        r"\n\s*On\s+.{10,80}\s+wrote:\s*\n",
+        body,
+        re.IGNORECASE,
+    )
+    if on_wrote:
+        body = body[:on_wrote.start()]
+
+    # Remove "--- Original Message ---" and everything after
+    orig_msg = re.search(
+        r"\n\s*-{3,}\s*Original Message\s*-{3,}",
+        body,
+        re.IGNORECASE,
+    )
+    if orig_msg:
+        body = body[:orig_msg.start()]
+
+    # Remove "From: ... Sent: ..." outlook-style headers
+    from_sent = re.search(
+        r"\n\s*From:\s+.+\n\s*Sent:\s+",
+        body,
+        re.IGNORECASE,
+    )
+    if from_sent:
+        body = body[:from_sent.start()]
+
+    # Remove leading '>' quoted lines at the end
+    lines = body.rstrip().split("\n")
+    while lines and lines[-1].strip().startswith(">"):
+        lines.pop()
+
+    return "\n".join(lines).strip()
 
 
 async def _broadcast_email_homework(

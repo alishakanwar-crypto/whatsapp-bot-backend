@@ -223,6 +223,120 @@ async def init_db():
                 reason TEXT NOT NULL DEFAULT 'Holiday',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- ============================================================
+            -- Two-Way Relay Messaging System tables
+            -- ============================================================
+
+            -- Core relay messages: every message in the relay system
+            CREATE TABLE IF NOT EXISTS relay_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL DEFAULT '',
+                sender_phone TEXT NOT NULL,
+                sender_role TEXT NOT NULL DEFAULT 'parent',
+                receiver_phone TEXT NOT NULL,
+                receiver_role TEXT NOT NULL DEFAULT 'teacher',
+                direction TEXT NOT NULL DEFAULT 'parent_to_teacher',
+                message_text TEXT NOT NULL DEFAULT '',
+                message_type TEXT NOT NULL DEFAULT 'text',
+                grade TEXT NOT NULL DEFAULT '',
+                student_name TEXT NOT NULL DEFAULT '',
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                wa_message_id TEXT DEFAULT '',
+                email_sent INTEGER NOT NULL DEFAULT 0,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                tags TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                delivered_at TIMESTAMP DEFAULT NULL,
+                read_at TIMESTAMP DEFAULT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_relay_msg_sender ON relay_messages(sender_phone);
+            CREATE INDEX IF NOT EXISTS idx_relay_msg_receiver ON relay_messages(receiver_phone);
+            CREATE INDEX IF NOT EXISTS idx_relay_msg_conv ON relay_messages(conversation_id);
+            CREATE INDEX IF NOT EXISTS idx_relay_msg_grade ON relay_messages(grade);
+            CREATE INDEX IF NOT EXISTS idx_relay_msg_status ON relay_messages(delivery_status);
+            CREATE INDEX IF NOT EXISTS idx_relay_msg_direction ON relay_messages(direction);
+
+            -- Relay attachments: files sent in relay messages
+            CREATE TABLE IF NOT EXISTS relay_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                relay_message_id INTEGER NOT NULL,
+                file_type TEXT NOT NULL DEFAULT 'document',
+                file_name TEXT NOT NULL DEFAULT '',
+                mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                file_size INTEGER NOT NULL DEFAULT 0,
+                storage_path TEXT NOT NULL DEFAULT '',
+                cloud_media_id TEXT NOT NULL DEFAULT '',
+                validation_status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (relay_message_id) REFERENCES relay_messages(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_relay_att_msg ON relay_attachments(relay_message_id);
+
+            -- Message queue: messages waiting to be sent (retry, offline, etc.)
+            CREATE TABLE IF NOT EXISTS relay_message_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                relay_message_id INTEGER DEFAULT NULL,
+                recipient_phone TEXT NOT NULL,
+                recipient_role TEXT NOT NULL DEFAULT 'parent',
+                message_text TEXT NOT NULL DEFAULT '',
+                media_info TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT 'whatsapp',
+                priority INTEGER NOT NULL DEFAULT 5,
+                status TEXT NOT NULL DEFAULT 'queued',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                last_error TEXT NOT NULL DEFAULT '',
+                next_retry_at TIMESTAMP DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (relay_message_id) REFERENCES relay_messages(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_relay_queue_status ON relay_message_queue(status);
+            CREATE INDEX IF NOT EXISTS idx_relay_queue_retry ON relay_message_queue(next_retry_at);
+
+            -- Audit log: all communication events
+            CREATE TABLE IF NOT EXISTS relay_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                actor_phone TEXT NOT NULL DEFAULT '',
+                actor_role TEXT NOT NULL DEFAULT '',
+                target_phone TEXT NOT NULL DEFAULT '',
+                grade TEXT NOT NULL DEFAULT '',
+                details TEXT NOT NULL DEFAULT '',
+                relay_message_id INTEGER DEFAULT NULL,
+                ip_address TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_relay_audit_type ON relay_audit_log(event_type);
+            CREATE INDEX IF NOT EXISTS idx_relay_audit_actor ON relay_audit_log(actor_phone);
+            CREATE INDEX IF NOT EXISTS idx_relay_audit_time ON relay_audit_log(created_at);
+
+            -- Teacher-class permissions: which teachers can message which classes
+            CREATE TABLE IF NOT EXISTS teacher_class_permissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                teacher_phone TEXT NOT NULL,
+                teacher_name TEXT NOT NULL DEFAULT '',
+                grade TEXT NOT NULL,
+                permission_type TEXT NOT NULL DEFAULT 'class_teacher',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tcp_unique
+                ON teacher_class_permissions(teacher_phone, grade);
+
+            -- Blocked file types configuration
+            CREATE TABLE IF NOT EXISTS relay_blocked_file_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                extension TEXT NOT NULL UNIQUE,
+                reason TEXT NOT NULL DEFAULT 'Security risk',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # ------------------------------------------------------------------
@@ -244,6 +358,60 @@ async def init_db():
 
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()
+
+        # ------------------------------------------------------------------
+        # Auto-seed teacher-class permissions from TEACHER_DATA
+        # ------------------------------------------------------------------
+        try:
+            cursor = await db.execute("SELECT COUNT(*) FROM teacher_class_permissions")
+            row = await cursor.fetchone()
+            tcp_count = row[0] if row else 0
+            if tcp_count == 0:
+                try:
+                    from app.services.openai_service import TEACHER_DATA as _TD
+                    for entry in _TD:
+                        t_phone = entry.get("whatsapp", "")
+                        t_name = entry.get("teacher", "").split("/")[0].strip()
+                        t_grade = entry.get("grade", "")
+                        if t_phone and t_grade:
+                            await db.execute(
+                                "INSERT OR IGNORE INTO teacher_class_permissions "
+                                "(teacher_phone, teacher_name, grade, permission_type) "
+                                "VALUES (?, ?, ?, 'class_teacher')",
+                                (t_phone, t_name, t_grade),
+                            )
+                    await db.commit()
+                    logger.info("Auto-seeded teacher_class_permissions from TEACHER_DATA")
+                except Exception as e:
+                    logger.error(f"Failed to seed teacher permissions: {e}")
+        except Exception:
+            pass
+
+        # ------------------------------------------------------------------
+        # Auto-seed blocked file types
+        # ------------------------------------------------------------------
+        try:
+            cursor = await db.execute("SELECT COUNT(*) FROM relay_blocked_file_types")
+            row = await cursor.fetchone()
+            if (row[0] if row else 0) == 0:
+                blocked = [
+                    ("exe", "Executable file"), ("bat", "Batch script"),
+                    ("cmd", "Command script"), ("msi", "Installer"),
+                    ("ps1", "PowerShell script"), ("vbs", "VBScript"),
+                    ("js", "JavaScript file"), ("jar", "Java archive"),
+                    ("scr", "Screensaver/executable"), ("com", "DOS executable"),
+                    ("sh", "Shell script"), ("py", "Python script"),
+                    ("php", "PHP script"), ("dll", "Dynamic library"),
+                ]
+                for ext, reason in blocked:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO relay_blocked_file_types (extension, reason) "
+                        "VALUES (?, ?)", (ext, reason),
+                    )
+                await db.commit()
+                logger.info("Auto-seeded relay_blocked_file_types")
+        except Exception:
+            pass
 
         # -----------------------------------------------------------------
         # Auto-seed agent DVRs & camera mappings when empty.
