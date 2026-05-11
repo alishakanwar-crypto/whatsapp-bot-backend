@@ -720,6 +720,15 @@ async def forward_to_teachers_and_confirm(
             )
             if wa_success:
                 logger.info(f"[FWD] Template sent to {entry['teacher']}")
+                # Send actual query text as a regular message because
+                # the template may not display body_params to the teacher.
+                await _asyncio_relay.sleep(1)
+                _query_msg = (
+                    f"\U0001f4e9 *Query from {parent_label}:*\n\n"
+                    f"\"{message_text[:500]}\"\n\n"
+                    f"_Reply to this message \u2014 your response will be forwarded to the parent._"
+                )
+                await send_whatsapp_message(chat_id, _query_msg)
                 # Send media separately (template opens conversation window)
                 if media_info:
                     await _asyncio_relay.sleep(2)
@@ -1990,6 +1999,16 @@ async def _forward_query_to_class_teacher(
             logger.info(
                 f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})"
             )
+            # Send the actual query text as a regular message because
+            # the template may not display body_params to the teacher.
+            await _asyncio.sleep(1)
+            query_msg = (
+                f"\U0001f4e9 *Query from {parent_label}:*\n\n"
+                f"\"{message_text[:500]}\"\n\n"
+                f"_Kindly reply to this message and your response will be "
+                f"forwarded back to the parent._"
+            )
+            await send_whatsapp_message(chat_id, query_msg)
             # Send media separately after template (opens conversation window)
             if media_info:
                 await _asyncio.sleep(2)
@@ -4552,6 +4571,7 @@ async def receive_cloud_api_message(request: Request):
             # are NOT face registration requests.
             _teacher_fwd_phrases = [
                 "convey to", "forward to", "send to", "tell to",
+                "ask ", "ask maam", "ask ma'am", "ask sir",
                 "class teacher", " ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
                 "what is this", "what's this", "kya hai",
@@ -4619,6 +4639,7 @@ async def receive_cloud_api_message(request: Request):
             _FORWARDING_PHRASES = [
                 "convey to", "forward to", "send to", "tell to",
                 "relay to", "inform to", "pass to", "give to",
+                "ask ", "ask maam", "ask ma'am", "ask sir",
                 "class teacher", "ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
                 "what is this", "what's this", "what's is this",
@@ -4647,7 +4668,7 @@ async def receive_cloud_api_message(request: Request):
                                        "regards", "good", "morning", "evening", "photo",
                                        "required", "please", "kindly",
                                        # Forwarding/action/question words
-                                       "convey", "forward", "class", "know", "what",
+                                       "ask", "convey", "forward", "class", "know", "what",
                                        "dont", "doesn", "won", "can", "will", "should",
                                        "need", "want", "tell", "give", "send", "check",
                                        "look", "see", "how", "why", "where", "when",
@@ -4742,6 +4763,7 @@ async def receive_cloud_api_message(request: Request):
                     p in _cap_lower for p in [
                         "convey to", "forward to", "send to", "tell to",
                         "relay to", "pass to", "give to",
+                        "ask ", "ask maam", "ask ma'am", "ask sir",
                         "class teacher", " ct ", " ct.", " ct,",
                         "convey to ct", "forward to ct",
                     ]
@@ -4839,6 +4861,15 @@ async def receive_cloud_api_message(request: Request):
                             )
                             if _fwd_ok:
                                 logger.info(f"[CLOUD FILE FWD] Template sent to {teacher_name}")
+                                # Send actual query text as a regular message
+                                # because template may not display body_params.
+                                await _asyncio_fwd.sleep(1)
+                                _query_msg = (
+                                    f"\U0001f4e9 *File from {parent_label}:*\n\n"
+                                    f"\"{forward_text[:500]}\"\n\n"
+                                    f"_Reply to this message \u2014 your response will be forwarded to the parent._"
+                                )
+                                await send_whatsapp_message(chat_id, _query_msg)
                                 # Send media separately after template
                                 await _asyncio_fwd.sleep(2)
                                 _mok3 = False
