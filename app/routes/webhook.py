@@ -397,35 +397,50 @@ def _teacher_chat_id(phone: str) -> str:
     return f"91{phone}@c.us"
 
 
-async def _build_email_attachments(media_info: dict | None) -> list[tuple[bytes, str, str]]:
-    """Download Cloud API media and return as email attachment list.
+async def _download_media_bytes(media_info: dict | None) -> tuple[bytes | None, str]:
+    """Download Cloud API media once and return (bytes, mime_type).
 
-    Returns a list of (file_bytes, filename, mime_type) tuples ready for
-    send_email_async(). Returns an empty list if download fails or no media.
+    Returns (None, "") if no media or download fails.
     """
     if not media_info:
-        return []
+        return None, ""
     cloud_mid = media_info.get("cloud_media_id", "")
     if not cloud_mid:
-        return []
+        return None, ""
     try:
         from app.services.whatsapp_service import download_cloud_media
         media_bytes, mime_type = await download_cloud_media(cloud_mid)
         if not media_bytes:
-            logger.error(f"[EMAIL ATTACH] Could not download media {cloud_mid}")
-            return []
-        filename = media_info.get("filename", "")
-        if not filename:
-            ext_map = {
-                "image/jpeg": "image.jpg", "image/png": "image.png",
-                "image/webp": "image.webp", "application/pdf": "document.pdf",
-                "video/mp4": "video.mp4",
-            }
-            filename = ext_map.get(mime_type, "attachment")
-        return [(media_bytes, filename, mime_type or "application/octet-stream")]
+            logger.error(f"[MEDIA DL] Could not download media {cloud_mid}")
+            return None, ""
+        logger.info(f"[MEDIA DL] Downloaded {len(media_bytes)} bytes, mime={mime_type}")
+        return media_bytes, mime_type
     except Exception as exc:
-        logger.error(f"[EMAIL ATTACH] Failed to build attachment: {exc}")
+        logger.error(f"[MEDIA DL] Failed: {exc}")
+        return None, ""
+
+
+def _make_email_attachments(
+    media_info: dict | None,
+    media_bytes: bytes | None,
+    mime_type: str,
+) -> list[tuple[bytes, str, str]]:
+    """Build email attachment list from pre-downloaded media bytes.
+
+    Returns a list of (file_bytes, filename, mime_type) tuples ready for
+    send_email_async(). Returns an empty list if no media bytes.
+    """
+    if not media_bytes or not media_info:
         return []
+    filename = media_info.get("filename", "")
+    if not filename:
+        ext_map = {
+            "image/jpeg": "image.jpg", "image/png": "image.png",
+            "image/webp": "image.webp", "application/pdf": "document.pdf",
+            "video/mp4": "video.mp4",
+        }
+        filename = ext_map.get(mime_type, "attachment")
+    return [(media_bytes, filename, mime_type or "application/octet-stream")]
 
 
 async def save_forwarded_conversation(
@@ -700,6 +715,9 @@ async def forward_to_teachers_and_confirm(
 
     forwarded_names: list[str] = []
 
+    # Download media ONCE (reused for every teacher's WhatsApp + email)
+    _dl_bytes, _dl_mime = await _download_media_bytes(media_info)
+
     for entry in teachers:
         teacher_phone = entry.get("whatsapp", "")
         teacher_email = entry.get("email", "")
@@ -713,17 +731,6 @@ async def forward_to_teachers_and_confirm(
         if teacher_phone and _normalize_digits(sender) == _normalize_digits(teacher_phone):
             logger.info(f"Sender is {entry['teacher']}, skipping self-forward")
             continue
-
-        # Build a professional forwarded message with parent identity
-        notification = (
-            f"Dear {teacher_display},\n\n"
-            f"{parent_label} has sent the following query via the PPIS Bot:\n\n"
-            f"\"{message_text[:500]}\"\n\n"
-            f"Kindly reply to this message and your response will be forwarded back to the parent.\n\n"
-            f"Thank you for your cooperation.\n"
-            f"Warm regards,\n"
-            f"PP International School"
-        )
 
         wa_success = False
         if teacher_phone:
@@ -749,27 +756,28 @@ async def forward_to_teachers_and_confirm(
             if wa_success:
                 logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
             else:
-                # Conversation window closed — use template to open it,
-                # then resend the actual query text.
-                logger.info(f"[FWD] Direct msg failed, opening with template for {entry['teacher']}")
+                # Conversation window closed — send template to open a
+                # business-initiated window, then resend the actual query.
+                logger.info(f"[FWD] Direct msg failed, sending template for {entry['teacher']}")
                 tmpl_ok = await _send_tmpl(
                     t_recipient, "ppis_class_assignment",
                     body_params=[f"Query from {parent_label}", message_text[:400]],
                 )
                 if tmpl_ok:
-                    await _asyncio_relay.sleep(1)
+                    # Wait for template delivery to open conversation window
+                    await _asyncio_relay.sleep(4)
                     wa_success = await send_whatsapp_message(chat_id, _query_msg)
                     if wa_success:
                         logger.info(f"[FWD] Query sent after template to {entry['teacher']}")
                     else:
-                        wa_success = tmpl_ok  # template itself counts
-                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}")
+                        wa_success = True  # template itself was delivered
+                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered")
                 else:
                     logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
 
             # Send media attachment
             if wa_success and media_info:
-                await _asyncio_relay.sleep(2)
+                await _asyncio_relay.sleep(3)
                 _mcap = media_info.get("caption", "")
                 _mok = False
                 try:
@@ -779,9 +787,9 @@ async def forward_to_teachers_and_confirm(
                 if _mok:
                     logger.info(f"[FWD MEDIA] Media sent to {entry['teacher']}")
                 else:
-                    logger.error(f"[FWD MEDIA] FAILED media to {entry['teacher']}")
+                    logger.warning(f"[FWD MEDIA] WhatsApp media failed for {entry['teacher']} — email has attachment")
 
-        # Always send email too (Cloud API text may not deliver outside 24h window)
+        # Always send email too (reliable channel with full query + attachment)
         email_success = False
         if teacher_email:
             email_body = (
@@ -791,12 +799,12 @@ async def forward_to_teachers_and_confirm(
                 f"Kindly reply to this email and your response will be forwarded back to the parent.\n\n"
                 f"Regards,\nPPIS Bot"
             )
-            _email_attachments = await _build_email_attachments(media_info)
+            _email_att = _make_email_attachments(media_info, _dl_bytes, _dl_mime)
             email_success = await send_email_async(
                 teacher_email,
                 f"PPIS Bot: Query from {parent_label}",
                 email_body,
-                attachments=_email_attachments or None,
+                attachments=_email_att or None,
             )
             if email_success:
                 logger.info(f"Forwarded via email to {entry['teacher']} ({teacher_email})")
@@ -1998,6 +2006,9 @@ async def _forward_query_to_class_teacher(
     wa_success = False
     email_success = False
 
+    # Download media ONCE — reused for WhatsApp and email
+    _dl_bytes2, _dl_mime2 = await _download_media_bytes(media_info)
+
     # Forward via WhatsApp — try direct message first, fall back to template
     if teacher_phone:
         import asyncio as _asyncio
@@ -2023,27 +2034,28 @@ async def _forward_query_to_class_teacher(
         if wa_success:
             logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
         else:
-            # Conversation window closed — use template to open it,
-            # then resend the actual query text.
-            logger.info(f"[PARENT→TEACHER] Direct msg failed, opening with template for {teacher_name}")
+            # Conversation window closed — send template to open a
+            # business-initiated window, then resend the actual query.
+            logger.info(f"[PARENT→TEACHER] Direct msg failed, sending template for {teacher_name}")
             tmpl_ok = await send_cloud_template_message(
                 teacher_recipient, "ppis_class_assignment",
                 body_params=[f"Query from {parent_label}", message_text[:400]],
             )
             if tmpl_ok:
-                await _asyncio.sleep(1)
+                # Wait for template delivery to open conversation window
+                await _asyncio.sleep(4)
                 wa_success = await send_whatsapp_message(chat_id, query_msg)
                 if wa_success:
                     logger.info(f"[PARENT→TEACHER] Query sent after template to {teacher_name}")
                 else:
-                    wa_success = tmpl_ok  # template itself counts
-                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}")
+                    wa_success = True  # template itself was delivered
+                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered")
             else:
                 logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
 
         # Send media attachment
         if wa_success and media_info:
-            await _asyncio.sleep(2)
+            await _asyncio.sleep(3)
             media_caption = media_info.get("caption", "")
             media_fwd_ok = False
             try:
@@ -2055,7 +2067,7 @@ async def _forward_query_to_class_teacher(
             if media_fwd_ok:
                 logger.info(f"[PARENT→TEACHER] Media sent to {teacher_name}")
             else:
-                logger.error(f"[PARENT→TEACHER] FAILED media to {teacher_name}")
+                logger.warning(f"[PARENT→TEACHER] WhatsApp media failed for {teacher_name} — email has attachment")
 
         if wa_success:
             # Save conversation for reply relay
@@ -2068,7 +2080,7 @@ async def _forward_query_to_class_teacher(
                 original_message=message_text[:500],
             )
 
-    # Forward via email
+    # Forward via email (reliable channel with full query + attachment)
     if teacher_email:
         email_body = (
             f"Dear {teacher_name},\n\n"
@@ -2078,13 +2090,13 @@ async def _forward_query_to_class_teacher(
             f"forwarded back to the parent.\n\n"
             f"Regards,\nPPIS Bot"
         )
-        _email_attachments2 = await _build_email_attachments(media_info)
+        _email_att2 = _make_email_attachments(media_info, _dl_bytes2, _dl_mime2)
         email_success = await send_email_async(
             teacher_email,
             f"PPIS Bot: Query from {parent_label}",
             email_body,
             "PP International School",
-            attachments=_email_attachments2 or None,
+            attachments=_email_att2 or None,
         )
         if email_success:
             logger.info(
@@ -4872,6 +4884,9 @@ async def receive_cloud_api_message(request: Request):
                         teacher_email = grade_teacher.get("email", "")
                         parent_label = f"Parent of {child_for_label['student_name']} ({child_for_label['grade']})"
 
+                        # Download media ONCE for both WhatsApp and email
+                        _dl_bytes3, _dl_mime3 = await _download_media_bytes(media_info)
+
                         if teacher_phone:
                             import asyncio as _asyncio_fwd
                             from app.services.whatsapp_service import (
@@ -4895,27 +4910,28 @@ async def receive_cloud_api_message(request: Request):
                             if _fwd_ok:
                                 logger.info(f"[CLOUD FILE FWD] Direct query sent to {teacher_name}")
                             else:
-                                # Conversation window closed — use template to
-                                # open it, then resend the actual query text.
-                                logger.info(f"[CLOUD FILE FWD] Direct msg failed, opening with template for {teacher_name}")
+                                # Conversation window closed — send template to
+                                # open a business-initiated window, then resend.
+                                logger.info(f"[CLOUD FILE FWD] Direct msg failed, sending template for {teacher_name}")
                                 _tmpl_ok = await _send_tmpl3(
                                     _trec, "ppis_class_assignment",
                                     body_params=[f"File from {parent_label}", forward_text[:400]],
                                 )
                                 if _tmpl_ok:
-                                    await _asyncio_fwd.sleep(1)
+                                    # Wait for template delivery to open conversation window
+                                    await _asyncio_fwd.sleep(4)
                                     _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
                                     if _fwd_ok:
                                         logger.info(f"[CLOUD FILE FWD] Query sent after template to {teacher_name}")
                                     else:
-                                        _fwd_ok = _tmpl_ok  # template itself counts
-                                        logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}")
+                                        _fwd_ok = True  # template itself was delivered
+                                        logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}, template delivered")
                                 else:
                                     logger.error(f"[CLOUD FILE FWD] Both direct msg and template failed for {teacher_name}")
 
                             # Send media attachment
                             if _fwd_ok:
-                                await _asyncio_fwd.sleep(2)
+                                await _asyncio_fwd.sleep(3)
                                 _mok3 = False
                                 try:
                                     _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
@@ -4924,30 +4940,31 @@ async def receive_cloud_api_message(request: Request):
                                 if _mok3:
                                     logger.info(f"[CLOUD FILE FWD] Media sent to {teacher_name}")
                                 else:
-                                    logger.error(f"[CLOUD FILE FWD] FAILED media to {teacher_name}")
-                            # Also forward via email with attachment
-                            if teacher_email:
-                                _email_body3 = (
-                                    f"Dear {teacher_name},\n\n"
-                                    f"{parent_label} has shared the following file/query "
-                                    f"via the PPIS Bot:\n\n"
-                                    f"\"{forward_text[:500]}\"\n\n"
-                                    f"Kindly reply to this email and your response will be "
-                                    f"forwarded back to the parent.\n\n"
-                                    f"Regards,\nPPIS Bot"
-                                )
-                                _ea3 = await _build_email_attachments(media_info)
-                                _eok3 = await send_email_async(
-                                    teacher_email,
-                                    f"PPIS Bot: File from {parent_label}",
-                                    _email_body3,
-                                    "PP International School",
-                                    attachments=_ea3 or None,
-                                )
-                                if _eok3:
-                                    logger.info(f"[CLOUD FILE FWD] Email with attachment sent to {teacher_name} ({teacher_email})")
-                                else:
-                                    logger.error(f"[CLOUD FILE FWD] Email FAILED for {teacher_name} ({teacher_email})")
+                                    logger.warning(f"[CLOUD FILE FWD] WhatsApp media failed for {teacher_name} — email has attachment")
+
+                        # Always send email with attachment (reliable channel)
+                        if teacher_email:
+                            _email_body3 = (
+                                f"Dear {teacher_name},\n\n"
+                                f"{parent_label} has shared the following file/query "
+                                f"via the PPIS Bot:\n\n"
+                                f"\"{forward_text[:500]}\"\n\n"
+                                f"Kindly reply to this email and your response will be "
+                                f"forwarded back to the parent.\n\n"
+                                f"Regards,\nPPIS Bot"
+                            )
+                            _ea3 = _make_email_attachments(media_info, _dl_bytes3, _dl_mime3)
+                            _eok3 = await send_email_async(
+                                teacher_email,
+                                f"PPIS Bot: File from {parent_label}",
+                                _email_body3,
+                                "PP International School",
+                                attachments=_ea3 or None,
+                            )
+                            if _eok3:
+                                logger.info(f"[CLOUD FILE FWD] Email with attachment sent to {teacher_name} ({teacher_email})")
+                            else:
+                                logger.error(f"[CLOUD FILE FWD] Email FAILED for {teacher_name} ({teacher_email})")
 
                             # Save conversation for 2-way relay
                             await save_forwarded_conversation(
