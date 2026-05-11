@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import init_db
-from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face, dashboard
+from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face, dashboard, relay_dashboard
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -58,8 +58,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         logger.error(f"STARTUP: face-phone sync failed: {e}", exc_info=True)
     start_scheduler()
+
+    # Start relay message queue processor (retries failed messages)
+    import asyncio
+    _queue_task = asyncio.create_task(_relay_queue_worker())
+    logger.info("STARTUP: Relay message queue processor started")
+
     yield
+
+    _queue_task.cancel()
     stop_scheduler()
+
+
+async def _relay_queue_worker() -> None:
+    """Background task that periodically processes the relay message queue."""
+    import asyncio
+    from app.services.relay_service import process_message_queue
+    _logger = logging.getLogger("relay_queue")
+    while True:
+        try:
+            await asyncio.sleep(60)  # check every 60 seconds
+            result = await process_message_queue()
+            if result["processed"] > 0:
+                _logger.info(
+                    f"Queue processed: {result['sent']} sent, "
+                    f"{result['failed']} failed out of {result['processed']}"
+                )
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            _logger.error(f"Queue processor error: {e}", exc_info=True)
+            await asyncio.sleep(30)
 
 
 app = FastAPI(title="WhatsApp & SMS Bot", version="1.0.0", lifespan=lifespan)
@@ -84,6 +113,7 @@ app.include_router(agent_ws.router)
 app.include_router(agent_config.router)
 app.include_router(face.router)
 app.include_router(dashboard.router)
+app.include_router(relay_dashboard.router)
 
 
 # Serve static files (school images)
