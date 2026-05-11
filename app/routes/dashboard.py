@@ -206,7 +206,7 @@ async def report_attendance(request: Request):
                 # Look up phone from backend face DB
                 if not phones:
                     cursor = await db.execute(
-                        "SELECT phone FROM registered_faces "
+                        "SELECT phone FROM agent_registered_faces "
                         "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' "
                         "LIMIT 1",
                         (person_id,),
@@ -307,7 +307,7 @@ async def resend_missed_notifications():
             person_id, name, logged_at = r[0], r[1], r[2]
             # Look up phone from face DB
             pcur = await db.execute(
-                "SELECT phone FROM registered_faces "
+                "SELECT phone FROM agent_registered_faces "
                 "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' LIMIT 1",
                 (person_id,),
             )
