@@ -4804,8 +4804,13 @@ async def receive_cloud_api_message(request: Request):
         # Also check for frequently_forwarded flag
         _is_msg_forwarded = msg_obj.get("context", {}).get("frequently_forwarded", False)
 
-    # Check if this message is a reply to a buffered forwarded message
-    _buffered_fwd = _recent_forwarded.pop(sender, None)
+    # Check if this message is a reply to a buffered forwarded message.
+    # Only consume the buffer if the current message is NOT itself forwarded —
+    # otherwise two forwarded messages in a row would misinterpret the second
+    # as a "reply" to the first.
+    _buffered_fwd = None
+    if not _is_msg_forwarded:
+        _buffered_fwd = _recent_forwarded.pop(sender, None)
     if _buffered_fwd and (_time_mod.time() - _buffered_fwd["timestamp"]) < _FORWARDED_MSG_TTL:
         # Parent is replying with context for a previously forwarded message.
         # Treat their reply as the query and include the forwarded content.
