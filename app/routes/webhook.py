@@ -4090,9 +4090,26 @@ def _caption_has_name_and_class(caption: str) -> bool:
       "Suhaan 3 C", "Karman 1B", "Ishnoor Grade 7B"
     Examples that return False:
       "homework", "syllabus for 3 C", "confirm from teacher if final syllabus 3C",
-      "screenshot", "", "hi", "check this"
+      "screenshot", "", "hi", "check this",
+      "Please ask reva ma'am if this is the final syllabus of grade 3?"
     """
     if not caption or len(caption.strip()) < 3:
+        return False
+
+    caption_lower = caption.lower().strip()
+
+    # Question marks indicate a query, not a registration request
+    if "?" in caption:
+        return False
+
+    # Captions with forwarding/query intent are NOT face registration
+    _QUERY_PATTERNS = [
+        "please ask", "ask ", "is this", "if this", "is it",
+        "kya hai", "kya ye", "confirm", "verify",
+        "syllabus", "circular", "timetable", "schedule",
+        "homework", "notice", "final",
+    ]
+    if any(caption_lower.startswith(p) or f" {p}" in f" {caption_lower}" for p in _QUERY_PATTERNS):
         return False
 
     # Must contain a class/grade indicator
@@ -4107,7 +4124,38 @@ def _caption_has_name_and_class(caption: str) -> bool:
     ]
     has_name = len(name_words) >= 1
 
+    # If the non-class portion is too long (>= 5 words), it's likely a
+    # sentence/query rather than just a person's name
+    all_words = [w for w in name_part.split() if len(w) >= 2]
+    if len(all_words) >= 5:
+        return False
+
     return has_class and has_name
+
+
+def _is_query_caption(caption_lower: str) -> bool:
+    """Return True if the caption is clearly a question or forwarding request."""
+    _QUERY_STARTERS = [
+        "please ask", "pls ask", "plz ask", "kindly ask",
+        "ask ", "convey to", "forward to", "send to", "tell to",
+        "relay to", "inform to", "pass to", "give to",
+        "share with", "share this with",
+        "is this", "is it", "what is", "what's",
+        "kya hai", "kya ye", "ye kya", "yeh kya",
+    ]
+    _QUERY_PHRASES = [
+        "if this is", "if it is", "if this the", "if it's",
+        "please check", "please confirm", "please verify",
+        "is the final", "is this final", "is this the",
+        "syllabus", "circular", "timetable", "notice",
+    ]
+    for starter in _QUERY_STARTERS:
+        if caption_lower.startswith(starter):
+            return True
+    for phrase in _QUERY_PHRASES:
+        if phrase in caption_lower:
+            return True
+    return False
 
 
 def _classify_media_content(media_info: dict) -> str:
@@ -4135,6 +4183,11 @@ def _classify_media_content(media_info: dict) -> str:
 
     # Non-image media types are ALWAYS Category 2 (documents)
     if media_type in ("documentMessage", "videoMessage", "audioMessage"):
+        return "document"
+
+    # --- Early exit: captions that are clearly queries/forwarding ---
+    # Questions (has "?") or forwarding requests are NEVER face registration
+    if caption_lower and ("?" in caption_lower or _is_query_caption(caption_lower)):
         return "document"
 
     # --- Category 1 checks (face registration) ---
