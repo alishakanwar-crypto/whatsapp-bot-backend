@@ -4246,8 +4246,8 @@ _NON_NAME_CAPTIONS = {
     "convey", "forward", "relay", "inform",
 }
 
-# Words to exclude when detecting name-like tokens in a caption
-_NON_NAME_WORDS = {
+# Basic filler/common words for _caption_is_name_only and child-name scoring
+_NAME_FILLER_WORDS = {
     "the", "of", "is", "at", "in", "for", "and", "as", "my",
     "this", "that", "from", "with", "staff", "ppis",
     "teacher", "sir", "mam", "madam", "mrs", "mr", "ms",
@@ -4287,7 +4287,7 @@ def _caption_is_name_only(caption: str) -> bool:
     # Extract name-like words (alphabetic, 2+ chars, not common filler words)
     name_words = [
         w for w in re.sub(r"[^\w\s]", " ", caption).split()
-        if len(w) >= 2 and w.isalpha() and w.lower() not in _NON_NAME_WORDS
+        if len(w) >= 2 and w.isalpha() and w.lower() not in _NAME_FILLER_WORDS
     ]
 
     # Must have at least 2 name words (first + last name)
@@ -4356,7 +4356,7 @@ async def _try_register_child_face(
             # This prevents "gupta" in "Aarna Gupta" from matching "Nitya Gupta".
             caption_name_words = [
                 w for w in caption.split()
-                if len(w) > 2 and w.isalpha() and w not in _NON_NAME_WORDS
+                if len(w) > 2 and w.isalpha() and w not in _NAME_FILLER_WORDS
             ]
             best_score = 0
             for child in children:
@@ -5051,6 +5051,11 @@ async def receive_cloud_api_message(request: Request):
                         ]
                     )
                     or _cap_lower.startswith("ask ")
+                    or _cap_lower.startswith("please ask")
+                    or _cap_lower.startswith("pls ask")
+                    or _cap_lower.startswith("plz ask")
+                    # "ask [name] maam/sir/teacher" pattern
+                    or bool(re.search(r"\bask\s+\w+\s+(?:ma'?am|maam|sir|teacher)\b", _cap_lower))
                 )
                 is_image_msg = media_info.get("type") == "imageMessage"
                 cloud_mid = media_info.get("cloud_media_id", "")
