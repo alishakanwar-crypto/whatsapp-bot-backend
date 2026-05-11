@@ -3625,11 +3625,20 @@ async def receive_whatsapp_message(request: Request):
             ]
             _G_FWD_PHRASES = [
                 "convey to", "forward to", "send to", "tell to",
+                "relay to", "pass to", "give to", "share with",
                 "class teacher", "ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
                 "what is this", "what's this", "kya hai", "pata nahi",
+                "please ask", "pls ask", "plz ask", "kindly ask",
+                "ask ", "if this is", "if it is", "is this",
+                "syllabus", "circular", "timetable", "notice",
+                "homework", "schedule",
             ]
             _g_is_non_name = _gcap_low in _G_NON_NAME or not _gcap_raw
+            if not _g_is_non_name:
+                # Use the unified query detection from _is_query_caption
+                if "?" in _gcap_low or _is_query_caption(_gcap_low):
+                    _g_is_non_name = True
             if not _g_is_non_name:
                 for _gp in _G_FWD_PHRASES:
                     if _gp in _gcap_low:
@@ -3642,6 +3651,10 @@ async def receive_whatsapp_message(request: Request):
                                        "convey", "forward", "class", "teacher", "know", "what",
                                        "dont", "this", "that"}
             ]
+            # Word-count heuristic: >= 5 words is a sentence/query, not a name
+            _all_words = [w for w in _gcap_raw.split() if len(w) >= 2]
+            if len(_all_words) >= 5:
+                _g_is_non_name = True
             _g_has_name = len(_g_name_words) >= 1 and not _g_is_non_name
             _g_has_class = bool(_CAPTION_CLASS_RE.search(_gcap_raw)) if _gcap_raw else False
 
