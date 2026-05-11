@@ -6,6 +6,9 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +19,13 @@ SMTP_USER = os.getenv("SMTP_USER", "info@ppischool.in")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 
 
-def send_email(to_email: str, subject: str, body: str, sender_name: str = "PPIS Bot") -> bool:
+def send_email(
+    to_email: str,
+    subject: str,
+    body: str,
+    sender_name: str = "PPIS Bot",
+    attachments: Optional[List[Tuple[bytes, str, str]]] = None,
+) -> bool:
     """Send an email via SMTP.
 
     Args:
@@ -24,6 +33,7 @@ def send_email(to_email: str, subject: str, body: str, sender_name: str = "PPIS 
         subject: Email subject line.
         body: Plain-text email body.
         sender_name: Display name of the sender.
+        attachments: Optional list of (file_bytes, filename, mime_type) tuples.
 
     Returns:
         True if the email was sent successfully, False otherwise.
@@ -35,13 +45,15 @@ def send_email(to_email: str, subject: str, body: str, sender_name: str = "PPIS 
         logger.error("SMTP_PASSWORD not configured — cannot send email")
         return False
 
-    msg = MIMEMultipart("alternative")
+    # Use "mixed" when we have attachments so both text and files are included
+    msg = MIMEMultipart("mixed" if attachments else "alternative")
     msg["From"] = f"{sender_name} <{smtp_user}>"
     msg["To"] = to_email
     msg["Subject"] = subject
 
-    # Plain text part
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    # Text content (wrapped in "alternative" sub-part when attachments exist)
+    text_part = MIMEMultipart("alternative") if attachments else msg
+    text_part.attach(MIMEText(body, "plain", "utf-8"))
 
     # Simple HTML version
     html_body = html_module.escape(body).replace("\n", "<br>")
@@ -50,7 +62,19 @@ def send_email(to_email: str, subject: str, body: str, sender_name: str = "PPIS 
 <br><br>
 <small style="color: #888;">— Sent via PPIS Bot</small>
 </body></html>"""
-    msg.attach(MIMEText(html, "html", "utf-8"))
+    text_part.attach(MIMEText(html, "html", "utf-8"))
+
+    if attachments:
+        msg.attach(text_part)
+        for file_bytes, filename, mime_type in attachments:
+            maintype, _, subtype = mime_type.partition("/")
+            part = MIMEBase(maintype or "application", subtype or "octet-stream")
+            part.set_payload(file_bytes)
+            encoders.encode_base64(part)
+            part.add_header(
+                "Content-Disposition", "attachment", filename=filename,
+            )
+            msg.attach(part)
 
     try:
         server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
@@ -74,8 +98,21 @@ def send_email(to_email: str, subject: str, body: str, sender_name: str = "PPIS 
         return False
 
 
-async def send_email_async(to_email: str, subject: str, body: str, sender_name: str = "PPIS Bot") -> bool:
+async def send_email_async(
+    to_email: str,
+    subject: str,
+    body: str,
+    sender_name: str = "PPIS Bot",
+    attachments: Optional[List[Tuple[bytes, str, str]]] = None,
+) -> bool:
     """Async wrapper around send_email (runs SMTP in thread to avoid blocking)."""
     import asyncio
+    import functools
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, send_email, to_email, subject, body, sender_name)
+    return await loop.run_in_executor(
+        None,
+        functools.partial(
+            send_email, to_email, subject, body, sender_name,
+            attachments=attachments,
+        ),
+    )
