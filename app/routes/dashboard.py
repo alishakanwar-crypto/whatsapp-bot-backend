@@ -1,12 +1,13 @@
 """Dashboard API routes for the PPIS School Command Center web app."""
 
+import io
 import logging
 import os
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.database import get_db
 
@@ -1461,3 +1462,260 @@ async def report_manual_review(request: Request):
         return {"status": "ok", "queued": queued}
     finally:
         await db.close()
+
+
+# ── Teacher/Staff Attendance Report ──────────────────────────────────────────
+
+REPORT_RECIPIENTS = os.environ.get(
+    "ATTENDANCE_REPORT_EMAIL", "alisha.kanwar@ppischool.in"
+)
+
+
+def _generate_teacher_report_excel(
+    teachers: list[dict], attendance: list[dict], report_date: str
+) -> bytes:
+    """Generate Excel bytes for the daily teacher/staff attendance report."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Teacher Attendance"
+
+    # Styles
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="2F5496")
+    present_fill = PatternFill("solid", fgColor="C6EFCE")
+    absent_fill = PatternFill("solid", fgColor="FFC7CE")
+    border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+
+    # Title row
+    ws.merge_cells("A1:F1")
+    ws["A1"] = f"PP International School — Teacher/Staff Attendance — {report_date}"
+    ws["A1"].font = Font(bold=True, size=14, color="2F5496")
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    # Headers
+    headers = ["S.No", "Name", "Status", "Time Detected", "Camera", "Confidence"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=3, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
+
+    # Build attendance lookup
+    att_map = {}
+    for a in attendance:
+        pid = a["person_id"]
+        if pid not in att_map:
+            att_map[pid] = a
+
+    # Data rows
+    row = 4
+    present_count = 0
+    absent_count = 0
+    for idx, t in enumerate(teachers, 1):
+        pid = t["person_id"]
+        att = att_map.get(pid)
+        status = "Present" if att else "Absent"
+        time_str = ""
+        camera = ""
+        conf = ""
+        if att:
+            present_count += 1
+            time_str = att.get("time", "")
+            camera = att.get("camera", "")
+            conf_val = att.get("confidence", 0)
+            conf = f"{conf_val}%"
+        else:
+            absent_count += 1
+
+        ws.cell(row=row, column=1, value=idx).border = border
+        ws.cell(row=row, column=2, value=t["name"]).border = border
+        status_cell = ws.cell(row=row, column=3, value=status)
+        status_cell.border = border
+        status_cell.fill = present_fill if att else absent_fill
+        status_cell.alignment = Alignment(horizontal="center")
+        ws.cell(row=row, column=4, value=time_str).border = border
+        ws.cell(row=row, column=5, value=camera).border = border
+        ws.cell(row=row, column=6, value=conf).border = border
+        row += 1
+
+    # Summary row
+    row += 1
+    ws.cell(row=row, column=1, value="Summary:").font = Font(bold=True)
+    ws.cell(row=row, column=2, value=f"Present: {present_count}").font = Font(
+        bold=True, color="006100"
+    )
+    ws.cell(row=row, column=3, value=f"Absent: {absent_count}").font = Font(
+        bold=True, color="9C0006"
+    )
+    ws.cell(row=row, column=4, value=f"Total: {len(teachers)}").font = Font(bold=True)
+
+    # Column widths
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 28
+    ws.column_dimensions["C"].width = 12
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 28
+    ws.column_dimensions["F"].width = 14
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@router.get("/attendance/teacher-report")
+async def teacher_attendance_report(report_date: str | None = None):
+    """Generate and download today's teacher attendance Excel report."""
+    ist = timezone(timedelta(hours=5, minutes=30))
+    today = report_date or datetime.now(ist).strftime("%Y-%m-%d")
+
+    db = await get_db()
+    try:
+        # All registered teachers
+        cur = await db.execute(
+            "SELECT DISTINCT person_id, name, phone, role "
+            "FROM agent_registered_faces "
+            "WHERE person_id LIKE 'TEACHER_%' "
+            "ORDER BY name"
+        )
+        teachers = [
+            {"person_id": r[0], "name": r[1], "phone": r[2] or "", "role": r[3] or "Teacher"}
+            for r in await cur.fetchall()
+        ]
+
+        # Today's teacher attendance
+        cur = await db.execute(
+            "SELECT person_id, student_name, camera_label, confidence, logged_at "
+            "FROM attendance_records "
+            "WHERE person_id LIKE 'TEACHER_%' AND date(logged_at) = ? "
+            "ORDER BY logged_at",
+            (today,),
+        )
+        attendance = []
+        for r in await cur.fetchall():
+            logged = r[4] or ""
+            time_str = ""
+            if logged:
+                try:
+                    dt = datetime.fromisoformat(logged)
+                    time_str = dt.strftime("%I:%M %p")
+                except Exception:
+                    time_str = logged
+            attendance.append({
+                "person_id": r[0],
+                "name": r[1],
+                "camera": r[2] or "",
+                "confidence": round(r[3] * 100, 1) if r[3] else 0,
+                "time": time_str,
+            })
+    finally:
+        await db.close()
+
+    xlsx_bytes = _generate_teacher_report_excel(teachers, attendance, today)
+    filename = f"Teacher_Attendance_{today}.xlsx"
+
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.post("/attendance/teacher-report/email")
+async def email_teacher_attendance_report(
+    request: Request,
+    _: None = Depends(verify_dashboard_secret),
+):
+    """Generate teacher attendance Excel and email it.
+
+    Called by the agent after Phase 1 (teacher scanning) completes.
+    """
+    from app.services.email_service import send_email_async
+
+    ist = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.now(ist).strftime("%Y-%m-%d")
+    today_display = datetime.now(ist).strftime("%d %b %Y (%A)")
+
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT DISTINCT person_id, name, phone, role "
+            "FROM agent_registered_faces "
+            "WHERE person_id LIKE 'TEACHER_%' "
+            "ORDER BY name"
+        )
+        teachers = [
+            {"person_id": r[0], "name": r[1], "phone": r[2] or "", "role": r[3] or "Teacher"}
+            for r in await cur.fetchall()
+        ]
+
+        cur = await db.execute(
+            "SELECT person_id, student_name, camera_label, confidence, logged_at "
+            "FROM attendance_records "
+            "WHERE person_id LIKE 'TEACHER_%' AND date(logged_at) = ? "
+            "ORDER BY logged_at",
+            (today,),
+        )
+        attendance = []
+        for r in await cur.fetchall():
+            logged = r[4] or ""
+            time_str = ""
+            if logged:
+                try:
+                    dt = datetime.fromisoformat(logged)
+                    time_str = dt.strftime("%I:%M %p")
+                except Exception:
+                    time_str = logged
+            attendance.append({
+                "person_id": r[0],
+                "name": r[1],
+                "camera": r[2] or "",
+                "confidence": round(r[3] * 100, 1) if r[3] else 0,
+                "time": time_str,
+            })
+    finally:
+        await db.close()
+
+    present = len(set(a["person_id"] for a in attendance))
+    total = len(teachers)
+    absent = total - present
+
+    xlsx_bytes = _generate_teacher_report_excel(teachers, attendance, today)
+    filename = f"Teacher_Attendance_{today}.xlsx"
+
+    body = (
+        f"Daily Teacher/Staff Attendance Report — {today_display}\n\n"
+        f"Present: {present} / {total}\n"
+        f"Absent: {absent}\n\n"
+        f"Please find the detailed report attached.\n\n"
+        f"— PPIS Automated Attendance System"
+    )
+
+    recipients = [r.strip() for r in REPORT_RECIPIENTS.split(",") if r.strip()]
+    results = []
+    for email in recipients:
+        ok = await send_email_async(
+            email,
+            f"Teacher Attendance Report — {today_display}",
+            body,
+            "PP International School",
+            attachments=[(filename, xlsx_bytes)],
+        )
+        results.append({"email": email, "sent": ok})
+
+    return {
+        "status": "ok",
+        "date": today,
+        "present": present,
+        "absent": absent,
+        "total": total,
+        "email_results": results,
+    }
