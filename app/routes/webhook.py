@@ -742,7 +742,6 @@ async def forward_to_teachers_and_confirm(
             import asyncio as _asyncio_relay
             from app.services.whatsapp_service import (
                 send_cloud_template_message as _send_tmpl,
-                forward_cloud_media_to_recipient,
             )
             chat_id = _teacher_chat_id(teacher_phone)
             t_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
@@ -780,15 +779,36 @@ async def forward_to_teachers_and_confirm(
                 else:
                     logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
 
-            # Send media attachment
-            if wa_success and media_info:
-                await _asyncio_relay.sleep(3)
+            # Send media attachment using pre-downloaded bytes
+            if wa_success and _dl_bytes and media_info:
+                from app.services.whatsapp_service import (
+                    upload_media_bytes_cloud as _upload_bytes,
+                    send_cloud_media as _send_media,
+                )
                 _mcap = media_info.get("caption", "")
+                _int_type = media_info.get("type", "")
+                _tmap = {
+                    "imageMessage": "image", "videoMessage": "video",
+                    "documentMessage": "document", "audioMessage": "audio",
+                }
+                _ctype = _tmap.get(_int_type, "document")
+                _fn = media_info.get("filename", "file")
                 _mok = False
-                try:
-                    _mok = await forward_cloud_media_to_recipient(media_info, chat_id, caption=_mcap)
-                except Exception as _me:
-                    logger.error(f"[FWD MEDIA] Cloud error: {_me}")
+                for _att in range(3):
+                    if _att > 0:
+                        await _asyncio_relay.sleep(4 * _att)
+                    try:
+                        _mid = await _upload_bytes(_dl_bytes, _dl_mime, _fn)
+                        if _mid:
+                            _mok = await _send_media(
+                                chat_id, _ctype,
+                                media_id=_mid, caption=_mcap,
+                                filename=_fn if _ctype == "document" else "",
+                            )
+                        if _mok:
+                            break
+                    except Exception as _me:
+                        logger.error(f"[FWD MEDIA] attempt {_att+1} error: {_me}")
                 if _mok:
                     logger.info(f"[FWD MEDIA] Media sent to {entry['teacher']}")
                 else:
@@ -2148,7 +2168,6 @@ async def _forward_query_to_class_teacher(
         import asyncio as _asyncio
         from app.services.whatsapp_service import (
             send_cloud_template_message,
-            forward_cloud_media_to_recipient,
         )
         chat_id = _teacher_chat_id(teacher_phone)
         teacher_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
@@ -2187,17 +2206,41 @@ async def _forward_query_to_class_teacher(
             else:
                 logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
 
-        # Send media attachment
-        if wa_success and media_info:
-            await _asyncio.sleep(3)
+        # Send media attachment using pre-downloaded bytes (avoids
+        # duplicate download and expired Cloud API media IDs).
+        if wa_success and _dl_bytes2 and media_info:
+            from app.services.whatsapp_service import (
+                upload_media_bytes_cloud,
+                send_cloud_media,
+            )
             media_caption = media_info.get("caption", "")
+            _internal_type = media_info.get("type", "")
+            _type_map = {
+                "imageMessage": "image", "videoMessage": "video",
+                "documentMessage": "document", "audioMessage": "audio",
+            }
+            _cloud_type = _type_map.get(_internal_type, "document")
+            _fname = media_info.get("filename", "file")
             media_fwd_ok = False
-            try:
-                media_fwd_ok = await forward_cloud_media_to_recipient(
-                    media_info, chat_id, caption=media_caption,
-                )
-            except Exception as mf_exc:
-                logger.error(f"[PARENT→TEACHER] Media forward error: {mf_exc}")
+            # Retry up to 3 times with increasing delay
+            for _attempt in range(3):
+                if _attempt > 0:
+                    await _asyncio.sleep(4 * _attempt)
+                try:
+                    _fresh_id = await upload_media_bytes_cloud(
+                        _dl_bytes2, _dl_mime2, _fname,
+                    )
+                    if _fresh_id:
+                        media_fwd_ok = await send_cloud_media(
+                            chat_id, _cloud_type,
+                            media_id=_fresh_id,
+                            caption=media_caption,
+                            filename=_fname if _cloud_type == "document" else "",
+                        )
+                    if media_fwd_ok:
+                        break
+                except Exception as mf_exc:
+                    logger.error(f"[PARENT→TEACHER] Media forward attempt {_attempt+1} error: {mf_exc}")
             if media_fwd_ok:
                 logger.info(f"[PARENT→TEACHER] Media sent to {teacher_name}")
             else:
