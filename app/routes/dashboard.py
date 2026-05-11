@@ -199,19 +199,23 @@ async def report_attendance(request: Request):
                 )
                 continue
 
-            # If campus agent didn't send notification (missing phone locally),
-            # look up phone from backend face DB and send from here
-            if not notified and not phones:
-                cursor = await db.execute(
-                    "SELECT phone FROM registered_faces "
-                    "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' "
-                    "LIMIT 1",
-                    (person_id,),
-                )
-                row = await cursor.fetchone()
-                if row and row[0]:
-                    phones = row[0]
-                    # Parse time from logged_at
+            # ALWAYS send notification from backend if not already notified.
+            # The campus agent may not have the phone number locally, or may
+            # have failed to send. Backend is the safety net — guaranteed delivery.
+            if not notified:
+                # Look up phone from backend face DB
+                if not phones:
+                    cursor = await db.execute(
+                        "SELECT phone FROM registered_faces "
+                        "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' "
+                        "LIMIT 1",
+                        (person_id,),
+                    )
+                    row = await cursor.fetchone()
+                    if row and row[0]:
+                        phones = row[0]
+
+                if phones:
                     try:
                         _ts = datetime.fromisoformat(logged_at)
                         _ist = _ts.astimezone(
@@ -278,6 +282,73 @@ async def report_attendance(request: Request):
             "rejected": rejected,
             "backend_notified": backend_notified,
         }
+    finally:
+        await db.close()
+
+
+@router.post("/attendance/resend-missed")
+async def resend_missed_notifications():
+    """Find today's attendance records with notification_sent=0, look up phones,
+    and send attendance notifications for all of them."""
+    from app.services.whatsapp_service import send_cloud_template_message
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT ar.person_id, ar.student_name, ar.logged_at "
+            "FROM attendance_records ar "
+            "WHERE date(ar.logged_at) = date('now', '+5 hours', '+30 minutes') "
+            "AND ar.notification_sent = 0"
+        )
+        rows = await cursor.fetchall()
+        sent = 0
+        failed = 0
+        for r in rows:
+            person_id, name, logged_at = r[0], r[1], r[2]
+            # Look up phone from face DB
+            pcur = await db.execute(
+                "SELECT phone FROM registered_faces "
+                "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' LIMIT 1",
+                (person_id,),
+            )
+            prow = await pcur.fetchone()
+            if not prow or not prow[0]:
+                logger.warning(f"Resend: no phone for {person_id}")
+                failed += 1
+                continue
+            phones = prow[0]
+            try:
+                _ts = datetime.fromisoformat(logged_at)
+                time_str = _ts.strftime("%I:%M %p")
+            except Exception:
+                time_str = "this morning"
+
+            phone_list = [p.strip() for p in phones.split(",") if p.strip()]
+            any_ok = False
+            for ph in phone_list:
+                digits = "".join(c for c in ph if c.isdigit())
+                if len(digits) == 10:
+                    digits = "91" + digits
+                if len(digits) >= 12:
+                    ok = await send_cloud_template_message(
+                        digits, "ppis_attendance_alert",
+                        body_params=[name, time_str],
+                    )
+                    if ok:
+                        any_ok = True
+                        logger.info(f"Resend: sent notification for {name} to {digits}")
+            if any_ok:
+                await db.execute(
+                    "UPDATE attendance_records SET notification_sent = 1, "
+                    "parent_phones = ? WHERE person_id = ? "
+                    "AND date(logged_at) = date('now', '+5 hours', '+30 minutes')",
+                    (phones, person_id),
+                )
+                sent += 1
+            else:
+                failed += 1
+        await db.commit()
+        return {"status": "ok", "sent": sent, "failed": failed, "total_missed": len(rows)}
     finally:
         await db.close()
 
