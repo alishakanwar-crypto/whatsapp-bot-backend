@@ -756,24 +756,28 @@ async def forward_to_teachers_and_confirm(
             if wa_success:
                 logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
             else:
-                # Conversation window closed — send template as notification.
-                # NOTE: Template does NOT open a free-form window; only the
-                # teacher replying would do that.  So we don't retry the
-                # direct message — the email below carries the full query.
+                # Conversation window closed — send template to open a
+                # business-initiated window, then resend the actual query.
                 logger.info(f"[FWD] Direct msg failed, sending template for {entry['teacher']}")
                 tmpl_ok = await _send_tmpl(
                     t_recipient, "ppis_class_assignment",
                     body_params=[f"Query from {parent_label}", message_text[:400]],
                 )
                 if tmpl_ok:
-                    wa_success = True
-                    logger.info(f"[FWD] Template sent to {entry['teacher']} (full query via email)")
+                    # Wait for template delivery to open conversation window
+                    await _asyncio_relay.sleep(4)
+                    wa_success = await send_whatsapp_message(chat_id, _query_msg)
+                    if wa_success:
+                        logger.info(f"[FWD] Query sent after template to {entry['teacher']}")
+                    else:
+                        wa_success = True  # template itself was delivered
+                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered")
                 else:
                     logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
 
-            # Send media attachment (only works if direct msg succeeded)
+            # Send media attachment
             if wa_success and media_info:
-                await _asyncio_relay.sleep(2)
+                await _asyncio_relay.sleep(3)
                 _mcap = media_info.get("caption", "")
                 _mok = False
                 try:
@@ -2030,23 +2034,28 @@ async def _forward_query_to_class_teacher(
         if wa_success:
             logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
         else:
-            # Conversation window closed — send template as notification.
-            # NOTE: Template does NOT open a free-form window; only the
-            # teacher replying would do that.  Email carries the full query.
+            # Conversation window closed — send template to open a
+            # business-initiated window, then resend the actual query.
             logger.info(f"[PARENT→TEACHER] Direct msg failed, sending template for {teacher_name}")
             tmpl_ok = await send_cloud_template_message(
                 teacher_recipient, "ppis_class_assignment",
                 body_params=[f"Query from {parent_label}", message_text[:400]],
             )
             if tmpl_ok:
-                wa_success = True
-                logger.info(f"[PARENT→TEACHER] Template sent to {teacher_name} (full query via email)")
+                # Wait for template delivery to open conversation window
+                await _asyncio.sleep(4)
+                wa_success = await send_whatsapp_message(chat_id, query_msg)
+                if wa_success:
+                    logger.info(f"[PARENT→TEACHER] Query sent after template to {teacher_name}")
+                else:
+                    wa_success = True  # template itself was delivered
+                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered")
             else:
                 logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
 
-        # Send media attachment (only works if direct msg succeeded)
+        # Send media attachment
         if wa_success and media_info:
-            await _asyncio.sleep(2)
+            await _asyncio.sleep(3)
             media_caption = media_info.get("caption", "")
             media_fwd_ok = False
             try:
@@ -4901,23 +4910,28 @@ async def receive_cloud_api_message(request: Request):
                             if _fwd_ok:
                                 logger.info(f"[CLOUD FILE FWD] Direct query sent to {teacher_name}")
                             else:
-                                # Conversation window closed — send template.
-                                # NOTE: Template does NOT open a free-form window.
-                                # Email carries the full query + attachment.
+                                # Conversation window closed — send template to
+                                # open a business-initiated window, then resend.
                                 logger.info(f"[CLOUD FILE FWD] Direct msg failed, sending template for {teacher_name}")
                                 _tmpl_ok = await _send_tmpl3(
                                     _trec, "ppis_class_assignment",
                                     body_params=[f"File from {parent_label}", forward_text[:400]],
                                 )
                                 if _tmpl_ok:
-                                    _fwd_ok = True
-                                    logger.info(f"[CLOUD FILE FWD] Template sent to {teacher_name} (full query via email)")
+                                    # Wait for template delivery to open conversation window
+                                    await _asyncio_fwd.sleep(4)
+                                    _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
+                                    if _fwd_ok:
+                                        logger.info(f"[CLOUD FILE FWD] Query sent after template to {teacher_name}")
+                                    else:
+                                        _fwd_ok = True  # template itself was delivered
+                                        logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}, template delivered")
                                 else:
                                     logger.error(f"[CLOUD FILE FWD] Both direct msg and template failed for {teacher_name}")
 
-                            # Send media attachment (only works if direct msg succeeded)
+                            # Send media attachment
                             if _fwd_ok:
-                                await _asyncio_fwd.sleep(2)
+                                await _asyncio_fwd.sleep(3)
                                 _mok3 = False
                                 try:
                                     _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
