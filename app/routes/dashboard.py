@@ -1,16 +1,30 @@
 """Dashboard API routes for the PPIS School Command Center web app."""
 
 import logging
+import os
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.database import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+# ---------------------------------------------------------------------------
+# Authentication: dashboard write operations require AGENT_SECRET
+# ---------------------------------------------------------------------------
+AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
+
+
+async def verify_dashboard_secret(x_agent_secret: str = Header("")) -> None:
+    """Require AGENT_SECRET for write/delete operations on dashboard data."""
+    if not AGENT_SECRET:
+        return
+    if x_agent_secret != AGENT_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # ── Attendance ───────────────────────────────────────────────────────────────
@@ -96,11 +110,18 @@ async def attendance_history(
         await db.close()
 
 
+MINIMUM_CONFIDENCE = 0.30  # Backend rejects anything below 30%
+ATTENDANCE_WINDOW_START = 7  # 7:00 AM IST
+ATTENDANCE_WINDOW_END_HOUR = 9
+ATTENDANCE_WINDOW_END_MIN = 30  # 9:30 AM IST
+
+
 @router.post("/attendance/report")
 async def report_attendance(request: Request):
     """Receive attendance records from the campus agent.
 
-    Blocks attendance on Sundays, 2nd Saturdays, and school holidays.
+    Validates: off-days, holidays, attendance window, confidence floor.
+    Logs all rejected records to audit_log for forensics.
     """
     from datetime import timezone, timedelta
     ist = timezone(timedelta(hours=5, minutes=30))
@@ -130,14 +151,29 @@ async def report_attendance(request: Request):
     except Exception:
         pass
 
+    # Validate attendance time window (7:00 AM - 9:30 AM IST)
+    window_start = now_ist.replace(hour=ATTENDANCE_WINDOW_START, minute=0, second=0, microsecond=0)
+    window_end = now_ist.replace(hour=ATTENDANCE_WINDOW_END_HOUR, minute=ATTENDANCE_WINDOW_END_MIN, second=0, microsecond=0)
+    if not (window_start <= now_ist <= window_end):
+        return {
+            "status": "blocked",
+            "reason": f"Outside attendance window (7:00-9:30 AM IST, current: {now_ist.strftime('%I:%M %p')})",
+            "inserted": 0,
+        }
+
     body = await request.json()
     records = body.get("records", [])
     if not records:
         return {"status": "ok", "inserted": 0}
 
+    from app.services.whatsapp_service import send_cloud_template_message
+
     db = await get_db()
     try:
         inserted = 0
+        updated = 0
+        rejected = 0
+        backend_notified = 0
         for rec in records:
             person_id = rec.get("person_id", "")
             name = rec.get("name", "")
@@ -148,6 +184,66 @@ async def report_attendance(request: Request):
             phones = rec.get("parent_phones", "")
             logged_at = rec.get("logged_at", datetime.now().isoformat())
 
+            # Confidence floor: reject low-confidence matches at backend level
+            if confidence < MINIMUM_CONFIDENCE:
+                rejected += 1
+                logger.warning(
+                    f"Attendance rejected: {name} ({person_id}) confidence "
+                    f"{confidence:.1%} < {MINIMUM_CONFIDENCE:.0%} minimum"
+                )
+                await db.execute(
+                    "INSERT INTO audit_log (action, table_name, record_id, details) "
+                    "VALUES (?, ?, ?, ?)",
+                    ("rejected_low_confidence", "attendance_records", person_id,
+                     f"confidence={confidence:.4f}, camera={camera}, name={name}"),
+                )
+                continue
+
+            # If campus agent didn't send notification (missing phone locally),
+            # look up phone from backend face DB and send from here
+            if not notified and not phones:
+                cursor = await db.execute(
+                    "SELECT phone FROM registered_faces "
+                    "WHERE person_id = ? AND phone IS NOT NULL AND phone != '' "
+                    "LIMIT 1",
+                    (person_id,),
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    phones = row[0]
+                    # Parse time from logged_at
+                    try:
+                        _ts = datetime.fromisoformat(logged_at)
+                        _ist = _ts.astimezone(
+                            __import__("datetime").timezone(timedelta(hours=5, minutes=30))
+                        )
+                        time_str = _ist.strftime("%I:%M %p")
+                    except Exception:
+                        time_str = "this morning"
+
+                    phone_list = [p.strip() for p in phones.split(",") if p.strip()]
+                    for ph in phone_list:
+                        digits = "".join(c for c in ph if c.isdigit())
+                        if len(digits) == 10:
+                            digits = "91" + digits
+                        if len(digits) >= 12:
+                            ok = await send_cloud_template_message(
+                                digits, "ppis_attendance_alert",
+                                body_params=[name, time_str],
+                            )
+                            if ok:
+                                logger.info(
+                                    f"Backend sent attendance notification for "
+                                    f"{name} ({person_id}) to {digits}"
+                                )
+                                backend_notified += 1
+                            else:
+                                logger.warning(
+                                    f"Backend notification failed for {name} to {digits}"
+                                )
+                    if phone_list:
+                        notified = 1
+
             # Check if already reported today for this person
             cursor = await db.execute(
                 "SELECT id FROM attendance_records "
@@ -156,14 +252,13 @@ async def report_attendance(request: Request):
             )
             existing = await cursor.fetchone()
             if existing:
-                # Update with latest data (notification status, time, etc.)
                 await db.execute(
                     "UPDATE attendance_records SET notification_sent = ?, "
                     "logged_at = ?, confidence = ?, parent_phones = ? "
                     "WHERE id = ?",
                     (notified, logged_at, confidence, phones, existing[0]),
                 )
-                inserted += 1
+                updated += 1
                 continue
 
             await db.execute(
@@ -176,21 +271,36 @@ async def report_attendance(request: Request):
             inserted += 1
 
         await db.commit()
-        return {"status": "ok", "inserted": inserted}
+        return {
+            "status": "ok",
+            "inserted": inserted,
+            "updated": updated,
+            "rejected": rejected,
+            "backend_notified": backend_notified,
+        }
     finally:
         await db.close()
 
 
-@router.delete("/attendance/record/{person_id}")
+@router.delete("/attendance/record/{person_id}",
+               dependencies=[Depends(verify_dashboard_secret)])
 async def delete_attendance_record(person_id: str):
-    """Delete an attendance record by person_id."""
+    """Delete an attendance record by person_id. Requires AGENT_SECRET."""
     db = await get_db()
     try:
         cursor = await db.execute(
             "DELETE FROM attendance_records WHERE LOWER(person_id) = LOWER(?)", (person_id,)
         )
+        deleted_count = cursor.rowcount
+        if deleted_count > 0:
+            await db.execute(
+                "INSERT INTO audit_log (action, table_name, record_id, details) "
+                "VALUES (?, ?, ?, ?)",
+                ("delete", "attendance_records", person_id,
+                 f"Deleted {deleted_count} record(s)"),
+            )
         await db.commit()
-        return {"status": "ok", "deleted": cursor.rowcount, "person_id": person_id}
+        return {"status": "ok", "deleted": deleted_count, "person_id": person_id}
     finally:
         await db.close()
 
@@ -486,9 +596,10 @@ async def get_registered_faces():
         await db.close()
 
 
-@router.delete("/faces/{person_id}")
+@router.delete("/faces/{person_id}",
+               dependencies=[Depends(verify_dashboard_secret)])
 async def dashboard_delete_face(person_id: str):
-    """Delete a face entry from the dashboard (no agent secret needed)."""
+    """Delete a face entry. Requires AGENT_SECRET."""
     db = await get_db()
     try:
         cursor = await db.execute(
@@ -506,15 +617,22 @@ async def dashboard_delete_face(person_id: str):
         )
         await db.commit()
         deleted = cursor.rowcount
+        await db.execute(
+            "INSERT INTO audit_log (action, table_name, record_id, details) "
+            "VALUES (?, ?, ?, ?)",
+            ("delete", "agent_registered_faces", original_pid,
+             f"Deleted {deleted} face(s)"),
+        )
         logger.info(f"Dashboard: deleted {deleted} face(s) for {original_pid}")
         return {"status": "ok", "deleted": deleted, "person_id": original_pid}
     finally:
         await db.close()
 
 
-@router.patch("/faces/{person_id}/phone")
+@router.patch("/faces/{person_id}/phone",
+              dependencies=[Depends(verify_dashboard_secret)])
 async def dashboard_update_face_phone(person_id: str, request: Request):
-    """Update the phone number for a face entry from the dashboard."""
+    """Update the phone number for a face entry. Requires AGENT_SECRET."""
     body = await request.json()
     phone = body.get("phone", "")
     if not phone:
