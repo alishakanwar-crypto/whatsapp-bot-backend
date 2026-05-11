@@ -3734,21 +3734,35 @@ async def receive_whatsapp_message(request: Request):
                 logger.info(f"[IMAGE BUFFER GREEN] Buffered image from {sender} (no caption)")
 
         if has_image_green and not is_teacher_green:
-            logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, url={media_info.get('url', '')[:80]}")
-            try:
-                face_reg_handled = await _try_register_child_face(
-                    sender, reply_to, bot_phone, media_info,
-                )
-                logger.info(f"[GREEN IMAGE HANDLER] face_reg_handled={face_reg_handled} for {sender}")
-                if face_reg_handled:
-                    return {"status": "ok"}
-            except Exception as img_exc:
-                logger.error(f"[GREEN IMAGE HANDLER] Exception: {img_exc}", exc_info=True)
+            _hw_caption_g = (media_info.get("caption", "") or "").strip()
+            _hw_cap_low_g = _hw_caption_g.lower()
+            logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, caption='{_hw_caption_g[:80]}'")
 
-            # Homework review: ONLY when caption explicitly requests it
-            _hw_caption = (media_info.get("caption", "") or "").strip().lower()
+            # PRIORITY 1: Caption mentions a teacher → forward immediately
+            _g_mentioned = find_mentioned_teachers(_hw_caption_g) if _hw_caption_g else []
+            _g_is_query = bool(_hw_cap_low_g) and (
+                "?" in _hw_cap_low_g or _is_query_caption(_hw_cap_low_g)
+            )
+            if _g_mentioned or (_g_is_query and _hw_caption_g):
+                logger.info(f"[GREEN IMAGE] Query/teacher mention detected — forwarding")
+                _fwd_text_g = _hw_caption_g
+                if _g_mentioned:
+                    await forward_to_teachers_and_confirm(
+                        sender, _fwd_text_g, reply_to, media_info,
+                    )
+                else:
+                    routed_g = await try_route_parent_to_class_teacher(
+                        sender, _fwd_text_g, reply_to, media_info,
+                    )
+                    if not routed_g:
+                        await forward_to_teachers_and_confirm(
+                            sender, _fwd_text_g, reply_to, media_info,
+                        )
+                return {"status": "ok"}
+
+            # PRIORITY 2: Homework review — only on explicit "check" keywords
             _is_hw_check = any(
-                _hw_caption.startswith(kw) for kw in [
+                _hw_cap_low_g.startswith(kw) for kw in [
                     "check please", "please check", "check homework",
                     "check hw", "check h.w.", "check h.w",
                 ]
@@ -3762,13 +3776,12 @@ async def receive_whatsapp_message(request: Request):
                             _resp = await _client.get(direct_url)
                             if _resp.status_code == 200:
                                 from app.services.openai_service import generate_homework_review
-                                caption = media_info.get("caption", "")
                                 children_green = await _lookup_parent_child_class(sender)
                                 child_name = children_green[0]["student_name"] if children_green else ""
                                 child_grade = children_green[0]["grade"] if children_green else ""
                                 ai_response = await generate_homework_review(
                                     _resp.content, _resp.headers.get("content-type", "image/jpeg"),
-                                    caption, student_name=child_name, grade=child_grade,
+                                    _hw_caption_g, student_name=child_name, grade=child_grade,
                                 )
                                 await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
                                 await send_whatsapp_message(reply_to, ai_response)
@@ -3776,7 +3789,31 @@ async def receive_whatsapp_message(request: Request):
                 except Exception as vis_exc:
                     logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
 
-            # If all image processing fails, acknowledge receipt
+            # PRIORITY 3: Face registration — ONLY when caption is clearly
+            # a short name (already handled above at lines 3663-3724 for
+            # name-based captions). This secondary call is for captionless
+            # images that were NOT buffered (edge case).
+            if not _hw_caption_g:
+                # No caption → already buffered above, just acknowledge
+                _ask_msg = (
+                    "What would you like me to do with this image?\n\n"
+                    "If this is for *face registration*, reply with the person's name "
+                    "(e.g. *Firstname Lastname Grade 5A*).\n"
+                    "If you'd like to *forward* this, reply with your query."
+                )
+                await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, _ask_msg)
+                return {"status": "ok"}
+
+            # Caption present but ambiguous — forward to class teacher as a
+            # general query rather than guessing wrong
+            logger.info(f"[GREEN IMAGE] Ambiguous caption — forwarding to class teacher")
+            routed_g2 = await try_route_parent_to_class_teacher(
+                sender, _hw_caption_g, reply_to, media_info,
+            )
+            if routed_g2:
+                return {"status": "ok"}
+            # If routing failed (parent not recognized), acknowledge
             err_msg = "Your image has been received. Please try sending it again if needed."
             await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
             await send_whatsapp_message(reply_to, err_msg)
@@ -4249,17 +4286,20 @@ def _is_query_caption(caption_lower: str) -> bool:
     """Return True if the caption is clearly a question or forwarding request."""
     _QUERY_STARTERS = [
         "please ask", "pls ask", "plz ask", "kindly ask",
-        "ask ", "convey to", "forward to", "send to", "tell to",
+        "ask ", "could u ask", "could you ask", "can u ask", "can you ask",
+        "convey to", "forward to", "send to", "tell to",
         "relay to", "inform to", "pass to", "give to",
         "share with", "share this with",
         "is this", "is it", "what is", "what's",
         "kya hai", "kya ye", "ye kya", "yeh kya",
+        "tell ", "inform ", "check with",
     ]
     _QUERY_PHRASES = [
         "if this is", "if it is", "if this the", "if it's",
         "please check", "please confirm", "please verify",
         "is the final", "is this final", "is this the",
         "syllabus", "circular", "timetable", "notice",
+        "about this", "regarding this",
     ]
     for starter in _QUERY_STARTERS:
         if caption_lower.startswith(starter):
@@ -4437,6 +4477,18 @@ async def _try_register_child_face(
     """
     caption_raw = (media_info.get("caption", "") or "").strip()
     caption = caption_raw.lower()
+
+    # --- Guard: SKIP face registration if caption is clearly a query ---
+    # Prevents "Ask reva ma'am is this the syllabus of grade 3" from being
+    # treated as face registration when it's obviously a forwarding request.
+    if caption and ("?" in caption or _is_query_caption(caption)):
+        logger.info(f"[FACE REG SKIP] Caption is a query, not face registration: '{caption_raw[:60]}'")
+        return False
+    # Also skip if caption has 5+ words (sentences are never names)
+    _cap_words = [w for w in caption_raw.split() if len(w) >= 2]
+    if len(_cap_words) >= 5:
+        logger.info(f"[FACE REG SKIP] Caption too long ({len(_cap_words)} words) for a name: '{caption_raw[:60]}'")
+        return False
 
     # --- Step 1: Try to find student by caption name ---
     # Search the entire DB for a student matching the caption name
@@ -5192,12 +5244,14 @@ async def receive_cloud_api_message(request: Request):
                             "reply_to": reply_to,
                             "bot_phone": bot_phone,
                         }
-                        logger.info(f"[IMAGE BUFFER] Buffered captionless image from {sender} — asking if for registration")
+                        logger.info(f"[IMAGE BUFFER] Buffered captionless image from {sender} — asking for intent")
                         _ask_msg = (
-                            "What is this? Is this photo for face registration?\n\n"
-                            "If *yes*, please reply with the person's name "
-                            "(e.g. *Firstname Lastname* or *Firstname Lastname Grade 5A*).\n"
-                            "If *no*, reply *no* and I will not register it."
+                            "What would you like me to do with this image?\n\n"
+                            "\u2022 For *face registration* \u2014 reply with the person's name "
+                            "(e.g. *Firstname Lastname Grade 5A*)\n"
+                            "\u2022 To *forward to a teacher* \u2014 reply with your query "
+                            "(e.g. \"Ask Reva ma'am about this\")\n"
+                            "\u2022 For *homework review* \u2014 reply with \"Check please\""
                         )
                         await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
                         await send_whatsapp_message(reply_to, _ask_msg)
@@ -5216,7 +5270,19 @@ async def receive_cloud_api_message(request: Request):
                     caption = (media_info.get("caption", "") or "").strip()
                     forward_text = caption if caption else "Shared a file/image"
 
-                    # --- Homework Review (for images only) ---
+                    # --- PRIORITY 1: Forward to teacher if caption mentions one ---
+                    # This MUST come before homework review so that queries like
+                    # "ask reva ma'am about this syllabus" are forwarded immediately
+                    # without triggering any AI review.
+                    _mentioned = find_mentioned_teachers(forward_text)
+                    if _mentioned:
+                        logger.info(f"[MEDIA] Caption mentions teacher(s) — forwarding immediately")
+                        await forward_to_teachers_and_confirm(
+                            sender, forward_text, reply_to, media_info,
+                        )
+                        return {"status": "ok"}
+
+                    # --- PRIORITY 2: Homework Review (for images only) ---
                     # ONLY trigger when caption explicitly requests a homework check.
                     # Keywords: "check please", "please check", "check homework",
                     # "check hw", "check h.w."
@@ -5249,19 +5315,10 @@ async def receive_cloud_api_message(request: Request):
                                 await save_message(bot_phone, sender, review, "whatsapp", "outgoing")
                                 await send_whatsapp_message(reply_to, review)
                                 logger.info(f"[HOMEWORK REVIEW] Sent review to {sender}")
-                                # Do NOT return here — continue to forward image to teacher
                             else:
                                 logger.warning(f"[HOMEWORK REVIEW] Could not download image for {sender}")
                         except Exception as hw_exc:
                             logger.error(f"[HOMEWORK REVIEW] Error: {hw_exc}", exc_info=True)
-
-                    # If caption mentions specific teachers by name, forward to
-                    # ALL of them (not just the class teacher).
-                    _mentioned = find_mentioned_teachers(forward_text)
-                    if _mentioned:
-                        await forward_to_teachers_and_confirm(
-                            sender, forward_text, reply_to, media_info,
-                        )
                         return {"status": "ok"}
 
                     # Forward attachment + text to class teacher (all file types)
