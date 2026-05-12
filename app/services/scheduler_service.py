@@ -706,6 +706,18 @@ def start_scheduler() -> None:
         )
         logger.info(f"Scheduled homework delivery: {desc}")
 
+    # --- Law Minister Webhook Keep-Alive ---
+    # Meta periodically drops webhook subscriptions for secondary phone numbers.
+    # Re-register every 2 hours to keep the Law Minister number active.
+    from app.services.law_minister_bot import ensure_webhook_registration_sync
+    scheduler.add_job(
+        ensure_webhook_registration_sync,
+        trigger=IntervalTrigger(hours=2),
+        id="law_minister_webhook_keepalive",
+        replace_existing=True,
+    )
+    logger.info("Scheduled Law Minister webhook keep-alive every 2 hours")
+
     scheduler.start()
     logger.info("Scheduler started successfully")
 

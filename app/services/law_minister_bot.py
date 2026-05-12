@@ -21,9 +21,82 @@ LAW_MINISTER_PHONE_ID = os.getenv(
     "LAW_MINISTER_PHONE_ID", "1168433719678061"
 )
 
+# WABA ID (shared with PPIS number)
+_WABA_ID = os.getenv("LAW_MINISTER_WABA_ID", "2417647228700804")
+
 # Token is shared across the WABA — reuse the same Cloud token
 def _get_token() -> str:
     return os.getenv("WHATSAPP_CLOUD_TOKEN", "")
+
+
+# ---------- Auto-Registration & Webhook Keep-Alive ----------
+
+async def ensure_webhook_registration() -> dict:
+    """Re-register the Law Minister phone number and subscribe the WABA.
+
+    Meta periodically drops webhook subscriptions for secondary phone
+    numbers.  This function is called on app startup and every 2 hours
+    by the scheduler to keep the subscription alive.
+
+    Returns a dict with the results of each API call.
+    """
+    token = _get_token()
+    if not token:
+        logger.error("LM REGISTRATION: WHATSAPP_CLOUD_TOKEN not set — skipping")
+        return {"error": "no_token"}
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    results = {}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # 1. Re-register the phone number (keeps Cloud API active)
+        try:
+            resp = await client.post(
+                f"https://graph.facebook.com/v21.0/{LAW_MINISTER_PHONE_ID}/register",
+                json={"messaging_product": "whatsapp", "pin": "123456"},
+                headers=headers,
+            )
+            results["register"] = resp.json()
+            logger.info(
+                f"LM REGISTRATION: register phone → {resp.status_code}: {resp.text}"
+            )
+        except Exception as e:
+            results["register"] = {"error": str(e)}
+            logger.error(f"LM REGISTRATION: register failed: {e}")
+
+        # 2. Subscribe WABA to app (ensures webhooks flow for all numbers)
+        try:
+            resp = await client.post(
+                f"https://graph.facebook.com/v21.0/{_WABA_ID}/subscribed_apps",
+                headers=headers,
+            )
+            results["subscribe_waba"] = resp.json()
+            logger.info(
+                f"LM REGISTRATION: subscribe WABA → {resp.status_code}: {resp.text}"
+            )
+        except Exception as e:
+            results["subscribe_waba"] = {"error": str(e)}
+            logger.error(f"LM REGISTRATION: WABA subscribe failed: {e}")
+
+    return results
+
+
+def ensure_webhook_registration_sync() -> None:
+    """Synchronous wrapper for the scheduler (APScheduler runs sync jobs)."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                pool.submit(lambda: asyncio.run(ensure_webhook_registration())).result(timeout=30)
+        else:
+            loop.run_until_complete(ensure_webhook_registration())
+    except Exception as e:
+        logger.error(f"LM REGISTRATION sync wrapper failed: {e}")
 
 
 # ---------- Language Detection ----------

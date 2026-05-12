@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error(f"STARTUP: face-phone sync failed: {e}", exc_info=True)
     start_scheduler()
 
+    # Ensure Law Minister phone number is registered for webhooks
+    try:
+        from app.services.law_minister_bot import ensure_webhook_registration
+        lm_result = await ensure_webhook_registration()
+        logger.info(f"STARTUP: Law Minister webhook registration: {lm_result}")
+    except Exception as e:
+        logger.error(f"STARTUP: Law Minister registration failed: {e}", exc_info=True)
+
     # Start relay message queue processor (retries failed messages)
     import asyncio
     _queue_task = asyncio.create_task(_relay_queue_worker())
