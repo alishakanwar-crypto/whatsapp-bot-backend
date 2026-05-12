@@ -114,7 +114,15 @@ async def attendance_history(
 MINIMUM_CONFIDENCE = 0.30  # Backend rejects anything below 30%
 ATTENDANCE_WINDOW_START = 7  # 7:00 AM IST
 ATTENDANCE_WINDOW_END_HOUR = 9  # 9:00 AM IST
-ATTENDANCE_WINDOW_END_MIN = 0  # Matches student phase end
+ATTENDANCE_WINDOW_END_MIN = 30  # Extended to accept late submissions
+
+
+def _attendance_notif_name(person_id: str, name: str) -> str:
+    """Format notification greeting: title-case ALL-CAPS names."""
+    display = name.title() if name == name.upper() else name
+    if person_id.startswith("TEACHER_"):
+        return f"Dear {display}, you have been"
+    return f"Dear Parent, {display} has been"
 
 
 @router.post("/attendance/report")
@@ -226,11 +234,7 @@ async def report_attendance(request: Request):
                     except Exception:
                         time_str = "this morning"
 
-                    is_teacher = person_id.startswith("TEACHER_")
-                    if is_teacher:
-                        notif_name = f"Dear {name}, you have been"
-                    else:
-                        notif_name = f"Dear Parent, {name} has been"
+                    notif_name = _attendance_notif_name(person_id, name)
 
                     phone_list = [p.strip() for p in phones.split(",") if p.strip()]
                     for ph in phone_list:
@@ -330,11 +334,7 @@ async def resend_missed_notifications():
             except Exception:
                 time_str = "this morning"
 
-            is_teacher = person_id.startswith("TEACHER_")
-            if is_teacher:
-                notif_name = f"Dear {name}, you have been"
-            else:
-                notif_name = f"Dear Parent, {name} has been"
+            notif_name = _attendance_notif_name(person_id, name)
 
             phone_list = [p.strip() for p in phones.split(",") if p.strip()]
             any_ok = False
@@ -403,11 +403,7 @@ async def resend_all_notifications():
             except Exception:
                 time_str = "this morning"
 
-            is_teacher = person_id.startswith("TEACHER_")
-            if is_teacher:
-                notif_name = f"Dear {name}, you have been"
-            else:
-                notif_name = f"Dear Parent, {name} has been"
+            notif_name = _attendance_notif_name(person_id, name)
 
             phone_list = [p.strip() for p in phones.split(",") if p.strip()]
             any_ok = False
@@ -1021,11 +1017,7 @@ async def approve_review(review_id: int):
             except Exception:
                 time_str = "this morning"
 
-            is_teacher = person_id.startswith("TEACHER_")
-            if is_teacher:
-                notif_name = f"Dear {name}, you have been"
-            else:
-                notif_name = f"Dear Parent, {name} has been"
+            notif_name = _attendance_notif_name(person_id, name)
 
             phone_list = [p.strip() for p in phones.split(",") if p.strip()]
             for ph in phone_list:
@@ -1352,11 +1344,7 @@ async def retry_failed_notifications():
         for r in rows:
             nd_id, person_id, name, phone, attempts = r
 
-            is_teacher = person_id.startswith("TEACHER_")
-            if is_teacher:
-                notif_name = f"Dear {name}, you have been"
-            else:
-                notif_name = f"Dear Parent, {name} has been"
+            notif_name = _attendance_notif_name(person_id, name)
 
             ok = await send_cloud_template_message(
                 phone, "ppis_attendance_alert",
