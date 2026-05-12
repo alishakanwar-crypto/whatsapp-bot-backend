@@ -3764,6 +3764,7 @@ async def receive_whatsapp_message(request: Request):
                 "convey", "forward", "fwd", "relay", "inform", "share", "send",
                 "convey this", "forward this", "share this", "send this",
                 "relay this", "inform this",
+                "please share", "please convey", "please forward", "please send",
                 "convey to ct", "convey to class teacher",
                 "forward to ct", "send to ct", "tell ct",
             ]
@@ -3772,6 +3773,7 @@ async def receive_whatsapp_message(request: Request):
                 "send to", "send this", "tell to",
                 "relay to", "relay this", "pass to", "give to",
                 "share with", "share this",
+                "please share", "please convey", "please forward", "please send",
                 "class teacher", "ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
                 "what is this", "what's this", "kya hai", "pata nahi",
@@ -3855,34 +3857,16 @@ async def receive_whatsapp_message(request: Request):
             _hw_cap_low_g = _hw_caption_g.lower()
             logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, caption='{_hw_caption_g[:80]}'")
 
-            # PRIORITY 1: Caption mentions a teacher → forward immediately
-            _g_mentioned = find_mentioned_teachers(_hw_caption_g) if _hw_caption_g else []
-            _g_is_query = bool(_hw_cap_low_g) and (
-                "?" in _hw_cap_low_g or _is_query_caption(_hw_cap_low_g)
-            )
-            if _g_mentioned or (_g_is_query and _hw_caption_g):
-                logger.info(f"[GREEN IMAGE] Query/teacher mention detected — forwarding")
-                _fwd_text_g = _hw_caption_g
-                if _g_mentioned:
-                    await forward_to_teachers_and_confirm(
-                        sender, _fwd_text_g, reply_to, media_info,
-                    )
-                else:
-                    routed_g = await try_route_parent_to_class_teacher(
-                        sender, _fwd_text_g, reply_to, media_info,
-                    )
-                    if not routed_g:
-                        await forward_to_teachers_and_confirm(
-                            sender, _fwd_text_g, reply_to, media_info,
-                        )
-                return {"status": "ok"}
-
-            # PRIORITY 2: Homework review — only on explicit "check" keywords
-            _is_hw_check = any(
-                _hw_cap_low_g.startswith(kw) for kw in [
-                    "check please", "please check", "check homework",
-                    "check hw", "check h.w.", "check h.w",
-                ]
+            # PRIORITY 1: Homework review — "check"/"check please"/"please check" etc.
+            # Must come BEFORE forwarding so "please check" triggers review, not forward.
+            _is_hw_check = (
+                _hw_cap_low_g in ("check", "chk") or
+                any(
+                    _hw_cap_low_g.startswith(kw) for kw in [
+                        "check please", "please check", "check homework",
+                        "check hw", "check h.w.", "check h.w",
+                    ]
+                )
             )
             if _is_hw_check:
                 try:
@@ -3906,17 +3890,40 @@ async def receive_whatsapp_message(request: Request):
                 except Exception as vis_exc:
                     logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
 
-            # PRIORITY 3: Face registration — ONLY when caption is clearly
-            # a short name (already handled above at lines 3663-3724 for
-            # name-based captions). This secondary call is for captionless
-            # images that were NOT buffered (edge case).
+            # PRIORITY 2: Caption mentions a teacher OR is a forwarding request
+            _g_mentioned = find_mentioned_teachers(_hw_caption_g) if _hw_caption_g else []
+            _g_is_query = bool(_hw_cap_low_g) and (
+                "?" in _hw_cap_low_g or _is_query_caption(_hw_cap_low_g)
+            )
+            if _g_mentioned or (_g_is_query and _hw_caption_g):
+                logger.info(f"[GREEN IMAGE] Query/teacher mention detected — forwarding")
+                _fwd_text_g = _hw_caption_g
+                if _g_mentioned:
+                    await forward_to_teachers_and_confirm(
+                        sender, _fwd_text_g, reply_to, media_info,
+                    )
+                else:
+                    routed_g = await try_route_parent_to_class_teacher(
+                        sender, _fwd_text_g, reply_to, media_info,
+                    )
+                    if not routed_g:
+                        await forward_to_teachers_and_confirm(
+                            sender, _fwd_text_g, reply_to, media_info,
+                        )
+                return {"status": "ok"}
+
+            # PRIORITY 3: No caption → ask what it is
             if not _hw_caption_g:
                 # No caption → already buffered above, just acknowledge
                 _ask_msg = (
-                    "What would you like me to do with this image?\n\n"
-                    "If this is for *face registration*, reply with the person's name "
-                    "(e.g. *Firstname Lastname Grade 5A*).\n"
-                    "If you'd like to *forward* this, reply with your query."
+                    "What is this?\n\n"
+                    "Is this a photo for *registration*?\n\n"
+                    "\u2022 If you are a *teacher*, write your full name and designation "
+                    "below the photo as a caption and re-send.\n"
+                    "\u2022 If you are a *parent*, write the child's full name along with "
+                    "class and section below the photo as a caption for registration.\n"
+                    "\u2022 If your child has enrolled for *summer camp*, write your "
+                    "child's name below the photo as a caption for registration."
                 )
                 await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
                 await send_whatsapp_message(reply_to, _ask_msg)
@@ -4058,10 +4065,14 @@ async def receive_whatsapp_message(request: Request):
                     "bot_phone": bot_phone,
                 }
             _guard_ask = (
-                "What would you like me to do with this image/file?\n\n"
-                "If this is for *face registration*, reply with the person's name "
-                "(e.g. *Firstname Lastname Grade 5A*).\n"
-                "If you'd like to *forward* this, reply with your query."
+                "What is this?\n\n"
+                "Is this a photo for *registration*?\n\n"
+                "\u2022 If you are a *teacher*, write your full name and designation "
+                "below the photo as a caption and re-send.\n"
+                "\u2022 If you are a *parent*, write the child's full name along with "
+                "class and section below the photo as a caption for registration.\n"
+                "\u2022 If your child has enrolled for *summer camp*, write your "
+                "child's name below the photo as a caption for registration."
             )
             await save_message(bot_phone, sender, _guard_ask, "whatsapp", "outgoing")
             await send_whatsapp_message(reply_to, _guard_ask)
@@ -4433,12 +4444,14 @@ def _caption_has_name_and_class(caption: str) -> bool:
 def _is_query_caption(caption_lower: str) -> bool:
     """Return True if the caption is clearly a question or forwarding request."""
     _QUERY_STARTERS = [
-        "please ask", "pls ask", "plz ask", "kindly ask",
+        "please ask", "please share", "please convey", "please forward",
+        "please send", "pls ask", "plz ask", "kindly ask",
         "ask ", "could u ask", "could you ask", "can u ask", "can you ask",
-        "convey to", "convey this", "forward to", "forward this",
+        "convey to", "convey this", "convey ",
+        "forward to", "forward this", "forward ",
         "send to", "send this", "tell to",
         "relay to", "relay this", "inform to", "pass to", "give to",
-        "share with", "share this",
+        "share with", "share this", "share ",
         "is this", "is it", "what is", "what's",
         "kya hai", "kya ye", "ye kya", "yeh kya",
         "tell ", "inform ", "check with",
@@ -4541,6 +4554,8 @@ _NON_NAME_CAPTIONS = {
     "send", "send this", "share", "share this", "shared",
     "convey", "convey this", "forward", "forward this",
     "relay", "relay this", "inform", "inform this",
+    "please share", "please convey", "please forward", "please send",
+    "please share this",
     "forwarded", "fwd", "correction",
     "correct", "wrong", "right", "marks", "grade", "test", "exam",
     "pic", "photo", "image", "screenshot", "ss", "file", "doc",
@@ -5399,12 +5414,14 @@ async def receive_cloud_api_message(request: Request):
                         }
                         logger.info(f"[IMAGE BUFFER] Buffered captionless image from {sender} — asking for intent")
                         _ask_msg = (
-                            "What would you like me to do with this image?\n\n"
-                            "\u2022 For *face registration* \u2014 reply with the person's name "
-                            "(e.g. *Firstname Lastname Grade 5A*)\n"
-                            "\u2022 To *forward to a teacher* \u2014 reply with your query "
-                            "(e.g. \"Ask Reva ma'am about this\")\n"
-                            "\u2022 For *homework review* \u2014 reply with \"Check please\""
+                            "What is this?\n\n"
+                            "Is this a photo for *registration*?\n\n"
+                            "\u2022 If you are a *teacher*, write your full name and designation "
+                            "below the photo as a caption and re-send.\n"
+                            "\u2022 If you are a *parent*, write the child's full name along with "
+                            "class and section below the photo as a caption for registration.\n"
+                            "\u2022 If your child has enrolled for *summer camp*, write your "
+                            "child's name below the photo as a caption for registration."
                         )
                         await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
                         await send_whatsapp_message(reply_to, _ask_msg)
@@ -5434,12 +5451,14 @@ async def receive_cloud_api_message(request: Request):
                         }
                         logger.info(f"[IMAGE BUFFER FALLBACK] Captionless image without cloud_media_id from {sender}")
                         _ask_msg_fb = (
-                            "What would you like me to do with this image?\n\n"
-                            "\u2022 For *face registration* \u2014 reply with the person's name "
-                            "(e.g. *Firstname Lastname Grade 5A*)\n"
-                            "\u2022 To *forward to a teacher* \u2014 reply with your query "
-                            "(e.g. \"Ask Reva ma'am about this\")\n"
-                            "\u2022 For *homework review* \u2014 reply with \"Check please\""
+                            "What is this?\n\n"
+                            "Is this a photo for *registration*?\n\n"
+                            "\u2022 If you are a *teacher*, write your full name and designation "
+                            "below the photo as a caption and re-send.\n"
+                            "\u2022 If you are a *parent*, write the child's full name along with "
+                            "class and section below the photo as a caption for registration.\n"
+                            "\u2022 If your child has enrolled for *summer camp*, write your "
+                            "child's name below the photo as a caption for registration."
                         )
                         await save_message(bot_phone, sender, _ask_msg_fb, "whatsapp", "outgoing")
                         await send_whatsapp_message(reply_to, _ask_msg_fb)
@@ -5464,11 +5483,14 @@ async def receive_cloud_api_message(request: Request):
                     # Keywords: "check please", "please check", "check homework",
                     # "check hw", "check h.w."
                     _cap_lower = caption.lower() if caption else ""
-                    _is_hw_check_request = any(
-                        _cap_lower.startswith(kw) for kw in [
-                            "check please", "please check", "check homework",
-                            "check hw", "check h.w.", "check h.w",
-                        ]
+                    _is_hw_check_request = (
+                        _cap_lower in ("check", "chk") or
+                        any(
+                            _cap_lower.startswith(kw) for kw in [
+                                "check please", "please check", "check homework",
+                                "check hw", "check h.w.", "check h.w",
+                            ]
+                        )
                     )
                     is_image_msg = media_info.get("type") == "imageMessage"
                     cloud_mid = media_info.get("cloud_media_id", "")
