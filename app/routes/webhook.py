@@ -4980,13 +4980,14 @@ async def receive_cloud_api_message(request: Request):
     if body.get("object") == "whatsapp_business_account":
         from app.services.law_minister_bot import LAW_MINISTER_PHONE_ID, handle_webhook as lm_handle
         try:
-            _entry = body.get("entry", [{}])[0]
-            _change = _entry.get("changes", [{}])[0]
-            _phone_id = _change.get("value", {}).get("metadata", {}).get("phone_number_id", "")
-            if _phone_id == LAW_MINISTER_PHONE_ID:
-                logger.info(f"Routing to Law Minister bot (phone_id={_phone_id})")
-                result = await lm_handle(body)
-                return result
+            for _entry in body.get("entry", []):
+                for _change in _entry.get("changes", []):
+                    _phone_id = _change.get("value", {}).get("metadata", {}).get("phone_number_id", "")
+                    logger.info(f"Webhook phone_number_id={_phone_id}, LAW_MINISTER_PHONE_ID={LAW_MINISTER_PHONE_ID}")
+                    if _phone_id == LAW_MINISTER_PHONE_ID:
+                        logger.info(f"Routing to Law Minister bot (phone_id={_phone_id})")
+                        result = await lm_handle(body)
+                        return result
         except Exception as _e:
             logger.warning(f"Law Minister routing check failed: {_e}")
 
