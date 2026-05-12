@@ -3758,7 +3758,9 @@ async def receive_whatsapp_message(request: Request):
             _gcap_raw = (media_info.get("caption", "") or "").strip()
             _gcap_low = _gcap_raw.lower()
             _G_NON_NAME = [
-                "homework", "check", "check this", "please check", "hi", "hello",
+                "homework", "check", "check this", "please check",
+                "check please", "check homework", "check hw", "check h.w.", "check h.w",
+                "chk", "hi", "hello",
                 "help", "thanks", "thank you", "ok", "yes", "no", "please",
                 "good morning", "good afternoon", "good evening", "show",
                 "convey", "forward", "fwd", "relay", "inform", "share", "send",
@@ -3880,26 +3882,33 @@ async def receive_whatsapp_message(request: Request):
                 )
             )
             if _is_hw_check:
+                logger.info(f"[GREEN HW] Homework check detected for {sender}, caption='{_hw_cap_low_g}'")
                 try:
-                    import httpx as _httpx
-                    direct_url = media_info.get("url", "")
-                    if direct_url:
-                        async with _httpx.AsyncClient(timeout=30) as _client:
-                            _resp = await _client.get(direct_url)
-                            if _resp.status_code == 200:
-                                from app.services.openai_service import generate_homework_review
-                                children_green = await _lookup_parent_child_class(sender)
-                                child_name = children_green[0]["student_name"] if children_green else ""
-                                child_grade = children_green[0]["grade"] if children_green else ""
-                                ai_response = await generate_homework_review(
-                                    _resp.content, _resp.headers.get("content-type", "image/jpeg"),
-                                    _hw_caption_g, student_name=child_name, grade=child_grade,
-                                )
-                                await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                                await send_whatsapp_message(reply_to, ai_response)
-                                return {"status": "ok"}
+                    from app.services.openai_service import generate_homework_review
+                    _hw_bytes, _hw_mime = await _download_media_bytes(media_info)
+                    if _hw_bytes:
+                        children_green = await _lookup_parent_child_class(sender)
+                        child_name = children_green[0]["student_name"] if children_green else ""
+                        child_grade = children_green[0]["grade"] if children_green else ""
+                        ai_response = await generate_homework_review(
+                            _hw_bytes, _hw_mime,
+                            _hw_caption_g, student_name=child_name, grade=child_grade,
+                        )
+                        del _hw_bytes
+                        await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
+                        await send_whatsapp_message(reply_to, ai_response)
+                        logger.info(f"[GREEN HW] Sent review to {sender}")
+                    else:
+                        logger.warning(f"[GREEN HW] Could not download image for {sender}")
+                        _hw_fail = "I received your homework image but couldn't process it. Please try sending it again."
+                        await save_message(bot_phone, sender, _hw_fail, "whatsapp", "outgoing")
+                        await send_whatsapp_message(reply_to, _hw_fail)
                 except Exception as vis_exc:
-                    logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
+                    logger.error(f"[GREEN HW] Homework review error: {vis_exc}", exc_info=True)
+                    _hw_err = "I received your homework image but encountered an error. Please try sending it again."
+                    await save_message(bot_phone, sender, _hw_err, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _hw_err)
+                return {"status": "ok"}
 
             # PRIORITY 3: Caption is a forwarding/query request (no teacher mentioned)
             _g_is_query = bool(_hw_cap_low_g) and (
@@ -4549,7 +4558,9 @@ _FORWARDING_PHRASES = [
 
 # Single-word or short captions that are clearly NOT a name
 _NON_NAME_CAPTIONS = {
-    "homework", "check", "check this", "please check", "hi", "hello",
+    "homework", "check", "check this", "please check",
+    "check please", "check homework", "check hw", "check h.w.", "check h.w",
+    "hi", "hello",
     "help", "thanks", "thank you", "ok", "yes", "no", "please",
     "good morning", "good afternoon", "good evening", "show",
     "chk", "chck", "pls", "plz", "plz check", "pls check",
@@ -5497,14 +5508,11 @@ async def receive_cloud_api_message(request: Request):
                         )
                     )
                     is_image_msg = media_info.get("type") == "imageMessage"
-                    cloud_mid = media_info.get("cloud_media_id", "")
-                    if is_image_msg and cloud_mid and _is_hw_check_request:
+                    if is_image_msg and _is_hw_check_request:
                         logger.info(f"[HOMEWORK REVIEW] Auto-reviewing image from parent {sender}")
                         try:
-                            from app.services.whatsapp_service import download_cloud_media
                             from app.services.openai_service import generate_homework_review
-
-                            img_bytes, img_mime = await download_cloud_media(cloud_mid)
+                            img_bytes, img_mime = await _download_media_bytes(media_info)
                             if img_bytes:
                                 children_hw = await _lookup_parent_child_class(sender)
                                 child_name = children_hw[0]["student_name"] if children_hw else ""
@@ -5520,8 +5528,14 @@ async def receive_cloud_api_message(request: Request):
                                 logger.info(f"[HOMEWORK REVIEW] Sent review to {sender}")
                             else:
                                 logger.warning(f"[HOMEWORK REVIEW] Could not download image for {sender}")
+                                _hw_fail_c = "I received your homework image but couldn't process it. Please try sending it again."
+                                await save_message(bot_phone, sender, _hw_fail_c, "whatsapp", "outgoing")
+                                await send_whatsapp_message(reply_to, _hw_fail_c)
                         except Exception as hw_exc:
                             logger.error(f"[HOMEWORK REVIEW] Error: {hw_exc}", exc_info=True)
+                            _hw_err_c = "I received your homework image but encountered an error. Please try sending it again."
+                            await save_message(bot_phone, sender, _hw_err_c, "whatsapp", "outgoing")
+                            await send_whatsapp_message(reply_to, _hw_err_c)
                         return {"status": "ok"}
 
                     # Forward attachment + text to class teacher (all file types)
