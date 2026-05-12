@@ -674,6 +674,93 @@ async def api_send_whatsapp(request: Request):
 _broadcast_status: dict = {}
 
 
+# ---- Summer Camp Student APIs ----
+
+@app.get("/api/summer-camp/students")
+async def list_summer_camp_students():
+    """List all summer camp enrolled students."""
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT id, student_name, grade, school_name, parent_name, "
+            "contact_no, email, address, is_outsider, created_at "
+            "FROM summer_camp_students ORDER BY id"
+        )
+        rows = await cur.fetchall()
+        return {
+            "status": "ok",
+            "count": len(rows),
+            "students": [
+                {
+                    "id": r[0], "student_name": r[1], "grade": r[2],
+                    "school_name": r[3], "parent_name": r[4],
+                    "contact_no": r[5], "email": r[6], "address": r[7],
+                    "is_outsider": bool(r[8]), "created_at": r[9],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        await db.close()
+
+
+@app.post("/api/summer-camp/students/bulk")
+async def bulk_add_summer_camp_students(request: Request):
+    """Bulk-add summer camp students. Body: {"students": [...]}"""
+    from app.database import get_db
+    body = await request.json()
+    students = body.get("students", [])
+    if not students:
+        return {"status": "error", "error": "No students provided"}
+
+    db = await get_db()
+    try:
+        # Clear existing data and re-insert
+        await db.execute("DELETE FROM summer_camp_students")
+        inserted = 0
+        for s in students:
+            await db.execute(
+                "INSERT INTO summer_camp_students "
+                "(student_name, grade, school_name, parent_name, contact_no, "
+                "email, address, is_outsider) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    s.get("student_name", ""),
+                    s.get("grade", ""),
+                    s.get("school_name", ""),
+                    s.get("parent_name", ""),
+                    s.get("contact_no", ""),
+                    s.get("email", ""),
+                    s.get("address", ""),
+                    1 if s.get("is_outsider") else 0,
+                ),
+            )
+            inserted += 1
+        await db.commit()
+        return {"status": "ok", "inserted": inserted}
+    finally:
+        await db.close()
+
+
+@app.get("/api/summer-camp/student-phone/{student_name}")
+async def get_summer_camp_student_phone(student_name: str):
+    """Look up a summer camp student's parent contact number by name."""
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT contact_no, parent_name FROM summer_camp_students "
+            "WHERE UPPER(student_name) = UPPER(?) AND contact_no != '' LIMIT 1",
+            (student_name,),
+        )
+        row = await cur.fetchone()
+        if row:
+            return {"status": "ok", "contact_no": row[0], "parent_name": row[1]}
+        return {"status": "not_found"}
+    finally:
+        await db.close()
+
+
 # ---- Holiday Management APIs ----
 
 @app.get("/api/holidays")

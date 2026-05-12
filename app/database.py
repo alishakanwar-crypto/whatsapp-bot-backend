@@ -294,6 +294,19 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS summer_camp_students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_name TEXT NOT NULL,
+                grade TEXT NOT NULL DEFAULT '',
+                school_name TEXT NOT NULL DEFAULT '',
+                parent_name TEXT NOT NULL DEFAULT '',
+                contact_no TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                address TEXT NOT NULL DEFAULT '',
+                is_outsider INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
@@ -341,6 +354,10 @@ async def init_db():
                 ON notification_delivery (status, created_at);
             CREATE INDEX IF NOT EXISTS idx_daily_summary_date
                 ON daily_summary (report_date);
+            CREATE INDEX IF NOT EXISTS idx_summer_camp_contact
+                ON summer_camp_students (contact_no);
+            CREATE INDEX IF NOT EXISTS idx_summer_camp_name
+                ON summer_camp_students (student_name);
         """)
 
         # ------------------------------------------------------------------
