@@ -3857,8 +3857,19 @@ async def receive_whatsapp_message(request: Request):
             _hw_cap_low_g = _hw_caption_g.lower()
             logger.info(f"[GREEN IMAGE HANDLER] Processing image from {sender}, caption='{_hw_caption_g[:80]}'")
 
-            # PRIORITY 1: Homework review — "check"/"check please"/"please check" etc.
-            # Must come BEFORE forwarding so "please check" triggers review, not forward.
+            # PRIORITY 1: Caption mentions a specific teacher → forward immediately
+            # Must come BEFORE homework review so "please check with reva maam"
+            # forwards to Reva instead of triggering AI homework review.
+            _g_mentioned = find_mentioned_teachers(_hw_caption_g) if _hw_caption_g else []
+            if _g_mentioned:
+                logger.info(f"[GREEN IMAGE] Teacher mention detected — forwarding")
+                await forward_to_teachers_and_confirm(
+                    sender, _hw_caption_g, reply_to, media_info,
+                )
+                return {"status": "ok"}
+
+            # PRIORITY 2: Homework review — "check"/"check please"/"please check" etc.
+            # Only runs when no specific teacher was mentioned in the caption.
             _is_hw_check = (
                 _hw_cap_low_g in ("check", "chk") or
                 any(
@@ -3890,29 +3901,22 @@ async def receive_whatsapp_message(request: Request):
                 except Exception as vis_exc:
                     logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
 
-            # PRIORITY 2: Caption mentions a teacher OR is a forwarding request
-            _g_mentioned = find_mentioned_teachers(_hw_caption_g) if _hw_caption_g else []
+            # PRIORITY 3: Caption is a forwarding/query request (no teacher mentioned)
             _g_is_query = bool(_hw_cap_low_g) and (
                 "?" in _hw_cap_low_g or _is_query_caption(_hw_cap_low_g)
             )
-            if _g_mentioned or (_g_is_query and _hw_caption_g):
-                logger.info(f"[GREEN IMAGE] Query/teacher mention detected — forwarding")
-                _fwd_text_g = _hw_caption_g
-                if _g_mentioned:
+            if _g_is_query and _hw_caption_g:
+                logger.info(f"[GREEN IMAGE] Query detected — forwarding to class teacher")
+                routed_g = await try_route_parent_to_class_teacher(
+                    sender, _hw_caption_g, reply_to, media_info,
+                )
+                if not routed_g:
                     await forward_to_teachers_and_confirm(
-                        sender, _fwd_text_g, reply_to, media_info,
+                        sender, _hw_caption_g, reply_to, media_info,
                     )
-                else:
-                    routed_g = await try_route_parent_to_class_teacher(
-                        sender, _fwd_text_g, reply_to, media_info,
-                    )
-                    if not routed_g:
-                        await forward_to_teachers_and_confirm(
-                            sender, _fwd_text_g, reply_to, media_info,
-                        )
                 return {"status": "ok"}
 
-            # PRIORITY 3: No caption → ask what it is
+            # PRIORITY 4: No caption → ask what it is
             if not _hw_caption_g:
                 # No caption → already buffered above, just acknowledge
                 _ask_msg = (
