@@ -167,8 +167,14 @@ def _extract_person_name(caption: str) -> str:
     - "Ms. Sachi Thaper"
     - "Good Morning This the photo of Ms Sachi Thaper (PGT Economics) as required. Regards"
     - "Harpreet Kaur"
+    - "Aarav Sharma Grade 3 (STUDENT OF PPIS)"
     """
     name = caption.strip()
+    # Strip PPIS student/outsider tags
+    name = re.sub(
+        r"\(?\s*(?:if\s+)?(?:not\s+a\s+)?student\s+of\s+ppis\s*\)?",
+        "", name, flags=re.IGNORECASE,
+    )
     # Remove parenthetical info first
     name = re.sub(r"\s*\(.*?\)", "", name)
     # Remove common greeting/filler phrases
@@ -2710,7 +2716,11 @@ _SHOW_LOCATION_RE = re.compile(
 
 
 async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
-    """Look up children and their classes for a parent phone number from the PI Sheet DB."""
+    """Look up children and their classes for a parent phone number.
+
+    Checks pi_sheet_students first, then falls back to summer_camp_students
+    so outsider / summer-camp-only parents are also recognised.
+    """
     phone_digits = re.sub(r"\D", "", sender_phone)
     # Try last 10 digits
     last10 = phone_digits[-10:] if len(phone_digits) >= 10 else phone_digits
@@ -2718,7 +2728,7 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
     db = await get_db()
     try:
         results = []
-        # Search both father and mother phone columns
+        # Search both father and mother phone columns in PI Sheet
         cursor = await db.execute(
             "SELECT student_name, grade, father_mobile, mother_mobile "
             "FROM pi_sheet_students WHERE father_mobile LIKE ? OR mother_mobile LIKE ?",
@@ -2738,6 +2748,28 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
                 "grade": row[1],
                 "parent_phones": parent_phones,
             })
+
+        # Also check summer_camp_students table for outsider / camp-only parents
+        try:
+            sc_cursor = await db.execute(
+                "SELECT student_name, grade, contact_no "
+                "FROM summer_camp_students WHERE contact_no LIKE ?",
+                (f"%{last10}%",),
+            )
+            sc_rows = await sc_cursor.fetchall()
+            existing_names = {r["student_name"].upper() for r in results}
+            for row in sc_rows:
+                if row[0].upper() not in existing_names:
+                    contact_digits = re.sub(r"\D", "", row[2] or "")
+                    parent_phones = [f"91{contact_digits[-10:]}"] if len(contact_digits) >= 10 else []
+                    results.append({
+                        "student_name": row[0],
+                        "grade": row[1],
+                        "parent_phones": parent_phones,
+                    })
+        except Exception:
+            pass  # summer_camp_students table may not exist yet
+
         return results
     finally:
         await db.close()
@@ -3767,7 +3799,7 @@ async def _find_student_by_caption(caption: str) -> dict | None:
     Returns the matched student dict with student_name, grade, parent_phones
     or None if no match found.
     """
-    caption_clean = caption.strip()
+    caption_clean = _strip_ppis_tag(caption.strip())
     if not caption_clean:
         return None
 
@@ -3845,6 +3877,38 @@ async def _find_student_by_caption(caption: str) -> dict | None:
                 rows = await cursor.fetchall()
 
         if not rows:
+            # Fallback: search summer_camp_students for outsider/camp-only students
+            try:
+                sc_conditions = []
+                sc_params = []
+                for word in name_words:
+                    if len(word) > 1:
+                        sc_conditions.append("LOWER(student_name) LIKE ?")
+                        sc_params.append(f"%{word}%")
+                if sc_conditions:
+                    sc_where = " AND ".join(sc_conditions)
+                    sc_query = (
+                        f"SELECT student_name, grade, contact_no "
+                        f"FROM summer_camp_students WHERE {sc_where}"
+                    )
+                    if caption_grade:
+                        sc_query += " AND UPPER(grade) LIKE ?"
+                        sc_params.append(f"%{caption_grade.upper().replace('GRADE ', '').strip()}%")
+                    sc_cursor = await db.execute(sc_query, sc_params)
+                    sc_rows = await sc_cursor.fetchall()
+                    if sc_rows:
+                        for sc_row in sc_rows:
+                            contact_digits = re.sub(r"\D", "", sc_row[2] or "")
+                            parent_phones = [f"91{contact_digits[-10:]}"] if len(contact_digits) >= 10 else []
+                            if sc_row[0].lower() == name_part.lower():
+                                return {"student_name": sc_row[0], "grade": sc_row[1], "parent_phones": parent_phones}
+                        # Return first match
+                        sc_row = sc_rows[0]
+                        contact_digits = re.sub(r"\D", "", sc_row[2] or "")
+                        parent_phones = [f"91{contact_digits[-10:]}"] if len(contact_digits) >= 10 else []
+                        return {"student_name": sc_row[0], "grade": sc_row[1], "parent_phones": parent_phones}
+            except Exception:
+                pass
             return None
 
         # Pick the best match — prefer exact name match
@@ -4006,6 +4070,15 @@ _NON_NAME_WORDS = {
 }
 
 
+def _strip_ppis_tag(text: str) -> str:
+    """Remove 'STUDENT OF PPIS' / 'not a student of PPIS' tags from caption."""
+    text = re.sub(
+        r"\(?\s*(?:if\s+)?(?:not\s+a\s+)?student\s+of\s+ppis\s*\)?",
+        "", text, flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _caption_has_name_and_class(caption: str) -> bool:
     """Check if the caption is STRICTLY a student face registration request.
 
@@ -4014,7 +4087,9 @@ def _caption_has_name_and_class(caption: str) -> bool:
 
     Examples that return True:
       "Aarav Sharma Grade 5A", "Grade 3C Nitya Gupta", "Suhaan 3C",
-      "Suhaan 3 C", "Karman 1B", "Ishnoor Grade 7B"
+      "Suhaan 3 C", "Karman 1B", "Ishnoor Grade 7B",
+      "Aarav Sharma Grade 3 (STUDENT OF PPIS)",
+      "Aarav Sharma Grade 3C STUDENT OF PPIS"
     Examples that return False:
       "homework", "syllabus for 3 C", "confirm from teacher if final syllabus 3C",
       "I this the syllabus of class 3 ask reva ma'am",
@@ -4027,19 +4102,22 @@ def _caption_has_name_and_class(caption: str) -> bool:
     if _is_forwarding_or_query(caption):
         return False
 
+    # Strip PPIS student/outsider tags before further analysis
+    cleaned = _strip_ppis_tag(caption)
+
     # Must contain a class/grade indicator
-    has_class = bool(_CAPTION_CLASS_RE.search(caption))
+    has_class = bool(_CAPTION_CLASS_RE.search(cleaned))
     if not has_class:
         return False
 
     # Caption must be SHORT — a name+class is typically 2-5 words.
     # Long captions (6+ words) are sentences/instructions, not names.
-    word_count = len(caption.strip().split())
+    word_count = len(cleaned.strip().split())
     if word_count > 6:
         return False
 
     # Must contain at least one proper name word (not a document keyword)
-    name_part = _CAPTION_CLASS_RE.sub("", caption).strip()
+    name_part = _CAPTION_CLASS_RE.sub("", cleaned).strip()
     name_part = re.sub(r"[^\w\s]", "", name_part).strip()
     name_words = [
         w for w in name_part.split()
@@ -4097,7 +4175,7 @@ async def _try_register_child_face(
 
     Returns True if the image was handled as a face registration.
     """
-    caption_raw = (media_info.get("caption", "") or "").strip()
+    caption_raw = _strip_ppis_tag((media_info.get("caption", "") or "").strip())
     caption = caption_raw.lower()
 
     # --- Step 1: Try to find student by caption name ---
