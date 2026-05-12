@@ -4459,6 +4459,8 @@ def _is_query_caption(caption_lower: str) -> bool:
     _QUERY_STARTERS = [
         "please ask", "please share", "please convey", "please forward",
         "please send", "pls ask", "plz ask", "kindly ask",
+        "plz convey", "plz share", "plz forward", "plz send",
+        "pls convey", "pls share", "pls forward", "pls send",
         "ask ", "could u ask", "could you ask", "can u ask", "can you ask",
         "convey to", "convey this", "convey ",
         "forward to", "forward this", "forward ",
@@ -4475,6 +4477,9 @@ def _is_query_caption(caption_lower: str) -> bool:
         "is the final", "is this final", "is this the",
         "syllabus", "circular", "timetable", "notice",
         "about this", "regarding this",
+        "convey this", "convey to ", "forward this", "forward to ",
+        "share this", "share with ", "send this", "send to ",
+        "relay this", "relay to ", "pass this", "pass to ",
     ]
     for starter in _QUERY_STARTERS:
         if caption_lower.startswith(starter):
@@ -4530,9 +4535,12 @@ def _classify_media_content(media_info: dict) -> str:
         return "face_registration"
 
     # Check 3: Caption has staff/designation indicators
-    _STAFF_INDICATORS = ["staff", "ppis", "pgt", "tgt", "ntt", "coordinator",
-                         "principal", "vice principal", "hod"]
-    if caption_lower and any(ind in caption_lower for ind in _STAFF_INDICATORS):
+    # Use word-boundary matching to avoid false positives (e.g. "ppischool" matching "ppis")
+    _STAFF_INDICATORS_RE = re.compile(
+        r'\b(?:staff|ppis|pgt|tgt|ntt|coordinator|principal|vice principal|hod)\b',
+        re.IGNORECASE,
+    )
+    if caption_lower and _STAFF_INDICATORS_RE.search(caption_lower):
         return "face_registration"
 
     # Check 4: Caption looks like a person's name (2+ name words, no
