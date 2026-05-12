@@ -3761,13 +3761,17 @@ async def receive_whatsapp_message(request: Request):
                 "homework", "check", "check this", "please check", "hi", "hello",
                 "help", "thanks", "thank you", "ok", "yes", "no", "please",
                 "good morning", "good afternoon", "good evening", "show",
-                "convey", "forward", "fwd", "relay", "inform",
+                "convey", "forward", "fwd", "relay", "inform", "share", "send",
+                "convey this", "forward this", "share this", "send this",
+                "relay this", "inform this",
                 "convey to ct", "convey to class teacher",
                 "forward to ct", "send to ct", "tell ct",
             ]
             _G_FWD_PHRASES = [
-                "convey to", "forward to", "send to", "tell to",
-                "relay to", "pass to", "give to", "share with",
+                "convey to", "convey this", "forward to", "forward this",
+                "send to", "send this", "tell to",
+                "relay to", "relay this", "pass to", "give to",
+                "share with", "share this",
                 "class teacher", "ct ", " ct.", " ct,",
                 "i don't know", "i dont know", "don't know",
                 "what is this", "what's this", "kya hai", "pata nahi",
@@ -3790,14 +3794,16 @@ async def receive_whatsapp_message(request: Request):
                 w for w in re.sub(r"[^\w\s]", " ", _gcap_raw).split()
                 if len(w) >= 2 and w.isalpha()
                 and w.lower() not in {"the", "of", "is", "at", "in", "for", "and", "as", "my",
-                                       "convey", "forward", "class", "teacher", "know", "what",
+                                       "convey", "forward", "share", "send", "relay", "inform",
+                                       "tell", "pass", "give", "check", "please",
+                                       "class", "teacher", "know", "what",
                                        "dont", "this", "that"}
             ]
             # Word-count heuristic: >= 5 words is a sentence/query, not a name
             _all_words = [w for w in _gcap_raw.split() if len(w) >= 2]
             if len(_all_words) >= 5:
                 _g_is_non_name = True
-            _g_has_name = len(_g_name_words) >= 1 and not _g_is_non_name
+            _g_has_name = len(_g_name_words) >= 2 and not _g_is_non_name
             _g_has_class = bool(_CAPTION_CLASS_RE.search(_gcap_raw)) if _gcap_raw else False
 
             if _g_has_name and _g_has_class:
@@ -4425,9 +4431,10 @@ def _is_query_caption(caption_lower: str) -> bool:
     _QUERY_STARTERS = [
         "please ask", "pls ask", "plz ask", "kindly ask",
         "ask ", "could u ask", "could you ask", "can u ask", "can you ask",
-        "convey to", "forward to", "send to", "tell to",
-        "relay to", "inform to", "pass to", "give to",
-        "share with", "share this with",
+        "convey to", "convey this", "forward to", "forward this",
+        "send to", "send this", "tell to",
+        "relay to", "relay this", "inform to", "pass to", "give to",
+        "share with", "share this",
         "is this", "is it", "what is", "what's",
         "kya hai", "kya ye", "ye kya", "yeh kya",
         "tell ", "inform ", "check with",
@@ -4509,10 +4516,11 @@ def _classify_media_content(media_info: dict) -> str:
 
 # Forwarding phrases that indicate the caption is a query, NOT a person's name
 _FORWARDING_PHRASES = [
-    "convey to", "forward to", "send to", "tell to",
-    "relay to", "inform to", "pass to", "give to",
+    "convey to", "convey this", "forward to", "forward this",
+    "send to", "send this", "tell to",
+    "relay to", "relay this", "inform to", "pass to", "give to",
+    "share with", "share this",
     "ask maam", "ask ma'am", "ask sir", "ask teacher",
-    "share with", "share this with",
     "class teacher", "ct ", " ct.", " ct,",
     "i don't know", "i dont know", "don't know",
     "what is this", "what's this", "kya hai", "pata nahi", "samajh nahi",
@@ -4526,7 +4534,10 @@ _NON_NAME_CAPTIONS = {
     "chk", "chck", "pls", "plz", "plz check", "pls check",
     "hw", "hmwk", "hmw", "see", "look", "dekho", "dekhiye",
     "dekhna", "btao", "bataiye", "verify", "review", "done",
-    "send", "share", "shared", "forwarded", "fwd", "correction",
+    "send", "send this", "share", "share this", "shared",
+    "convey", "convey this", "forward", "forward this",
+    "relay", "relay this", "inform", "inform this",
+    "forwarded", "fwd", "correction",
     "correct", "wrong", "right", "marks", "grade", "test", "exam",
     "pic", "photo", "image", "screenshot", "ss", "file", "doc",
     "document", "pdf", "page", "pg", "note", "notes",
