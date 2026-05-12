@@ -1810,8 +1810,8 @@ async def attendance_monitoring():
             "duplicate_detections": duplicates,
             "system_checks": {
                 "multi_frame_verification": "3 sightings required",
-                "confidence_threshold_student": "45%",
-                "confidence_threshold_teacher": "50%",
+                "confidence_threshold_student": "40%",
+                "confidence_threshold_teacher": "45%",
                 "entry_validation": "required",
                 "anti_spoofing": "enabled",
                 "quality_filtering": "sharpness + brightness",
