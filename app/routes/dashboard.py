@@ -1554,6 +1554,66 @@ def _generate_teacher_report_excel(
     ws.column_dimensions["E"].width = 28
     ws.column_dimensions["F"].width = 14
 
+    # ── Sheet 2: Teacher Database ──
+    ws2 = wb.create_sheet("Teacher Database")
+    ws2.merge_cells("A1:F1")
+    ws2["A1"] = f"PP International School — Teacher/Staff Database — {report_date}"
+    ws2["A1"].font = Font(bold=True, size=14, color="2F5496")
+    ws2["A1"].alignment = Alignment(horizontal="center")
+
+    db_headers = ["S.No", "Name", "Phone Number", "Role", "Face Registered", "Today's Status"]
+    for col, h in enumerate(db_headers, 1):
+        cell = ws2.cell(row=3, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
+
+    reg_fill = PatternFill("solid", fgColor="C6EFCE")
+    noreg_fill = PatternFill("solid", fgColor="FFC7CE")
+    row2 = 4
+    with_phone = 0
+    without_phone = 0
+    for idx, t in enumerate(teachers, 1):
+        pid = t["person_id"]
+        phone = t.get("phone", "")
+        has_phone = "Yes" if phone else "No"
+        if phone:
+            with_phone += 1
+        else:
+            without_phone += 1
+        att = att_map.get(pid)
+        today_status = "Present" if att else "Absent"
+
+        ws2.cell(row=row2, column=1, value=idx).border = border
+        ws2.cell(row=row2, column=2, value=t["name"]).border = border
+        phone_cell = ws2.cell(row=row2, column=3, value=phone if phone else "MISSING")
+        phone_cell.border = border
+        phone_cell.fill = reg_fill if phone else noreg_fill
+        ws2.cell(row=row2, column=4, value=t.get("role", "Teacher")).border = border
+        face_cell = ws2.cell(row=row2, column=5, value="Yes")
+        face_cell.border = border
+        face_cell.fill = reg_fill
+        face_cell.alignment = Alignment(horizontal="center")
+        status_cell2 = ws2.cell(row=row2, column=6, value=today_status)
+        status_cell2.border = border
+        status_cell2.fill = present_fill if att else absent_fill
+        status_cell2.alignment = Alignment(horizontal="center")
+        row2 += 1
+
+    row2 += 1
+    ws2.cell(row=row2, column=1, value="Summary:").font = Font(bold=True)
+    ws2.cell(row=row2, column=2, value=f"With Phone: {with_phone}").font = Font(bold=True, color="006100")
+    ws2.cell(row=row2, column=3, value=f"Missing Phone: {without_phone}").font = Font(bold=True, color="9C0006")
+    ws2.cell(row=row2, column=4, value=f"Total: {len(teachers)}").font = Font(bold=True)
+
+    ws2.column_dimensions["A"].width = 6
+    ws2.column_dimensions["B"].width = 28
+    ws2.column_dimensions["C"].width = 18
+    ws2.column_dimensions["D"].width = 16
+    ws2.column_dimensions["E"].width = 16
+    ws2.column_dimensions["F"].width = 16
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
