@@ -144,7 +144,25 @@ async def face_manifest():
 
     The agent uses this to determine which faces it's missing locally,
     then downloads only the missing ones via /api/face/image/{face_id}.
+    For teachers without a phone, falls back to PI Sheet TEACHER_DATA.
     """
+    from app.services.openai_service import TEACHER_DATA
+
+    # Build PI Sheet phone lookup by normalized name
+    pi_phone_lookup: dict[str, str] = {}
+    for entry in TEACHER_DATA:
+        teacher_name = entry.get("teacher", "")
+        phone = entry.get("whatsapp", "")
+        if not phone:
+            continue
+        phone_digits = re.sub(r"\D", "", phone)
+        if len(phone_digits) == 10:
+            phone_digits = "91" + phone_digits
+        for name_part in teacher_name.split("/"):
+            key = re.sub(r"[^a-z]", "", name_part.lower().strip())
+            if key:
+                pi_phone_lookup[key] = phone_digits
+
     db = await get_db()
     try:
         cursor = await db.execute(
@@ -152,7 +170,21 @@ async def face_manifest():
             "FROM agent_registered_faces ORDER BY person_id, angle"
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        results = []
+        for r in rows:
+            entry = dict(r)
+            # If teacher has no phone, try PI Sheet lookup
+            if entry.get("role") == "Teacher" and not entry.get("phone"):
+                name_key = re.sub(r"[^a-z]", "", (entry.get("name") or "").lower())
+                pi_phone = pi_phone_lookup.get(name_key, "")
+                if not pi_phone:
+                    # Try first name only
+                    first_name = re.sub(r"[^a-z]", "", (entry.get("name") or "").lower().split()[0]) if entry.get("name") else ""
+                    pi_phone = pi_phone_lookup.get(first_name, "")
+                if pi_phone:
+                    entry["phone"] = pi_phone
+            results.append(entry)
+        return results
     finally:
         await db.close()
 
