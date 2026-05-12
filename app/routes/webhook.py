@@ -3571,9 +3571,24 @@ async def detect_and_handle_snapshot_request(
 
 @router.post("/webhook")
 async def receive_whatsapp_message(request: Request):
-    """Handle incoming WhatsApp messages from Green API webhook."""
+    """Handle incoming WhatsApp messages from Green API webhook.
+
+    IMPORTANT: When Cloud API is configured, the /webhook/cloud handler
+    processes ALL incoming messages as well.  To avoid duplicate responses
+    (GPT + forwarding, double ask-prompts, etc.) this Green API handler
+    returns early when Cloud API credentials are present.
+    """
     if not BOT_ENABLED:
         return {"status": "ok", "note": "bot disabled"}
+
+    # ── DEDUP GUARD: If Cloud API is active, let /webhook/cloud handle
+    # everything.  Both webhooks fire for the same WhatsApp message but
+    # with different message IDs, so per-ID dedup does not help.
+    from app.services.whatsapp_service import get_whatsapp_provider
+    if get_whatsapp_provider() == "cloud":
+        logger.info("[GREEN WEBHOOK] Cloud API active — skipping Green API processing (dedup).")
+        return {"status": "ok"}
+
     body = await request.json()
     logger.info(f"Received Green API webhook: {body}")
 
@@ -3959,7 +3974,9 @@ async def receive_whatsapp_message(request: Request):
         # process it (e.g. forwarded image with unexpected typeMessage, or media
         # that didn't match any priority), do NOT send to GPT.  Instead, ask the
         # user what they want done with it — same as captionless-image flow.
-        if media_info and not is_teacher_green:
+        # Exclude audioMessage: voice notes are transcribed above and should
+        # reach GPT with their transcribed text.
+        if media_info and media_info.get("type") != "audioMessage" and not is_teacher_green:
             logger.info(f"[GREEN MEDIA GUARD] Media present but unprocessed — asking user. type={media_info.get('type')}")
             _recent_images[sender] = {
                 "media_info": media_info,
