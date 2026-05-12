@@ -3571,24 +3571,9 @@ async def detect_and_handle_snapshot_request(
 
 @router.post("/webhook")
 async def receive_whatsapp_message(request: Request):
-    """Handle incoming WhatsApp messages from Green API webhook.
-
-    IMPORTANT: When Cloud API is configured, the /webhook/cloud handler
-    processes ALL incoming messages as well.  To avoid duplicate responses
-    (GPT + forwarding, double ask-prompts, etc.) this Green API handler
-    returns early when Cloud API credentials are present.
-    """
+    """Handle incoming WhatsApp messages from Green API webhook."""
     if not BOT_ENABLED:
         return {"status": "ok", "note": "bot disabled"}
-
-    # ── DEDUP GUARD: If Cloud API is active, let /webhook/cloud handle
-    # everything.  Both webhooks fire for the same WhatsApp message but
-    # with different message IDs, so per-ID dedup does not help.
-    from app.services.whatsapp_service import get_whatsapp_provider
-    if get_whatsapp_provider() == "cloud":
-        logger.info("[GREEN WEBHOOK] Cloud API active — skipping Green API processing (dedup).")
-        return {"status": "ok"}
-
     body = await request.json()
     logger.info(f"Received Green API webhook: {body}")
 
@@ -3976,14 +3961,21 @@ async def receive_whatsapp_message(request: Request):
         # user what they want done with it — same as captionless-image flow.
         # Exclude audioMessage: voice notes are transcribed above and should
         # reach GPT with their transcribed text.
-        if media_info and media_info.get("type") != "audioMessage" and not is_teacher_green:
-            logger.info(f"[GREEN MEDIA GUARD] Media present but unprocessed — asking user. type={media_info.get('type')}")
-            _recent_images[sender] = {
-                "media_info": media_info,
-                "timestamp": _time_mod.time(),
-                "reply_to": reply_to,
-                "bot_phone": bot_phone,
-            }
+        _is_media_text = bool(
+            re.match(r'^\[.+\s+(shared|received)\]$', message_text.strip())
+        )
+        if not is_teacher_green and (
+            (media_info and media_info.get("type") != "audioMessage")
+            or _is_media_text
+        ):
+            logger.info(f"[GREEN MEDIA GUARD] Media detected — asking user. media_info={media_info is not None}, text_match={_is_media_text}, msg='{message_text[:50]}'")
+            if media_info:
+                _recent_images[sender] = {
+                    "media_info": media_info,
+                    "timestamp": _time_mod.time(),
+                    "reply_to": reply_to,
+                    "bot_phone": bot_phone,
+                }
             _guard_ask = (
                 "What would you like me to do with this image/file?\n\n"
                 "If this is for *face registration*, reply with the person's name "
