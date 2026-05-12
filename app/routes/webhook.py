@@ -4974,6 +4974,22 @@ async def _try_register_teacher_face(
 async def receive_cloud_api_message(request: Request):
     """Handle incoming WhatsApp messages from Meta Cloud API webhook."""
     body = await request.json()
+
+    # --- Route Law Minister phone number BEFORE bot-enabled check ---
+    # The Law Minister bot operates independently of the PPIS bot toggle.
+    if body.get("object") == "whatsapp_business_account":
+        from app.services.law_minister_bot import LAW_MINISTER_PHONE_ID, handle_webhook as lm_handle
+        try:
+            _entry = body.get("entry", [{}])[0]
+            _change = _entry.get("changes", [{}])[0]
+            _phone_id = _change.get("value", {}).get("metadata", {}).get("phone_number_id", "")
+            if _phone_id == LAW_MINISTER_PHONE_ID:
+                logger.info(f"Routing to Law Minister bot (phone_id={_phone_id})")
+                result = await lm_handle(body)
+                return result
+        except Exception as _e:
+            logger.warning(f"Law Minister routing check failed: {_e}")
+
     # Still need to handle webhook verification even when disabled
     if not BOT_ENABLED:
         # But don't skip status updates / verification GETs
