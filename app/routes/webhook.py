@@ -230,6 +230,12 @@ _RECENT_IMAGE_TTL = 30  # seconds — link image + name within 30s
 _recent_forwarded: dict[str, dict] = {}
 _FORWARDED_MSG_TTL = 120  # seconds — wait up to 2 minutes for parent's reply
 
+# Track homework reviews to prevent dual-webhook forwarding.
+# When both Green API and Cloud API fire for the same message, one handler
+# does the review while the other may try to forward.  This dict prevents that.
+_homework_reviewed: dict[str, float] = {}
+_HOMEWORK_REVIEW_TTL = 120  # seconds
+
 # ---------------------------------------------------------------------------
 # Mother Teacher grades: Popsicles through Grade 2 use the "mother teacher"
 # concept — ALL parent queries are routed to the class teacher only, even if
@@ -753,6 +759,12 @@ async def forward_to_teachers_and_confirm(
     If media_info is provided, also forwards the media file to the teacher."""
     teachers = find_mentioned_teachers(message_text)
     if not teachers:
+        return
+
+    # Skip if this sender just had a homework review (dual-webhook protection)
+    _hw_ts2 = _homework_reviewed.get(sender)
+    if _hw_ts2 and (_time_mod.time() - _hw_ts2) < _HOMEWORK_REVIEW_TTL:
+        logger.info(f"[SKIP FWD] Skipping teacher forward — homework review recently done for {sender}")
         return
 
     # --- Look up the parent's child name and class from PI Sheet ---
@@ -2114,6 +2126,13 @@ async def try_route_parent_to_class_teacher(
     # Skip if the sender IS a teacher (their messages go through broadcast/relay)
     if _is_teacher_phone(sender):
         return False
+
+    # Skip if this sender just had a homework review (dual-webhook protection).
+    # Homework images should NOT be forwarded to the class teacher after review.
+    _hw_ts = _homework_reviewed.get(sender)
+    if _hw_ts and (_time_mod.time() - _hw_ts) < _HOMEWORK_REVIEW_TTL:
+        logger.info(f"[SKIP FWD] Skipping forward — homework review recently done for {sender}")
+        return True  # Return True to prevent further processing
 
     # Skip trivial / greeting messages
     stripped = message_text.strip()
@@ -3908,6 +3927,7 @@ async def receive_whatsapp_message(request: Request):
                     _hw_err = "I received your homework image but encountered an error. Please try sending it again."
                     await save_message(bot_phone, sender, _hw_err, "whatsapp", "outgoing")
                     await send_whatsapp_message(reply_to, _hw_err)
+                _homework_reviewed[sender] = _time_mod.time()
                 return {"status": "ok"}
 
             # PRIORITY 3: Caption is a forwarding/query request (no teacher mentioned)
@@ -4065,7 +4085,10 @@ async def receive_whatsapp_message(request: Request):
         _is_media_text = bool(
             re.match(r'^\[.+\s+(shared|received)\]$', message_text.strip())
         )
-        if not is_teacher_green and (
+        # Skip media guard if homework review was recently done (dual-webhook)
+        _hw_guard_ts = _homework_reviewed.get(sender)
+        _hw_guard_skip = _hw_guard_ts and (_time_mod.time() - _hw_guard_ts) < _HOMEWORK_REVIEW_TTL
+        if not is_teacher_green and not _hw_guard_skip and (
             (media_info and media_info.get("type") != "audioMessage")
             or _is_media_text
         ):
@@ -5561,6 +5584,7 @@ async def receive_cloud_api_message(request: Request):
                             _hw_err_c = "I received your homework image but encountered an error. Please try sending it again."
                             await save_message(bot_phone, sender, _hw_err_c, "whatsapp", "outgoing")
                             await send_whatsapp_message(reply_to, _hw_err_c)
+                        _homework_reviewed[sender] = _time_mod.time()
                         return {"status": "ok"}
 
                     # Forward attachment + text to class teacher (all file types)
