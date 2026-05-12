@@ -72,80 +72,41 @@ def _is_greeting(text: str) -> bool:
     return False
 
 
-# ---------- Response Templates ----------
+# ---------- Response Templates (always bilingual) ----------
 
-GREETING_EN = (
-    "Hello,\n\n"
+GREETING_RESPONSE = (
+    "Hello / नमस्कार,\n\n"
     "Welcome to the Office Attendance Assistance System of "
     "Shri Arjun Ram Meghwal Ji.\n\n"
-    "I am an automated attendance bot designed only for office "
-    "attendance and work-related communication.\n\n"
-    "For face registration, kindly share:\n"
-    "• 2 clear front-face photographs with name\n\n"
-    "Thankyou"
+    "I am an automated bot designed only for office attendance "
+    "and official work-related communication.\n\n"
+    "Kindly share:\n"
+    "• 2 clear front-face photographs for face registration with your Name\n"
+    "• फेस रजिस्ट्रेशन हेतु 2 स्पष्ट फ्रंट फेस फोटो के साथ अपना नाम साझा करें।\n\n"
+    "Please ensure the photographs are clear and recent. / "
+    "कृपया फोटो स्पष्ट और हाल की हों।\n\n"
+    "Thankyou / धन्यवाद"
 )
 
-GREETING_HI = (
-    "नमस्कार,\n\n"
-    "श्री अर्जुन राम मेघवाल जी के कार्यालय उपस्थिति सहायता प्रणाली "
-    "में आपका स्वागत है।\n\n"
-    "मैं आपके कार्यालय उपस्थिति (Attendance) हेतु एक स्वचालित बॉट हूँ।\n\n"
-    "कृपया फेस रजिस्ट्रेशन के लिए अपने नाम के साथ "
-    "2 स्पष्ट फ्रंट फेस फोटो साझा करें।\n\n"
-    "धन्यवाद"
-)
-
-GREETING_MIXED = (
-    "Hello / Namashkar,\n\n"
-    "Welcome to the Office Attendance Assistance System of "
-    "Shri Arjun Ram Meghwal Ji.\n\n"
-    "I am an automated attendance bot designed only for office "
-    "attendance and work-related communication.\n\n"
-    "For face registration, kindly share:\n"
-    "• 2 clear front-face photographs with name\n\n"
-    "Thankyou / Dhanyawad"
-)
-
-UNRELATED_EN = (
-    "Kindly note that this automated system is restricted to official "
-    "office attendance and work-related communication only."
-)
-
-UNRELATED_HI = (
-    "यह स्वचालित प्रणाली केवल कार्यालय उपस्थिति एवं "
-    "आधिकारिक कार्य संबंधी संवाद हेतु सीमित है।"
-)
-
-UNRELATED_MIXED = (
-    "यह स्वचालित प्रणाली केवल कार्यालय उपस्थिति एवं "
-    "आधिकारिक कार्य संबंधी संवाद हेतु सीमित है। / "
-    "This automated system is restricted to official office "
-    "attendance and work-related communication only."
+UNRELATED_RESPONSE = (
+    "Kindly note that this system is restricted to official office "
+    "attendance and work-related communication only. / "
+    "कृपया ध्यान दें कि यह प्रणाली केवल कार्यालय उपस्थिति "
+    "एवं आधिकारिक कार्य संबंधी संवाद हेतु सीमित है।"
 )
 
 
 def _get_response(text: str) -> str | None:
     """Return auto-response for the message, or None for allowed topics."""
-    lang = detect_language(text)
-
     if _is_greeting(text):
-        if lang == "hindi":
-            return GREETING_HI
-        if lang == "hinglish":
-            return GREETING_MIXED
-        return GREETING_EN
+        return GREETING_RESPONSE
 
     normalised = text.strip().lower()
     for topic in ALLOWED_TOPICS:
         if topic in normalised:
             return None  # Allowed topic — no auto-reply needed
 
-    # Unrelated topic
-    if lang == "hindi":
-        return UNRELATED_HI
-    if lang == "hinglish":
-        return UNRELATED_MIXED
-    return UNRELATED_EN
+    return UNRELATED_RESPONSE
 
 
 # ---------- Send via Law Minister Phone Number ----------
