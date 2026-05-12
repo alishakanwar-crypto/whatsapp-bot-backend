@@ -743,7 +743,7 @@ async def forward_to_teachers_and_confirm(
 
     # Download media ONCE (reused for every teacher's WhatsApp + email)
     _dl_bytes, _dl_mime = await _download_media_bytes(media_info)
-    logger.info(f"[FWD MEDIA] Media download result: bytes={len(_dl_bytes) if _dl_bytes else 0}, mime={_dl_mime}, has_cloud_id={bool(media_info.get('cloud_media_id'))}, has_url={bool(media_info.get('url'))}")
+    logger.info(f"[FWD MEDIA] Media download result: bytes={len(_dl_bytes) if _dl_bytes else 0}, mime={_dl_mime}, has_cloud_id={bool(media_info.get('cloud_media_id') if media_info else False)}, has_url={bool(media_info.get('url') if media_info else False)}")
 
     for entry in teachers:
         teacher_phone = entry.get("whatsapp", "")
