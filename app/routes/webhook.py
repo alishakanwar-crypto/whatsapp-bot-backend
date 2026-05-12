@@ -403,25 +403,46 @@ def _teacher_chat_id(phone: str) -> str:
 
 
 async def _download_media_bytes(media_info: dict | None) -> tuple[bytes | None, str]:
-    """Download Cloud API media once and return (bytes, mime_type).
+    """Download media once and return (bytes, mime_type).
 
+    Supports both Cloud API (cloud_media_id) and Green API (direct url).
     Returns (None, "") if no media or download fails.
     """
     if not media_info:
         return None, ""
     cloud_mid = media_info.get("cloud_media_id", "")
-    if not cloud_mid:
-        return None, ""
-    try:
-        from app.services.whatsapp_service import download_cloud_media
-        media_bytes, mime_type = await download_cloud_media(cloud_mid)
-        if not media_bytes:
-            logger.error(f"[MEDIA DL] Could not download media {cloud_mid}")
+    direct_url = media_info.get("url", "")
+
+    if cloud_mid:
+        try:
+            from app.services.whatsapp_service import download_cloud_media
+            media_bytes, mime_type = await download_cloud_media(cloud_mid)
+            if not media_bytes:
+                logger.error(f"[MEDIA DL] Could not download media {cloud_mid}")
+                return None, ""
+            logger.info(f"[MEDIA DL] Downloaded {len(media_bytes)} bytes via Cloud API, mime={mime_type}")
+            return media_bytes, mime_type
+        except Exception as exc:
+            logger.error(f"[MEDIA DL] Cloud API download failed: {exc}")
             return None, ""
-        logger.info(f"[MEDIA DL] Downloaded {len(media_bytes)} bytes, mime={mime_type}")
-        return media_bytes, mime_type
-    except Exception as exc:
-        logger.error(f"[MEDIA DL] Failed: {exc}")
+    elif direct_url:
+        try:
+            import httpx as _httpx_dl
+            async with _httpx_dl.AsyncClient(timeout=30) as client:
+                resp = await client.get(direct_url)
+                if resp.status_code == 200:
+                    media_bytes = resp.content
+                    mime_type = resp.headers.get("content-type", "application/octet-stream")
+                    logger.info(f"[MEDIA DL] Downloaded {len(media_bytes)} bytes via direct URL, mime={mime_type}")
+                    return media_bytes, mime_type
+                else:
+                    logger.error(f"[MEDIA DL] Direct URL returned {resp.status_code}")
+                    return None, ""
+        except Exception as exc:
+            logger.error(f"[MEDIA DL] Direct URL download failed: {exc}")
+            return None, ""
+    else:
+        logger.warning("[MEDIA DL] No cloud_media_id or url in media_info")
         return None, ""
 
 
@@ -5368,7 +5389,8 @@ async def receive_cloud_api_message(request: Request):
                                 import asyncio as _asyncio_fwd
                                 from app.services.whatsapp_service import (
                                     send_cloud_template_message as _send_tmpl3,
-                                    forward_cloud_media_to_recipient,
+                                    upload_media_bytes_cloud as _upload_bytes3,
+                                    send_cloud_media as _send_media3,
                                 )
                                 chat_id = _teacher_chat_id(teacher_phone)
                                 _trec = teacher_phone
@@ -5406,14 +5428,31 @@ async def receive_cloud_api_message(request: Request):
                                     else:
                                         logger.error(f"[CLOUD FILE FWD] Both direct msg and template failed for {teacher_name}")
 
-                                # Send media attachment
-                                if _fwd_ok:
-                                    await _asyncio_fwd.sleep(3)
+                                # Send media attachment using pre-downloaded bytes
+                                if _fwd_ok and _dl_bytes3 and media_info:
+                                    _int_type3 = media_info.get("type", "")
+                                    _tmap3 = {
+                                        "imageMessage": "image", "videoMessage": "video",
+                                        "documentMessage": "document", "audioMessage": "audio",
+                                    }
+                                    _ctype3 = _tmap3.get(_int_type3, "document")
+                                    _fn3 = media_info.get("filename", "file")
                                     _mok3 = False
-                                    try:
-                                        _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
-                                    except Exception as _me3:
-                                        logger.error(f"[CLOUD FILE FWD] Media forward error: {_me3}")
+                                    for _att3 in range(3):
+                                        if _att3 > 0:
+                                            await _asyncio_fwd.sleep(4 * _att3)
+                                        try:
+                                            _mid3 = await _upload_bytes3(_dl_bytes3, _dl_mime3, _fn3)
+                                            if _mid3:
+                                                _mok3 = await _send_media3(
+                                                    chat_id, _ctype3,
+                                                    media_id=_mid3, caption=caption,
+                                                    filename=_fn3 if _ctype3 == "document" else "",
+                                                )
+                                            if _mok3:
+                                                break
+                                        except Exception as _me3:
+                                            logger.error(f"[CLOUD FILE FWD] Media forward attempt {_att3+1} error: {_me3}")
                                     if _mok3:
                                         logger.info(f"[CLOUD FILE FWD] Media sent to {teacher_name}")
                                     else:
