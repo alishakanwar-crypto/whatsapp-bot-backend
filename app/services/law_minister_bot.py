@@ -192,6 +192,29 @@ async def _send_text(to: str, body: str) -> bool:
         return False
 
 
+# ---------- Deduplication ----------
+
+# In-memory set of recently processed message IDs (TTL-based cleanup)
+_processed_ids: dict[str, float] = {}
+_DEDUP_TTL = 300  # 5 minutes
+
+
+def _is_duplicate(msg_id: str) -> bool:
+    """Check if a message ID was already processed (prevents retry duplicates)."""
+    import time
+    now = time.time()
+
+    # Clean old entries
+    expired = [k for k, t in _processed_ids.items() if now - t > _DEDUP_TTL]
+    for k in expired:
+        del _processed_ids[k]
+
+    if msg_id in _processed_ids:
+        return True
+    _processed_ids[msg_id] = now
+    return False
+
+
 # ---------- Main Handler ----------
 
 async def handle_webhook(body: dict) -> dict:
@@ -211,6 +234,10 @@ async def handle_webhook(body: dict) -> dict:
                 sender = message.get("from", "")
                 text = message.get("text", {}).get("body", "")
                 msg_id = message.get("id", "")
+
+                if msg_id and _is_duplicate(msg_id):
+                    logger.info(f"Duplicate message {msg_id}, skipping.")
+                    continue
 
                 auto_reply = _get_response(text)
                 if auto_reply:
