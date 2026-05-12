@@ -231,6 +231,24 @@ _recent_forwarded: dict[str, dict] = {}
 _FORWARDED_MSG_TTL = 120  # seconds — wait up to 2 minutes for parent's reply
 
 # ---------------------------------------------------------------------------
+# Mother Teacher grades: Popsicles through Grade 2 use the "mother teacher"
+# concept — ALL parent queries are routed to the class teacher only, even if
+# the parent tags a different teacher by name.  Grade 3+ may tag any teacher.
+# ---------------------------------------------------------------------------
+_MOTHER_TEACHER_GRADES: set[str] = {
+    "Popsicles",
+    "Nursery 1", "Nursery 2", "Nursery 3",
+    "Prep 1", "Prep 2", "Prep 3",
+    "Grade 1A", "Grade 1B",
+    "Grade 2A", "Grade 2B",
+}
+
+
+def _is_mother_teacher_grade(grade: str) -> bool:
+    """Return True if *grade* falls under the mother-teacher policy."""
+    return grade in _MOTHER_TEACHER_GRADES
+
+# ---------------------------------------------------------------------------
 # Global kill switch: when True the bot will NOT reply to any incoming message.
 # Toggle via POST /webhook/bot-enabled {"enabled": true/false}
 # ---------------------------------------------------------------------------
@@ -732,6 +750,32 @@ async def forward_to_teachers_and_confirm(
 
     # --- Look up the parent's child name and class from PI Sheet ---
     parent_children = await _lookup_parent_child_class(sender)
+
+    # ── Mother Teacher policy: Popsicles – Grade 2 queries always go to
+    # the class teacher, even if the parent tagged a different teacher.
+    if parent_children:
+        child_grade = parent_children[0]["grade"]
+        if _is_mother_teacher_grade(child_grade):
+            ct_entry = find_teacher_by_grade(child_grade)
+            if ct_entry:
+                logger.info(
+                    f"[MOTHER TEACHER] {child_grade} — redirecting to class teacher "
+                    f"{ct_entry['teacher']} instead of mentioned teachers"
+                )
+                routed = await _forward_query_to_class_teacher(
+                    sender, message_text, reply_to,
+                    parent_children[0], ct_entry, media_info,
+                )
+                if routed:
+                    ct_name = ct_entry["teacher"].split("/")[0].strip()
+                    _note = (
+                        f"For *{child_grade}*, all queries are handled by the "
+                        f"class teacher *{ct_name}*. Your message has been "
+                        f"forwarded to them."
+                    )
+                    await send_whatsapp_message(reply_to, _note)
+                    return
+
     if parent_children:
         # Use the first child (most common case: one child per parent)
         child = parent_children[0]
@@ -778,8 +822,10 @@ async def forward_to_teachers_and_confirm(
 
             # Try sending the query directly first (works if conversation
             # window is already open). This avoids the confusing template.
+            _window_open = False
             wa_success = await send_whatsapp_message(chat_id, _query_msg)
             if wa_success:
+                _window_open = True
                 logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
             else:
                 # Conversation window closed — send template to open a
@@ -791,18 +837,22 @@ async def forward_to_teachers_and_confirm(
                 )
                 if tmpl_ok:
                     # Wait for template delivery to open conversation window
-                    await _asyncio_relay.sleep(4)
+                    await _asyncio_relay.sleep(10)
                     wa_success = await send_whatsapp_message(chat_id, _query_msg)
                     if wa_success:
+                        _window_open = True
                         logger.info(f"[FWD] Query sent after template to {entry['teacher']}")
                     else:
                         wa_success = True  # template itself was delivered
-                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered")
+                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered (window not open for media)")
                 else:
                     logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
 
-            # Send media attachment using pre-downloaded bytes
-            if wa_success and _dl_bytes and media_info:
+            # Send media attachment using pre-downloaded bytes.
+            # Only attempt if the freeform window is confirmed open —
+            # if only the template was delivered, the window may not
+            # support freeform media yet (teacher phone offline).
+            if _window_open and _dl_bytes and media_info:
                 from app.services.whatsapp_service import (
                     upload_media_bytes_cloud as _upload_bytes,
                     send_cloud_media as _send_media,
@@ -2206,8 +2256,10 @@ async def _forward_query_to_class_teacher(
 
         # Try sending the query directly first (works if conversation
         # window is already open). This avoids the confusing template.
+        _window_open2 = False
         wa_success = await send_whatsapp_message(chat_id, query_msg)
         if wa_success:
+            _window_open2 = True
             logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
         else:
             # Conversation window closed — send template to open a
@@ -2219,19 +2271,22 @@ async def _forward_query_to_class_teacher(
             )
             if tmpl_ok:
                 # Wait for template delivery to open conversation window
-                await _asyncio.sleep(4)
+                await _asyncio.sleep(10)
                 wa_success = await send_whatsapp_message(chat_id, query_msg)
                 if wa_success:
+                    _window_open2 = True
                     logger.info(f"[PARENT→TEACHER] Query sent after template to {teacher_name}")
                 else:
                     wa_success = True  # template itself was delivered
-                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered")
+                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered (window not open for media)")
             else:
                 logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
 
-        # Send media attachment using pre-downloaded bytes (avoids
-        # duplicate download and expired Cloud API media IDs).
-        if wa_success and _dl_bytes2 and media_info:
+        # Send media attachment using pre-downloaded bytes.
+        # Only attempt if the freeform window is confirmed open —
+        # if only the template was delivered, the window may not
+        # support freeform media yet (teacher phone offline).
+        if _window_open2 and _dl_bytes2 and media_info:
             from app.services.whatsapp_service import (
                 upload_media_bytes_cloud,
                 send_cloud_media,
@@ -5475,8 +5530,10 @@ async def receive_cloud_api_message(request: Request):
 
                                 # Try sending the query directly first (works if
                                 # conversation window is already open).
+                                _window_open3 = False
                                 _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
                                 if _fwd_ok:
+                                    _window_open3 = True
                                     logger.info(f"[CLOUD FILE FWD] Direct query sent to {teacher_name}")
                                 else:
                                     # Conversation window closed — send template to
@@ -5488,18 +5545,20 @@ async def receive_cloud_api_message(request: Request):
                                     )
                                     if _tmpl_ok:
                                         # Wait for template delivery to open conversation window
-                                        await _asyncio_fwd.sleep(4)
+                                        await _asyncio_fwd.sleep(10)
                                         _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
                                         if _fwd_ok:
+                                            _window_open3 = True
                                             logger.info(f"[CLOUD FILE FWD] Query sent after template to {teacher_name}")
                                         else:
                                             _fwd_ok = True  # template itself was delivered
-                                            logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}, template delivered")
+                                            logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}, template delivered (window not open for media)")
                                     else:
                                         logger.error(f"[CLOUD FILE FWD] Both direct msg and template failed for {teacher_name}")
 
-                                # Send media attachment using pre-downloaded bytes
-                                if _fwd_ok and _dl_bytes3 and media_info:
+                                # Send media attachment using pre-downloaded bytes.
+                                # Only attempt if the freeform window is confirmed open.
+                                if _window_open3 and _dl_bytes3 and media_info:
                                     _int_type3 = media_info.get("type", "")
                                     _tmap3 = {
                                         "imageMessage": "image", "videoMessage": "video",
