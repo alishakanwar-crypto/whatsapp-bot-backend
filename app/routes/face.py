@@ -10,6 +10,7 @@ import base64
 import gc
 import json
 import logging
+import re
 
 from fastapi import APIRouter, Depends, Header, HTTPException, File, Form, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -293,5 +294,82 @@ async def delete_person(person_id: str):
         deleted = cursor.rowcount
         logger.info(f"Deleted {deleted} face(s) for {original_person_id}")
         return {"deleted": deleted, "person_id": original_person_id}
+    finally:
+        await db.close()
+
+
+@router.post("/backfill-phones")
+async def backfill_phones_from_pi_sheet():
+    """Backfill phone numbers for registered faces using PI Sheet data.
+
+    Matches teacher names between agent_registered_faces and TEACHER_DATA,
+    then updates empty phone fields with the PI Sheet WhatsApp number.
+    """
+    from app.services.openai_service import TEACHER_DATA
+
+    def _normalize_name(name: str) -> str:
+        return re.sub(r"[^a-z]", "", name.lower().split("/")[0].strip())
+
+    # Build lookup: normalized_name -> phone
+    pi_lookup: dict[str, str] = {}
+    for entry in TEACHER_DATA:
+        teacher_name = entry.get("teacher", "")
+        phone = entry.get("whatsapp", "")
+        if not phone:
+            continue
+        phone_digits = re.sub(r"\D", "", phone)
+        if len(phone_digits) == 10:
+            phone_digits = "91" + phone_digits
+        # Index by each name variant (before / after slash)
+        for name_part in teacher_name.split("/"):
+            key = _normalize_name(name_part)
+            if key:
+                pi_lookup[key] = phone_digits
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT DISTINCT person_id, name, phone FROM agent_registered_faces "
+            "WHERE role = 'Teacher'"
+        )
+        rows = await cursor.fetchall()
+
+        updated = 0
+        details = []
+        for row in rows:
+            existing_phone = row["phone"] or ""
+            person_name = row["name"] or ""
+            person_id = row["person_id"] or ""
+
+            # Try to match by name
+            name_key = _normalize_name(person_name)
+            pi_phone = pi_lookup.get(name_key, "")
+
+            if not pi_phone:
+                # Try matching by person_id parts
+                pid_parts = person_id.replace("TEACHER_", "").split("_")
+                for part in pid_parts:
+                    part_key = re.sub(r"[^a-z]", "", part.lower())
+                    if part_key in pi_lookup:
+                        pi_phone = pi_lookup[part_key]
+                        break
+
+            if pi_phone and pi_phone not in existing_phone:
+                new_phone = f"{existing_phone},{pi_phone}" if existing_phone else pi_phone
+                await db.execute(
+                    "UPDATE agent_registered_faces SET phone = ? "
+                    "WHERE person_id = ? COLLATE NOCASE",
+                    (new_phone, person_id),
+                )
+                updated += 1
+                details.append({
+                    "person_id": person_id,
+                    "name": person_name,
+                    "old_phone": existing_phone,
+                    "new_phone": new_phone,
+                })
+
+        await db.commit()
+        return {"updated": updated, "details": details}
     finally:
         await db.close()
