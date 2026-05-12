@@ -3955,6 +3955,28 @@ async def receive_whatsapp_message(request: Request):
             await send_whatsapp_message(reply_to, _act_msg)
             return {"status": "ok"}
 
+        # GUARD: If media is present but the image/media handler above didn't
+        # process it (e.g. forwarded image with unexpected typeMessage, or media
+        # that didn't match any priority), do NOT send to GPT.  Instead, ask the
+        # user what they want done with it — same as captionless-image flow.
+        if media_info and not is_teacher_green:
+            logger.info(f"[GREEN MEDIA GUARD] Media present but unprocessed — asking user. type={media_info.get('type')}")
+            _recent_images[sender] = {
+                "media_info": media_info,
+                "timestamp": _time_mod.time(),
+                "reply_to": reply_to,
+                "bot_phone": bot_phone,
+            }
+            _guard_ask = (
+                "What would you like me to do with this image/file?\n\n"
+                "If this is for *face registration*, reply with the person's name "
+                "(e.g. *Firstname Lastname Grade 5A*).\n"
+                "If you'd like to *forward* this, reply with your query."
+            )
+            await save_message(bot_phone, sender, _guard_ask, "whatsapp", "outgoing")
+            await send_whatsapp_message(reply_to, _guard_ask)
+            return {"status": "ok"}
+
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
         ai_response = await generate_response(message_text, system_prompt, history)
@@ -5304,6 +5326,30 @@ async def receive_cloud_api_message(request: Request):
                     # Parent media: forward to teacher(s)
                     logger.info(f"[MEDIA] General file/document from parent {sender}")
                     caption = (media_info.get("caption", "") or "").strip()
+
+                    # Guard: If image has no caption and the has_image check above
+                    # didn't catch it (e.g. missing cloud_media_id), still buffer
+                    # and ask rather than auto-forwarding.
+                    if not caption and media_info.get("type") == "imageMessage":
+                        _recent_images[sender] = {
+                            "media_info": media_info,
+                            "timestamp": _time_mod.time(),
+                            "reply_to": reply_to,
+                            "bot_phone": bot_phone,
+                        }
+                        logger.info(f"[IMAGE BUFFER FALLBACK] Captionless image without cloud_media_id from {sender}")
+                        _ask_msg_fb = (
+                            "What would you like me to do with this image?\n\n"
+                            "\u2022 For *face registration* \u2014 reply with the person's name "
+                            "(e.g. *Firstname Lastname Grade 5A*)\n"
+                            "\u2022 To *forward to a teacher* \u2014 reply with your query "
+                            "(e.g. \"Ask Reva ma'am about this\")\n"
+                            "\u2022 For *homework review* \u2014 reply with \"Check please\""
+                        )
+                        await save_message(bot_phone, sender, _ask_msg_fb, "whatsapp", "outgoing")
+                        await send_whatsapp_message(reply_to, _ask_msg_fb)
+                        return {"status": "ok"}
+
                     forward_text = caption if caption else "Shared a file/image"
 
                     # --- PRIORITY 1: Forward to teacher if caption mentions one ---
