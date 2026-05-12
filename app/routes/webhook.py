@@ -235,18 +235,25 @@ _FORWARDED_MSG_TTL = 120  # seconds — wait up to 2 minutes for parent's reply
 # concept — ALL parent queries are routed to the class teacher only, even if
 # the parent tags a different teacher by name.  Grade 3+ may tag any teacher.
 # ---------------------------------------------------------------------------
-_MOTHER_TEACHER_GRADES: set[str] = {
-    "Popsicles",
-    "Nursery 1", "Nursery 2", "Nursery 3",
-    "Prep 1", "Prep 2", "Prep 3",
-    "Grade 1A", "Grade 1B",
-    "Grade 2A", "Grade 2B",
-}
+_MOTHER_TEACHER_RE = re.compile(
+    r"^(?:"
+    r"popsicle[s]?"
+    r"|nursery[\s-]*[0-9]*"
+    r"|nur[\s-]*[0-9]+"
+    r"|prep[\s-]*[0-9]+"
+    r"|grade[\s-]*[12][\s-]*[a-c]"
+    r")$",
+    re.IGNORECASE,
+)
 
 
 def _is_mother_teacher_grade(grade: str) -> bool:
-    """Return True if *grade* falls under the mother-teacher policy."""
-    return grade in _MOTHER_TEACHER_GRADES
+    """Return True if *grade* falls under the mother-teacher policy.
+
+    Covers Popsicles, Nursery 1-3, Prep 1-3, and Grade 1A-C / 2A-C.
+    Case-insensitive and tolerant of hyphens/spacing variants.
+    """
+    return bool(_MOTHER_TEACHER_RE.match(grade.strip()))
 
 # ---------------------------------------------------------------------------
 # Global kill switch: when True the bot will NOT reply to any incoming message.
@@ -753,28 +760,37 @@ async def forward_to_teachers_and_confirm(
 
     # ── Mother Teacher policy: Popsicles – Grade 2 queries always go to
     # the class teacher, even if the parent tagged a different teacher.
+    # For multi-child parents, check which child the mentioned teacher
+    # corresponds to — only enforce the policy for that specific child.
     if parent_children:
-        child_grade = parent_children[0]["grade"]
-        if _is_mother_teacher_grade(child_grade):
-            ct_entry = find_teacher_by_grade(child_grade)
+        _mt_child = None
+        if len(parent_children) == 1:
+            if _is_mother_teacher_grade(parent_children[0]["grade"]):
+                _mt_child = parent_children[0]
+        else:
+            # Multi-child: match the mentioned teacher's grade to a child
+            for _mt_t in teachers:
+                _mt_grade = _mt_t.get("grade", "")
+                for _mt_c in parent_children:
+                    _c_norm = _mt_c["grade"].lower().replace(" ", "")
+                    _t_norm = _mt_grade.lower().replace(" ", "")
+                    if _c_norm == _t_norm and _is_mother_teacher_grade(_mt_c["grade"]):
+                        _mt_child = _mt_c
+                        break
+                if _mt_child:
+                    break
+        if _mt_child:
+            ct_entry = find_teacher_by_grade(_mt_child["grade"])
             if ct_entry:
                 logger.info(
-                    f"[MOTHER TEACHER] {child_grade} — redirecting to class teacher "
+                    f"[MOTHER TEACHER] {_mt_child['grade']} — redirecting to class teacher "
                     f"{ct_entry['teacher']} instead of mentioned teachers"
                 )
-                routed = await _forward_query_to_class_teacher(
+                await _forward_query_to_class_teacher(
                     sender, message_text, reply_to,
-                    parent_children[0], ct_entry, media_info,
+                    _mt_child, ct_entry, media_info,
                 )
-                if routed:
-                    ct_name = ct_entry["teacher"].split("/")[0].strip()
-                    _note = (
-                        f"For *{child_grade}*, all queries are handled by the "
-                        f"class teacher *{ct_name}*. Your message has been "
-                        f"forwarded to them."
-                    )
-                    await send_whatsapp_message(reply_to, _note)
-                    return
+                return
 
     if parent_children:
         # Use the first child (most common case: one child per parent)
