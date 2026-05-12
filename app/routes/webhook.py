@@ -743,6 +743,7 @@ async def forward_to_teachers_and_confirm(
 
     # Download media ONCE (reused for every teacher's WhatsApp + email)
     _dl_bytes, _dl_mime = await _download_media_bytes(media_info)
+    logger.info(f"[FWD MEDIA] Media download result: bytes={len(_dl_bytes) if _dl_bytes else 0}, mime={_dl_mime}, has_cloud_id={bool(media_info.get('cloud_media_id') if media_info else False)}, has_url={bool(media_info.get('url') if media_info else False)}")
 
     for entry in teachers:
         teacher_phone = entry.get("whatsapp", "")
@@ -2183,6 +2184,7 @@ async def _forward_query_to_class_teacher(
 
     # Download media ONCE — reused for WhatsApp and email
     _dl_bytes2, _dl_mime2 = await _download_media_bytes(media_info)
+    logger.info(f"[PARENT→TEACHER] Media download: bytes={len(_dl_bytes2) if _dl_bytes2 else 0}, mime={_dl_mime2}, has_cloud_id={bool(media_info.get('cloud_media_id') if media_info else False)}, has_url={bool(media_info.get('url') if media_info else False)}")
 
     # Forward via WhatsApp — try direct message first, fall back to template
     if teacher_phone:
@@ -3727,13 +3729,26 @@ async def receive_whatsapp_message(request: Request):
             _g_has_name = len(_g_name_words) >= 1 and not _g_is_non_name
             _g_has_class = bool(_CAPTION_CLASS_RE.search(_gcap_raw)) if _gcap_raw else False
 
-            if _g_has_name and not _g_has_class:
+            if _g_has_name and _g_has_class:
+                # Name + Class caption (e.g. "Aarav Sharma Grade 5A") → child face registration
+                logger.info(f"[GREEN] Child face registration (name+class) from {sender}: '{_gcap_raw[:60]}'")
+                try:
+                    _child_handled = await _try_register_child_face(
+                        sender, reply_to, bot_phone, media_info,
+                    )
+                    if _child_handled:
+                        return {"status": "ok"}
+                except Exception as _child_exc:
+                    logger.error(f"[GREEN] Child face reg error: {_child_exc}", exc_info=True)
+
+            elif _g_has_name and not _g_has_class:
+                # Name-only caption (e.g. "Alisha Ahuja") → teacher/staff face registration
                 _tname = _extract_person_name(_gcap_raw)
                 if not _tname:
                     _tname = f"Staff_{sender[-10:]}"
                 _sd = re.sub(r"\D", "", sender)
                 _sl10 = _sd[-10:] if len(_sd) >= 10 else _sd
-                logger.info(f"[GREEN] Face reg from caption name sender={sender} name='{_tname}'")
+                logger.info(f"[GREEN] Staff face reg from caption name sender={sender} name='{_tname}'")
                 try:
                     _handled = await _try_register_teacher_face(
                         sender, reply_to, bot_phone, media_info,
