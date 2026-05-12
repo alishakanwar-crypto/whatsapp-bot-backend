@@ -76,9 +76,9 @@ def _is_greeting(text: str) -> bool:
 
 GREETING_RESPONSE = (
     "Hello / नमस्कार,\n\n"
-    "Welcome to the Office Attendance Assistance System of "
+    "Welcome to the Face Recognition Attendance System of "
     "Shri Arjun Ram Meghwal Ji.\n"
-    "श्री अर्जुन राम मेघवाल जी के कार्यालय उपस्थिति सहायता प्रणाली "
+    "श्री अर्जुन राम मेघवाल जी की फेस रिकग्निशन अटेंडेंस सिस्टम "
     "में आपका स्वागत है।\n\n"
     "I am an automated bot designed only for office attendance "
     "and official work-related communication.\n"
@@ -89,15 +89,17 @@ GREETING_RESPONSE = (
     "along with your name.\n"
     "• फेस रजिस्ट्रेशन हेतु 2 स्पष्ट फ्रंट फेस फोटो के साथ "
     "अपना नाम साझा करें।\n\n"
-    "Please ensure the photographs are clear and recent.\n"
-    "कृपया सुनिश्चित करें कि फोटो स्पष्ट और हाल की हों।\n\n"
+    "Please ensure the photographs are clear, recent, "
+    "and properly visible.\n"
+    "कृपया सुनिश्चित करें कि फोटो स्पष्ट, हाल की एवं "
+    "सही रूप से दिखाई देने वाली हों।\n\n"
     "Thankyou / धन्यवाद"
 )
 
 UNRELATED_RESPONSE = (
-    "Kindly note that this system is restricted to official office "
-    "attendance and work-related communication only. / "
-    "कृपया ध्यान दें कि यह प्रणाली केवल कार्यालय उपस्थिति "
+    "Kindly note that this automated system is restricted to official "
+    "office attendance and work-related communication only. / "
+    "कृपया ध्यान दें कि यह स्वचालित प्रणाली केवल कार्यालय उपस्थिति "
     "एवं आधिकारिक कार्य संबंधी संवाद हेतु सीमित है।"
 )
 
