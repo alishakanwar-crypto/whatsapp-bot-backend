@@ -1,7 +1,7 @@
 """Generate and maintain a daily teacher attendance Excel workbook.
 
 The workbook lives at /data/teacher_attendance.xlsx and is updated after
-each attendance window closes (9:30 AM IST).  Each calendar month gets its
+each attendance window closes (8:00 AM IST).  Each calendar month gets its
 own worksheet.  Rows = teachers, columns = days of the month.
 
 Download via GET /api/dashboard/teacher-attendance-excel
@@ -317,6 +317,100 @@ async def generate_teacher_attendance_excel(target_date: date | None = None) -> 
     logger.info(f"TEACHER EXCEL: Saved {len(teacher_list)} teachers × "
                 f"{days_in_month} days to {EXCEL_PATH}")
     return str(EXCEL_PATH)
+
+
+async def send_teacher_attendance_summary() -> None:
+    """Send a WhatsApp summary of today's teacher attendance to admin after window closes."""
+    from app.services.whatsapp_service import send_whatsapp_message
+
+    ADMIN_PHONE = "918076455224"
+    today = datetime.now(IST).date()
+    day_name = today.strftime("%A")
+
+    # Skip Sundays
+    if today.weekday() == 6:
+        return
+    # Skip 2nd Saturday
+    if today.weekday() == 5:
+        sat_number = (today.day - 1) // 7 + 1
+        if sat_number == 2:
+            return
+
+    db = await get_db()
+    try:
+        # Get registered teachers
+        cursor = await db.execute(
+            "SELECT DISTINCT person_id, name FROM agent_registered_faces "
+            "WHERE person_id LIKE 'TEACHER_%' ORDER BY name"
+        )
+        teachers = await cursor.fetchall()
+        teacher_map = {}
+        for row in teachers:
+            pid = row[0]
+            if pid not in teacher_map:
+                teacher_map[pid] = row[1]
+
+        if not teacher_map:
+            return
+
+        # Get today's attendance records
+        today_str = today.isoformat()
+        cursor = await db.execute(
+            "SELECT person_id, student_name, logged_at FROM attendance_records "
+            "WHERE person_id LIKE 'TEACHER_%' AND date(logged_at) = ?",
+            (today_str,),
+        )
+        records = await cursor.fetchall()
+        present_ids = {rec[0] for rec in records}
+        present_names = sorted(rec[1] for rec in records)
+        absent_names = sorted(
+            name for pid, name in teacher_map.items() if pid not in present_ids
+        )
+    finally:
+        await db.close()
+
+    total = len(teacher_map)
+    present_count = len(present_ids)
+    absent_count = total - present_count
+
+    msg = (
+        f"📋 *Teacher Attendance Summary*\n"
+        f"📅 {today.strftime('%d %B %Y')} ({day_name})\n"
+        f"🕖 Window: 7:00 AM – 8:00 AM\n\n"
+        f"✅ *Present: {present_count}/{total}*\n"
+    )
+    if present_names:
+        for name in present_names:
+            msg += f"  • {name}\n"
+    else:
+        msg += "  _None detected_\n"
+
+    msg += f"\n❌ *Absent: {absent_count}/{total}*\n"
+    if absent_names:
+        for name in absent_names[:20]:
+            msg += f"  • {name}\n"
+        if len(absent_names) > 20:
+            msg += f"  _...and {len(absent_names) - 20} more_\n"
+    else:
+        msg += "  _All present!_\n"
+
+    try:
+        await send_whatsapp_message(ADMIN_PHONE, msg)
+        logger.info(f"TEACHER ATTENDANCE: Summary sent to admin — {present_count} present, {absent_count} absent")
+    except Exception as e:
+        logger.error(f"TEACHER ATTENDANCE: Failed to send summary: {e}")
+
+
+def generate_and_notify_sync() -> None:
+    """Generate Excel + send summary notification (synchronous wrapper for scheduler)."""
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(generate_teacher_attendance_excel())
+        loop.run_until_complete(send_teacher_attendance_summary())
+    except Exception as e:
+        logger.error(f"TEACHER EXCEL: Scheduled generation/notification failed: {e}", exc_info=True)
+    finally:
+        loop.close()
 
 
 def generate_teacher_attendance_excel_sync() -> None:
