@@ -1,9 +1,11 @@
 """Dashboard API routes for the PPIS School Command Center web app."""
 
 import logging
+import re
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import FileResponse
 
@@ -532,6 +534,81 @@ async def dashboard_update_face_phone(person_id: str, request: Request):
         return {"status": "ok", "updated": updated, "person_id": person_id, "phone": phone}
     finally:
         await db.close()
+
+
+# ── Bulk Face Registration ────────────────────────────────────────────────────
+
+@router.post("/faces/bulk-register")
+async def bulk_register_teacher_faces(request: Request):
+    """Bulk-register teacher faces from website photos.
+
+    Body: {"teachers": [{"name": "...", "phone": "91...", "photo_url": "https://..."}]}
+    Downloads each photo and inserts into agent_registered_faces.
+    """
+    body = await request.json()
+    teachers = body.get("teachers", [])
+    if not teachers:
+        return {"status": "error", "message": "No teachers provided"}
+
+    results = {"registered": 0, "skipped": 0, "failed": 0, "details": []}
+    db = await get_db()
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            for t in teachers:
+                name = t.get("name", "").strip()
+                phone = re.sub(r"\D", "", t.get("phone", ""))
+                photo_url = t.get("photo_url", "")
+                if not name or not photo_url:
+                    results["failed"] += 1
+                    results["details"].append({"name": name, "status": "missing_data"})
+                    continue
+
+                person_id = f"TEACHER_{phone}" if phone else f"TEACHER_{name.upper().replace(' ', '_')}"
+
+                # Check if already registered
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM agent_registered_faces WHERE person_id = ?",
+                    (person_id,),
+                )
+                row = await cursor.fetchone()
+                if row and row[0] > 0:
+                    results["skipped"] += 1
+                    results["details"].append({"name": name, "person_id": person_id, "status": "already_registered"})
+                    continue
+
+                # Download photo
+                try:
+                    resp = await client.get(photo_url)
+                    if resp.status_code != 200:
+                        results["failed"] += 1
+                        results["details"].append({"name": name, "status": f"download_failed_{resp.status_code}"})
+                        continue
+                    img_bytes = resp.content
+                    if len(img_bytes) < 1000:
+                        results["failed"] += 1
+                        results["details"].append({"name": name, "status": "image_too_small"})
+                        continue
+                except Exception as e:
+                    results["failed"] += 1
+                    results["details"].append({"name": name, "status": f"download_error: {e}"})
+                    continue
+
+                # Register
+                await db.execute(
+                    "INSERT INTO agent_registered_faces "
+                    "(person_id, name, role, phone, angle, image_data) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (person_id, name, "Teacher", phone, "front", img_bytes),
+                )
+                results["registered"] += 1
+                results["details"].append({"name": name, "person_id": person_id, "status": "registered"})
+                logger.info(f"Bulk registered teacher face: {name} ({person_id})")
+
+        await db.commit()
+    finally:
+        await db.close()
+
+    return results
 
 
 # ── Cameras ──────────────────────────────────────────────────────────────────
