@@ -2083,16 +2083,11 @@ async def try_route_parent_to_class_teacher(
     if _is_teacher_phone(sender):
         return False
 
-    # Skip homework-review images — they are handled by the AI reviewer,
-    # not forwarded to the class teacher.  Only block when media is an
-    # image; for non-image media (documents, videos) fall through so
-    # the parent still gets a response.
+    # Skip homework-review media — they are handled by the AI reviewer,
+    # not forwarded to the class teacher (not on WhatsApp, not on email).
     if media_info and _is_homework_caption(message_text):
-        _media_type = (media_info.get("type") or "").lower()
-        if "image" in _media_type:
-            logger.info(f"[SKIP FWD] Homework image detected — not forwarding to class teacher")
-            return False  # Return False so caller can fall through to homework review
-        # Non-image media with homework caption: let it fall through normally
+        logger.info(f"[SKIP FWD] Homework media detected — not forwarding to class teacher")
+        return False  # Return False so caller can fall through to homework review
 
     # Skip trivial / greeting messages
     stripped = message_text.strip()
@@ -5445,9 +5440,8 @@ async def receive_cloud_api_message(request: Request):
                     # "check hw", "check h.w."
                     _cap_lower = caption.lower() if caption else ""
                     _is_hw_check_request = _is_homework_caption(_cap_lower)
-                    is_image_msg = media_info.get("type") == "imageMessage"
-                    if is_image_msg and _is_hw_check_request:
-                        logger.info(f"[HOMEWORK REVIEW] Auto-reviewing image from parent {sender}")
+                    if _is_hw_check_request:
+                        logger.info(f"[HOMEWORK REVIEW] Auto-reviewing media from parent {sender}")
                         try:
                             from app.services.openai_service import generate_homework_review
                             img_bytes, img_mime = await _download_media_bytes(media_info)
