@@ -774,11 +774,6 @@ async def forward_to_teachers_and_confirm(
     if not teachers:
         return
 
-    # Never forward homework-review images to teachers
-    if media_info and _is_homework_caption(message_text):
-        logger.info(f"[SKIP FWD] Homework caption detected — not forwarding to teachers")
-        return
-
     # --- Look up the parent's child name and class from PI Sheet ---
     parent_children = await _lookup_parent_child_class(sender)
 
@@ -861,28 +856,23 @@ async def forward_to_teachers_and_confirm(
                 f"_Reply to this message \u2014 your response will be forwarded to the parent._"
             )
 
-            # Always send template first (works outside 24-hr window),
-            # then try freeform message as a follow-up.
-            tmpl_ok = await _send_tmpl(
-                t_recipient, "ppis_class_assignment",
-                body_params=[f"Query from {parent_label}", message_text[:400]],
-            )
-            if tmpl_ok:
-                wa_success = True
-                logger.info(f"[FWD] Template sent to {entry['teacher']}")
-                # Also try sending freeform message (richer formatting)
-                await _asyncio_relay.sleep(4)
-                _freeform_ok = await send_whatsapp_message(chat_id, _query_msg)
-                if _freeform_ok:
-                    logger.info(f"[FWD] Freeform query also sent to {entry['teacher']}")
+            # Try sending the query directly first (works if conversation
+            # window is already open).
+            wa_success = await send_whatsapp_message(chat_id, _query_msg)
+            if wa_success:
+                logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
             else:
-                # Template failed — try direct freeform as fallback
-                logger.warning(f"[FWD] Template failed for {entry['teacher']}, trying direct msg")
-                wa_success = await send_whatsapp_message(chat_id, _query_msg)
-                if wa_success:
-                    logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
+                # Conversation window closed — send template as fallback.
+                logger.info(f"[FWD] Direct msg failed, sending template for {entry['teacher']}")
+                tmpl_ok = await _send_tmpl(
+                    t_recipient, "ppis_class_assignment",
+                    body_params=[f"Query from {parent_label}", message_text[:400]],
+                )
+                if tmpl_ok:
+                    wa_success = True
+                    logger.info(f"[FWD] Template sent to {entry['teacher']}")
                 else:
-                    logger.error(f"[FWD] Both template and direct msg failed for {entry['teacher']}")
+                    logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
 
         # Always send email too (reliable channel with full query + attachment)
         email_success = False
@@ -2091,10 +2081,16 @@ async def try_route_parent_to_class_teacher(
     if _is_teacher_phone(sender):
         return False
 
-    # Never forward homework-review images to teachers
+    # Skip homework-review images — they are handled by the AI reviewer,
+    # not forwarded to the class teacher.  Only block when media is an
+    # image; for non-image media (documents, videos) fall through so
+    # the parent still gets a response.
     if media_info and _is_homework_caption(message_text):
-        logger.info(f"[SKIP FWD] Homework caption detected — not forwarding to class teacher")
-        return True  # Return True to prevent further processing
+        _media_type = (media_info.get("type") or "").lower()
+        if "image" in _media_type:
+            logger.info(f"[SKIP FWD] Homework image detected — not forwarding to class teacher")
+            return False  # Return False so caller can fall through to homework review
+        # Non-image media with homework caption: let it fall through normally
 
     # Skip trivial / greeting messages
     stripped = message_text.strip()
@@ -2252,28 +2248,23 @@ async def _forward_query_to_class_teacher(
             f"forwarded back to the parent._"
         )
 
-        # Always send template first (works outside 24-hr window),
-        # then try freeform message as a follow-up.
-        tmpl_ok = await send_cloud_template_message(
-            teacher_recipient, "ppis_class_assignment",
-            body_params=[f"Query from {parent_label}", message_text[:400]],
-        )
-        if tmpl_ok:
-            wa_success = True
-            logger.info(f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})")
-            # Also try sending freeform message (richer formatting)
-            await _asyncio.sleep(4)
-            _freeform_ok = await send_whatsapp_message(chat_id, query_msg)
-            if _freeform_ok:
-                logger.info(f"[PARENT→TEACHER] Freeform query also sent to {teacher_name}")
+        # Try sending the query directly first (works if conversation
+        # window is already open).
+        wa_success = await send_whatsapp_message(chat_id, query_msg)
+        if wa_success:
+            logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
         else:
-            # Template failed — try direct freeform as fallback
-            logger.warning(f"[PARENT→TEACHER] Template failed for {teacher_name}, trying direct msg")
-            wa_success = await send_whatsapp_message(chat_id, query_msg)
-            if wa_success:
-                logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
+            # Conversation window closed — send template as fallback.
+            logger.info(f"[PARENT→TEACHER] Direct msg failed, sending template for {teacher_name}")
+            tmpl_ok = await send_cloud_template_message(
+                teacher_recipient, "ppis_class_assignment",
+                body_params=[f"Query from {parent_label}", message_text[:400]],
+            )
+            if tmpl_ok:
+                wa_success = True
+                logger.info(f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})")
             else:
-                logger.error(f"[PARENT→TEACHER] Both template and direct msg failed for {teacher_name}")
+                logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
 
         if wa_success:
             # Save conversation for reply relay
