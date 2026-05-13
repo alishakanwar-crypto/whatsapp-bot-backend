@@ -774,11 +774,6 @@ async def forward_to_teachers_and_confirm(
     if not teachers:
         return
 
-    # Never forward homework-review images to teachers
-    if media_info and _is_homework_caption(message_text):
-        logger.info(f"[SKIP FWD] Homework caption detected — not forwarding to teachers")
-        return
-
     # --- Look up the parent's child name and class from PI Sheet ---
     parent_children = await _lookup_parent_child_class(sender)
 
@@ -862,27 +857,20 @@ async def forward_to_teachers_and_confirm(
             )
 
             # Try sending the query directly first (works if conversation
-            # window is already open). This avoids the confusing template.
+            # window is already open).
             wa_success = await send_whatsapp_message(chat_id, _query_msg)
             if wa_success:
                 logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
             else:
-                # Conversation window closed — send template to open a
-                # business-initiated window, then resend the actual query.
+                # Conversation window closed — send template as fallback.
                 logger.info(f"[FWD] Direct msg failed, sending template for {entry['teacher']}")
                 tmpl_ok = await _send_tmpl(
                     t_recipient, "ppis_class_assignment",
                     body_params=[f"Query from {parent_label}", message_text[:400]],
                 )
                 if tmpl_ok:
-                    # Wait for template delivery to open conversation window
-                    await _asyncio_relay.sleep(10)
-                    wa_success = await send_whatsapp_message(chat_id, _query_msg)
-                    if wa_success:
-                        logger.info(f"[FWD] Query sent after template to {entry['teacher']}")
-                    else:
-                        wa_success = True  # template itself was delivered
-                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered")
+                    wa_success = True
+                    logger.info(f"[FWD] Template sent to {entry['teacher']}")
                 else:
                     logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
 
@@ -2093,10 +2081,16 @@ async def try_route_parent_to_class_teacher(
     if _is_teacher_phone(sender):
         return False
 
-    # Never forward homework-review images to teachers
+    # Skip homework-review images — they are handled by the AI reviewer,
+    # not forwarded to the class teacher.  Only block when media is an
+    # image; for non-image media (documents, videos) fall through so
+    # the parent still gets a response.
     if media_info and _is_homework_caption(message_text):
-        logger.info(f"[SKIP FWD] Homework caption detected — not forwarding to class teacher")
-        return True  # Return True to prevent further processing
+        _media_type = (media_info.get("type") or "").lower()
+        if "image" in _media_type:
+            logger.info(f"[SKIP FWD] Homework image detected — not forwarding to class teacher")
+            return False  # Return False so caller can fall through to homework review
+        # Non-image media with homework caption: let it fall through normally
 
     # Skip trivial / greeting messages
     stripped = message_text.strip()
@@ -2255,27 +2249,20 @@ async def _forward_query_to_class_teacher(
         )
 
         # Try sending the query directly first (works if conversation
-        # window is already open). This avoids the confusing template.
+        # window is already open).
         wa_success = await send_whatsapp_message(chat_id, query_msg)
         if wa_success:
             logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
         else:
-            # Conversation window closed — send template to open a
-            # business-initiated window, then resend the actual query.
+            # Conversation window closed — send template as fallback.
             logger.info(f"[PARENT→TEACHER] Direct msg failed, sending template for {teacher_name}")
             tmpl_ok = await send_cloud_template_message(
                 teacher_recipient, "ppis_class_assignment",
                 body_params=[f"Query from {parent_label}", message_text[:400]],
             )
             if tmpl_ok:
-                # Wait for template delivery to open conversation window
-                await _asyncio.sleep(10)
-                wa_success = await send_whatsapp_message(chat_id, query_msg)
-                if wa_success:
-                    logger.info(f"[PARENT→TEACHER] Query sent after template to {teacher_name}")
-                else:
-                    wa_success = True  # template itself was delivered
-                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered")
+                wa_success = True
+                logger.info(f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})")
             else:
                 logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
 
