@@ -851,15 +851,13 @@ async def generate_homework_review(
     student_name: str = "",
     grade: str = "",
 ) -> str:
-    """Analyze a homework/notebook photo using a two-step approach.
+    """Analyze a homework/notebook photo using GPT-4o vision.
 
-    Step 1: GPT-4o reads the handwritten numbers (OCR only)
-    Step 2: Python verifies the math (100% accurate computation)
-
-    This prevents GPT from marking correct answers as wrong.
+    All subjects (including math) are reviewed directly by the AI looking
+    at the actual image.  This avoids OCR misreads that caused Python to
+    mark correct answers as wrong.
     """
     import base64
-    import json
 
     ai_client = get_client()
     if ai_client is None:
@@ -872,215 +870,11 @@ async def generate_homework_review(
     try:
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         data_uri = f"data:{mime_type};base64,{b64}"
-
         caption_text = caption.strip() if caption else ""
 
-        # ---------------------------------------------------------------
-        # STEP 1: GPT reads the handwritten content (OCR only)
-        # ---------------------------------------------------------------
-        ocr_prompt = (
-            "You are an OCR expert reading a student's handwritten math homework.\n\n"
-            "Look at this image and extract ALL the math problems.\n\n"
-            "STRUCTURE OF EACH PROBLEM:\n"
-            "Each problem has a column format like this:\n"
-            "   Th  H  T  O\n"
-            "    3  2  4  6    ← operand 1 (3246)\n"
-            "    3  1  2  3    ← operand 2 (3123)\n"
-            "    ──────────    ← answer line (drawn by student)\n"
-            "    6  3  6  9    ← student's answer (6369)\n\n"
-            "CRITICAL: HOW TO IDENTIFY OPERANDS vs ANSWER:\n"
-            "- ALL numbers ABOVE the underline/drawn line are OPERANDS (numbers being added)\n"
-            "- There can be 2, 3, or even 4 operands stacked above the line\n"
-            "- The ONLY number BELOW the final drawn line is the student's ANSWER\n"
-            "- If you see 3 numbers above a line: ALL THREE are operands, the 4th below is the answer\n"
-            "- Example with 3 operands:\n"
-            "    8  0  2  5    ← operand 1\n"
-            "    1  2  9  4    ← operand 2\n"
-            "       3  9  8    ← operand 3 (this is NOT the answer — it's above the line!)\n"
-            "    ──────────    ← line\n"
-            "    9  7  1  7    ← THIS is the student's answer\n\n"
-            "READING TIPS:\n"
-            "- Th=Thousands, H=Hundreds, T=Tens, O=Ones\n"
-            "- Read each row as one complete number\n"
-            "- Small circled numbers above columns = carry marks (IGNORE, not part of numbers)\n"
-            "- If a number has fewer digits (e.g. 3 digits in a 4-digit column), "
-            "the missing leading position is blank/zero\n"
-            "- Read each digit carefully: 0 vs 9, 1 vs 7, 3 vs 8 can look similar\n\n"
-            "If the image is NOT math homework, respond with:\n"
-            '{\"is_math\": false, \"subject\": \"[subject]\", \"description\": \"[what you see]\"}\n\n'
-            "If it IS math homework, respond with ONLY this JSON (no other text):\n"
-            "{\n"
-            '  "is_math": true,\n'
-            '  "subject": "Mathematics",\n'
-            '  "topic": "Addition of 4-digit numbers",\n'
-            '  "problems": [\n'
-            '    {"label": "a", "operation": "+", "operands": [3246, 3123], "student_answer": 6369},\n'
-            '    {"label": "b", "operation": "+", "operands": [8025, 1294, 398], "student_answer": 9717}\n'
-            "  ]\n"
-            "}\n\n"
-            "IMPORTANT:\n"
-            "- Output ONLY valid JSON, no markdown, no code fences\n"
-            "- The student's answer is ALWAYS the number BELOW the final underline\n"
-            "- Count the numbers above each line carefully — they are ALL operands\n"
-            "- Include ALL problems visible in the image\n"
-            "- If a problem has 3 rows of numbers above the line, that's 3 operands"
+        return await _homework_review_fallback(
+            ai_client, data_uri, student_name, grade, caption_text
         )
-
-        if caption_text:
-            ocr_prompt += f"\n\nParent's note: {caption_text}"
-
-        ocr_messages: list[dict] = [
-            {"role": "system", "content": "You are a precise OCR system. Output only valid JSON. Read handwritten digits with extreme care."},
-            {"role": "user", "content": [
-                {"type": "text", "text": ocr_prompt},
-                {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
-            ]},
-        ]
-
-        ocr_response = await ai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=ocr_messages,
-            max_tokens=1500,
-            temperature=0.0,
-        )
-
-        ocr_text = ocr_response.choices[0].message.content or ""
-        ocr_text = ocr_text.strip()
-        # Strip markdown code fences if present
-        if ocr_text.startswith("```"):
-            ocr_text = ocr_text.split("\n", 1)[1] if "\n" in ocr_text else ocr_text[3:]
-            if ocr_text.endswith("```"):
-                ocr_text = ocr_text[:-3].strip()
-
-        logger.info(f"[HOMEWORK REVIEW] OCR result: {ocr_text[:500]}")
-
-        try:
-            data = json.loads(ocr_text)
-        except json.JSONDecodeError:
-            # If JSON parsing fails, fall back to single-step approach
-            logger.warning("[HOMEWORK REVIEW] OCR JSON parse failed, using fallback")
-            return await _homework_review_fallback(
-                ai_client, data_uri, student_name, grade, caption_text
-            )
-
-        # ---------------------------------------------------------------
-        # STEP 2: Python does the math verification (100% accurate)
-        # ---------------------------------------------------------------
-        if not data.get("is_math"):
-            # Not math homework — generate a general review
-            return await _homework_review_fallback(
-                ai_client, data_uri, student_name, grade, caption_text
-            )
-
-        subject = data.get("subject", "Mathematics")
-        topic = data.get("topic", "Math")
-        problems = data.get("problems", [])
-
-        if not problems:
-            return await _homework_review_fallback(
-                ai_client, data_uri, student_name, grade, caption_text
-            )
-
-        # Verify each problem with Python math
-        results: list[str] = []
-        correct_count = 0
-        total_count = len(problems)
-
-        def _compute(operation: str, operands: list) -> int | None:
-            """Compute the correct answer for given operation and operands."""
-            try:
-                if operation == "+":
-                    return sum(operands)
-                elif operation == "-":
-                    return operands[0] - sum(operands[1:])
-                elif operation in ("*", "×"):
-                    r = 1
-                    for n in operands:
-                        r *= n
-                    return r
-                elif operation in ("/", "÷"):
-                    return operands[0] // operands[1] if len(operands) > 1 else operands[0]
-                else:
-                    return sum(operands)
-            except Exception:
-                return None
-
-        for p in problems:
-            label = p.get("label", "?")
-            operation = p.get("operation", "+")
-            operands = p.get("operands", [])
-            student_ans = p.get("student_answer")
-
-            if not operands or student_ans is None:
-                continue
-
-            correct_ans = _compute(operation, operands)
-            if correct_ans is None:
-                continue
-
-            # Note: Structural misread detection is handled below in the comparison logic
-
-            # Format the problem string
-            op_symbol = operation if operation in ("+", "-") else ("×" if operation in ("*", "×") else "÷")
-            problem_str = f" {op_symbol} ".join(str(n) for n in operands)
-
-            # Compare student answer to correct answer
-            student_int = int(student_ans)
-            correct_int = int(correct_ans)
-
-            if student_int == correct_int:
-                results.append(f"• ✅ ({label}) {problem_str} = {correct_ans} — Correct!")
-                correct_count += 1
-            elif operation == "+" and correct_int > 0 and student_int < correct_int * 0.85:
-                # For addition, student's answer should be close to or above the sum.
-                # If student_ans is much less than the computed sum (< 85%), it's very
-                # likely that GPT misidentified an operand as the answer.
-                # (Genuine carry errors produce answers within ~2% of correct.)
-                # Include the "student_answer" as a likely operand instead.
-                extended_operands = operands + [student_int]
-                extended_sum = sum(extended_operands)
-                problem_str_ext = f" {op_symbol} ".join(str(n) for n in extended_operands)
-                results.append(
-                    f"• ✅ ({label}) {problem_str_ext} = {extended_sum} — Correct!"
-                )
-                correct_count += 1
-                logger.info(
-                    f"[HOMEWORK REVIEW] Problem ({label}): reinterpreted structure. "
-                    f"Original: operands={operands}, ans={student_ans}. "
-                    f"Reinterpreted: operands={extended_operands}, sum={extended_sum}"
-                )
-            else:
-                results.append(
-                    f"• ❌ ({label}) {problem_str} — Student wrote {student_ans}. "
-                    f"Correct answer: {correct_ans}."
-                )
-
-        # ---------------------------------------------------------------
-        # STEP 3: Format the final response
-        # ---------------------------------------------------------------
-        first_name = student_name.split()[0] if student_name else ""
-        greeting = f"Great effort, {first_name}! ⭐\nI reviewed your homework carefully.\n\n" if first_name else "Great effort! ⭐\nI reviewed your homework carefully.\n\n"
-
-        header = "📚 *Homework Review*\n"
-        if student_name:
-            header += f"*Student:* {student_name}\n"
-        header += f"*Subject:* {subject}\n"
-        header += f"*Topic:* {topic}\n"
-
-        results_str = "\n".join(results)
-
-        score_str = f"*Score:* {correct_count} out of {total_count} correct"
-
-        if correct_count == total_count:
-            overall = "*Overall Performance:* Excellent ✅\nAll answers are correct. Keep it up! 🌟"
-        elif correct_count >= total_count * 0.7:
-            overall = "*Overall Performance:* Very Good ✅\nMost answers are correct. Just review the ones marked ❌ and practice carrying over numbers. You're doing well!"
-        elif correct_count >= total_count * 0.4:
-            overall = "*Overall Performance:* Good\nKeep practicing — focus on carrying over numbers carefully when adding columns. You'll get better with practice! 💪"
-        else:
-            overall = "*Overall Performance:* Needs Improvement\nKeep trying! Practice makes perfect. Focus on adding one column at a time and remember to carry over when a column adds up to 10 or more. You can do it! 💪"
-
-        return f"{greeting}{header}\n*Results:*\n{results_str}\n\n{score_str}\n\n{overall}\n\nKeep practicing and your work will become even better!"
 
     except Exception as e:
         logger.error(f"Homework review vision error: {e}", exc_info=True)
@@ -1148,12 +942,25 @@ async def _homework_review_fallback(
         "• Never skip portions of homework silently.\n\n"
 
         # ── MATHEMATICS & SCIENCE ──
-        "MATHEMATICS & SCIENCE ACCURACY:\n"
-        "• Verify every step carefully and recalculate all answers\n"
-        "• Check formulas, validate units, verify diagrams and labels\n"
-        "• Detect conceptual misunderstanding\n"
-        "• Explain where the student went wrong\n"
-        "• Provide the correct method step-by-step\n\n"
+        "MATHEMATICS & SCIENCE ACCURACY (CRITICAL):\n"
+        "• For EVERY math problem: read the operands and operation from "
+        "the image, then compute the correct answer yourself BEFORE "
+        "comparing to the student's answer.\n"
+        "• Show your working: write out the calculation step-by-step "
+        "(e.g. 3246 + 3123 = 6369) so the parent can see you verified.\n"
+        "• For column addition/subtraction: check each column right-to-"
+        "left, verify carry-over digits.\n"
+        "• For multiplication: verify each partial product and the final "
+        "sum.\n"
+        "• For division: verify quotient × divisor + remainder = dividend.\n"
+        "• Check formulas, validate units, verify diagrams and labels.\n"
+        "• Detect conceptual misunderstanding.\n"
+        "• If you mark an answer WRONG, you MUST show the correct "
+        "calculation step-by-step to prove it.\n"
+        "• NEVER mark a correct answer as wrong. Double-check your own "
+        "computation before declaring an error.\n"
+        "• Read handwritten digits very carefully: 0 vs 9, 1 vs 7, "
+        "3 vs 8, 5 vs 6 can look similar in children's handwriting.\n\n"
 
         # ── LANGUAGE REVIEW ──
         "LANGUAGE REVIEW INTELLIGENCE:\n"
