@@ -227,21 +227,23 @@ _RECENT_IMAGE_TTL = 30  # seconds — link image + name within 30s
 
 # Homework review keywords — images with these captions are reviewed by AI
 # and must NEVER be forwarded to teachers (not on WhatsApp, not on email).
-_HOMEWORK_KEYWORDS = frozenset([
+_HOMEWORK_REVIEW_KEYWORDS = frozenset([
     "check", "chk", "plz check", "pls check",
     "check please", "please check", "check homework",
     "check hw", "check h.w.", "check h.w",
     "review homework", "homework check", "homework review",
     "chk hw", "chk homework",
+    "check classwork", "review classwork", "classwork check",
+    "chk classwork",
 ])
 
 
 def _is_homework_caption(text: str) -> bool:
-    """Return True if *text* looks like a homework-review request."""
+    """Return True if *text* looks like a homework-review request (case-insensitive)."""
     t = text.strip().lower()
-    if t in _HOMEWORK_KEYWORDS:
+    if t in _HOMEWORK_REVIEW_KEYWORDS:
         return True
-    return any(t.startswith(kw) for kw in _HOMEWORK_KEYWORDS if " " in kw)
+    return any(t.startswith(kw) for kw in _HOMEWORK_REVIEW_KEYWORDS if " " in kw)
 
 
 # Buffer for forwarded messages — when a parent forwards content, we ask
@@ -3681,6 +3683,8 @@ async def receive_whatsapp_message(request: Request):
                 "check please", "check homework", "check hw", "check h.w.", "check h.w",
                 "review homework", "homework check", "homework review",
                 "chk hw", "chk homework", "plz check", "pls check",
+                "check classwork", "review classwork", "classwork check",
+                "chk classwork", "classwork",
                 "chk", "hi", "hello",
                 "help", "thanks", "thank you", "ok", "yes", "no", "please",
                 "good morning", "good afternoon", "good evening", "show",
@@ -3793,17 +3797,7 @@ async def receive_whatsapp_message(request: Request):
 
             # PRIORITY 2: Homework review — "check"/"check please"/"please check" etc.
             # Only runs when no specific teacher was mentioned in the caption.
-            _is_hw_check = (
-                _hw_cap_low_g in ("check", "chk", "plz check", "pls check") or
-                any(
-                    _hw_cap_low_g.startswith(kw) for kw in [
-                        "check please", "please check", "check homework",
-                        "check hw", "check h.w.", "check h.w",
-                        "review homework", "homework check", "homework review",
-                        "chk hw", "chk homework",
-                    ]
-                )
-            )
+            _is_hw_check = _is_homework_caption(_hw_cap_low_g)
             if _is_hw_check:
                 logger.info(f"[GREEN HW] Homework check detected for {sender}, caption='{_hw_cap_low_g}'")
                 try:
@@ -4493,6 +4487,8 @@ _NON_NAME_CAPTIONS = {
     "check please", "check homework", "check hw", "check h.w.", "check h.w",
     "review homework", "homework check", "homework review",
     "chk hw", "chk homework", "plz check", "pls check",
+    "check classwork", "review classwork", "classwork check",
+    "chk classwork", "classwork",
     "hi", "hello",
     "help", "thanks", "thank you", "ok", "yes", "no", "please",
     "good morning", "good afternoon", "good evening", "show",
@@ -5448,17 +5444,7 @@ async def receive_cloud_api_message(request: Request):
                     # Keywords: "check please", "please check", "check homework",
                     # "check hw", "check h.w."
                     _cap_lower = caption.lower() if caption else ""
-                    _is_hw_check_request = (
-                        _cap_lower in ("check", "chk", "plz check", "pls check") or
-                        any(
-                            _cap_lower.startswith(kw) for kw in [
-                                "check please", "please check", "check homework",
-                                "check hw", "check h.w.", "check h.w",
-                                "review homework", "homework check", "homework review",
-                                "chk hw", "chk homework",
-                            ]
-                        )
-                    )
+                    _is_hw_check_request = _is_homework_caption(_cap_lower)
                     is_image_msg = media_info.get("type") == "imageMessage"
                     if is_image_msg and _is_hw_check_request:
                         logger.info(f"[HOMEWORK REVIEW] Auto-reviewing image from parent {sender}")
