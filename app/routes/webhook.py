@@ -830,18 +830,17 @@ async def forward_to_teachers_and_confirm(
             if len(t_recipient) == 10:
                 t_recipient = "91" + t_recipient
 
+            # Text-only WhatsApp notification — attachments go via email only
             _query_msg = (
-                f"\U0001f4e9 *Query from {parent_label}:*\n\n"
-                f"\"{message_text[:500]}\"\n\n"
+                f"\U0001f4e9 *{parent_label}* has sent a query on email.\n\n"
+                f"Please check your email and revert.\n\n"
                 f"_Reply to this message \u2014 your response will be forwarded to the parent._"
             )
 
             # Try sending the query directly first (works if conversation
             # window is already open). This avoids the confusing template.
-            _window_open = False
             wa_success = await send_whatsapp_message(chat_id, _query_msg)
             if wa_success:
-                _window_open = True
                 logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
             else:
                 # Conversation window closed — send template to open a
@@ -856,51 +855,12 @@ async def forward_to_teachers_and_confirm(
                     await _asyncio_relay.sleep(10)
                     wa_success = await send_whatsapp_message(chat_id, _query_msg)
                     if wa_success:
-                        _window_open = True
                         logger.info(f"[FWD] Query sent after template to {entry['teacher']}")
                     else:
                         wa_success = True  # template itself was delivered
-                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered (window not open for media)")
+                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered")
                 else:
                     logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
-
-            # Send media attachment using pre-downloaded bytes.
-            # Only attempt if the freeform window is confirmed open —
-            # if only the template was delivered, the window may not
-            # support freeform media yet (teacher phone offline).
-            if _window_open and _dl_bytes and media_info:
-                from app.services.whatsapp_service import (
-                    upload_media_bytes_cloud as _upload_bytes,
-                    send_cloud_media as _send_media,
-                )
-                _mcap = media_info.get("caption", "")
-                _int_type = media_info.get("type", "")
-                _tmap = {
-                    "imageMessage": "image", "videoMessage": "video",
-                    "documentMessage": "document", "audioMessage": "audio",
-                }
-                _ctype = _tmap.get(_int_type, "document")
-                _fn = media_info.get("filename", "file")
-                _mok = False
-                for _att in range(3):
-                    if _att > 0:
-                        await _asyncio_relay.sleep(4 * _att)
-                    try:
-                        _mid = await _upload_bytes(_dl_bytes, _dl_mime, _fn)
-                        if _mid:
-                            _mok = await _send_media(
-                                chat_id, _ctype,
-                                media_id=_mid, caption=_mcap,
-                                filename=_fn if _ctype == "document" else "",
-                            )
-                        if _mok:
-                            break
-                    except Exception as _me:
-                        logger.error(f"[FWD MEDIA] attempt {_att+1} error: {_me}")
-                if _mok:
-                    logger.info(f"[FWD MEDIA] Media sent to {entry['teacher']}")
-                else:
-                    logger.warning(f"[FWD MEDIA] WhatsApp media failed for {entry['teacher']} — email has attachment")
 
         # Always send email too (reliable channel with full query + attachment)
         email_success = False
@@ -925,13 +885,7 @@ async def forward_to_teachers_and_confirm(
                 logger.error(f"Failed to forward via email to {entry['teacher']} ({teacher_email})")
 
         if wa_success or email_success:
-            methods = []
-            if wa_success:
-                methods.append("WhatsApp")
-            if email_success:
-                methods.append("email")
-            method = " & ".join(methods)
-            forwarded_names.append(f"{teacher_display} ({entry['grade']}) via {method}")
+            forwarded_names.append(f"{teacher_display} ({entry['grade']}) via email")
             # Save conversation context for 2-way relay (only if WhatsApp worked)
             if wa_success:
                 await save_forwarded_conversation(
@@ -2263,19 +2217,18 @@ async def _forward_query_to_class_teacher(
         if len(teacher_recipient) == 10:
             teacher_recipient = "91" + teacher_recipient
 
+        # Text-only WhatsApp notification — attachments go via email only
         query_msg = (
-            f"\U0001f4e9 *Query from {parent_label}:*\n\n"
-            f"\"{message_text[:500]}\"\n\n"
-            f"_Kindly reply to this message and your response will be "
+            f"\U0001f4e9 *{parent_label}* has sent a query on email.\n\n"
+            f"Please check your email and revert.\n\n"
+            f"_Reply to this message \u2014 your response will be "
             f"forwarded back to the parent._"
         )
 
         # Try sending the query directly first (works if conversation
         # window is already open). This avoids the confusing template.
-        _window_open2 = False
         wa_success = await send_whatsapp_message(chat_id, query_msg)
         if wa_success:
-            _window_open2 = True
             logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
         else:
             # Conversation window closed — send template to open a
@@ -2290,55 +2243,12 @@ async def _forward_query_to_class_teacher(
                 await _asyncio.sleep(10)
                 wa_success = await send_whatsapp_message(chat_id, query_msg)
                 if wa_success:
-                    _window_open2 = True
                     logger.info(f"[PARENT→TEACHER] Query sent after template to {teacher_name}")
                 else:
                     wa_success = True  # template itself was delivered
-                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered (window not open for media)")
+                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered")
             else:
                 logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
-
-        # Send media attachment using pre-downloaded bytes.
-        # Only attempt if the freeform window is confirmed open —
-        # if only the template was delivered, the window may not
-        # support freeform media yet (teacher phone offline).
-        if _window_open2 and _dl_bytes2 and media_info:
-            from app.services.whatsapp_service import (
-                upload_media_bytes_cloud,
-                send_cloud_media,
-            )
-            media_caption = media_info.get("caption", "")
-            _internal_type = media_info.get("type", "")
-            _type_map = {
-                "imageMessage": "image", "videoMessage": "video",
-                "documentMessage": "document", "audioMessage": "audio",
-            }
-            _cloud_type = _type_map.get(_internal_type, "document")
-            _fname = media_info.get("filename", "file")
-            media_fwd_ok = False
-            # Retry up to 3 times with increasing delay
-            for _attempt in range(3):
-                if _attempt > 0:
-                    await _asyncio.sleep(4 * _attempt)
-                try:
-                    _fresh_id = await upload_media_bytes_cloud(
-                        _dl_bytes2, _dl_mime2, _fname,
-                    )
-                    if _fresh_id:
-                        media_fwd_ok = await send_cloud_media(
-                            chat_id, _cloud_type,
-                            media_id=_fresh_id,
-                            caption=media_caption,
-                            filename=_fname if _cloud_type == "document" else "",
-                        )
-                    if media_fwd_ok:
-                        break
-                except Exception as mf_exc:
-                    logger.error(f"[PARENT→TEACHER] Media forward attempt {_attempt+1} error: {mf_exc}")
-            if media_fwd_ok:
-                logger.info(f"[PARENT→TEACHER] Media sent to {teacher_name}")
-            else:
-                logger.warning(f"[PARENT→TEACHER] WhatsApp media failed for {teacher_name} — email has attachment")
 
         if wa_success:
             # Save conversation for reply relay
@@ -2410,17 +2320,10 @@ async def _forward_query_to_class_teacher(
         logger.error(f"Relay tracking error (class_teacher_route): {_relay_ct_err}")
 
     # Confirm to the parent
-    methods = []
-    if wa_success:
-        methods.append("WhatsApp")
-    if email_success:
-        methods.append("email")
-    method_str = " and ".join(methods) if methods else "the school"
-
     confirm_msg = (
         f"{_greeting(sender)},\n\n"
         f"Your query has been forwarded to *{teacher_name}* "
-        f"(Class Teacher, {teacher_grade}) via {method_str}.\n\n"
+        f"(Class Teacher, {teacher_grade}) via email.\n\n"
         f"You will receive the response as soon as the teacher replies.\n\n"
         f"Thank you for your cooperation.\n"
         f"Warm regards,\nPP International School"
@@ -2429,7 +2332,7 @@ async def _forward_query_to_class_teacher(
 
     logger.info(
         f"[PARENT→TEACHER] Query from {sender} ({parent_label}) → "
-        f"{teacher_name} ({teacher_grade}) via {method_str}"
+        f"{teacher_name} ({teacher_grade}) via email"
     )
     return True
 
@@ -5610,26 +5513,23 @@ async def receive_cloud_api_message(request: Request):
                                 import asyncio as _asyncio_fwd
                                 from app.services.whatsapp_service import (
                                     send_cloud_template_message as _send_tmpl3,
-                                    upload_media_bytes_cloud as _upload_bytes3,
-                                    send_cloud_media as _send_media3,
                                 )
                                 chat_id = _teacher_chat_id(teacher_phone)
                                 _trec = teacher_phone
                                 if len(_trec) == 10:
                                     _trec = "91" + _trec
 
+                                # Text-only WhatsApp notification — attachments go via email only
                                 _query_msg = (
-                                    f"\U0001f4e9 *File from {parent_label}:*\n\n"
-                                    f"\"{forward_text[:500]}\"\n\n"
+                                    f"\U0001f4e9 *{parent_label}* has sent a query on email.\n\n"
+                                    f"Please check your email and revert.\n\n"
                                     f"_Reply to this message \u2014 your response will be forwarded to the parent._"
                                 )
 
                                 # Try sending the query directly first (works if
                                 # conversation window is already open).
-                                _window_open3 = False
                                 _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
                                 if _fwd_ok:
-                                    _window_open3 = True
                                     logger.info(f"[CLOUD FILE FWD] Direct query sent to {teacher_name}")
                                 else:
                                     # Conversation window closed — send template to
@@ -5644,44 +5544,12 @@ async def receive_cloud_api_message(request: Request):
                                         await _asyncio_fwd.sleep(10)
                                         _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
                                         if _fwd_ok:
-                                            _window_open3 = True
                                             logger.info(f"[CLOUD FILE FWD] Query sent after template to {teacher_name}")
                                         else:
                                             _fwd_ok = True  # template itself was delivered
-                                            logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}, template delivered (window not open for media)")
+                                            logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}, template delivered")
                                     else:
                                         logger.error(f"[CLOUD FILE FWD] Both direct msg and template failed for {teacher_name}")
-
-                                # Send media attachment using pre-downloaded bytes.
-                                # Only attempt if the freeform window is confirmed open.
-                                if _window_open3 and _dl_bytes3 and media_info:
-                                    _int_type3 = media_info.get("type", "")
-                                    _tmap3 = {
-                                        "imageMessage": "image", "videoMessage": "video",
-                                        "documentMessage": "document", "audioMessage": "audio",
-                                    }
-                                    _ctype3 = _tmap3.get(_int_type3, "document")
-                                    _fn3 = media_info.get("filename", "file")
-                                    _mok3 = False
-                                    for _att3 in range(3):
-                                        if _att3 > 0:
-                                            await _asyncio_fwd.sleep(4 * _att3)
-                                        try:
-                                            _mid3 = await _upload_bytes3(_dl_bytes3, _dl_mime3, _fn3)
-                                            if _mid3:
-                                                _mok3 = await _send_media3(
-                                                    chat_id, _ctype3,
-                                                    media_id=_mid3, caption=caption,
-                                                    filename=_fn3 if _ctype3 == "document" else "",
-                                                )
-                                            if _mok3:
-                                                break
-                                        except Exception as _me3:
-                                            logger.error(f"[CLOUD FILE FWD] Media forward attempt {_att3+1} error: {_me3}")
-                                    if _mok3:
-                                        logger.info(f"[CLOUD FILE FWD] Media sent to {teacher_name}")
-                                    else:
-                                        logger.warning(f"[CLOUD FILE FWD] WhatsApp media failed for {teacher_name} — email has attachment")
 
                             # Always send email with attachment (reliable channel)
                             if teacher_email:
@@ -5717,8 +5585,8 @@ async def receive_cloud_api_message(request: Request):
                                     original_message=forward_text[:500],
                                 )
                                 confirm = (
-                                    f"Your file has been forwarded to *{teacher_name}* "
-                                    f"({grade_teacher['grade']}). "
+                                    f"Your query has been forwarded to *{teacher_name}* "
+                                    f"({grade_teacher['grade']}) via email. "
                                     f"You will receive a reply when the teacher responds."
                                 )
                                 await save_message(bot_phone, sender, confirm, "whatsapp", "outgoing")
