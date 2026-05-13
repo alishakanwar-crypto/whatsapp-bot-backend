@@ -3663,6 +3663,8 @@ async def receive_whatsapp_message(request: Request):
             _G_NON_NAME = [
                 "homework", "check", "check this", "please check",
                 "check please", "check homework", "check hw", "check h.w.", "check h.w",
+                "review homework", "homework check", "homework review",
+                "chk hw", "chk homework", "plz check", "pls check",
                 "chk", "hi", "hello",
                 "help", "thanks", "thank you", "ok", "yes", "no", "please",
                 "good morning", "good afternoon", "good evening", "show",
@@ -3776,11 +3778,13 @@ async def receive_whatsapp_message(request: Request):
             # PRIORITY 2: Homework review — "check"/"check please"/"please check" etc.
             # Only runs when no specific teacher was mentioned in the caption.
             _is_hw_check = (
-                _hw_cap_low_g in ("check", "chk") or
+                _hw_cap_low_g in ("check", "chk", "plz check", "pls check") or
                 any(
                     _hw_cap_low_g.startswith(kw) for kw in [
                         "check please", "please check", "check homework",
                         "check hw", "check h.w.", "check h.w",
+                        "review homework", "homework check", "homework review",
+                        "chk hw", "chk homework",
                     ]
                 )
             )
@@ -4471,6 +4475,8 @@ _FORWARDING_PHRASES = [
 _NON_NAME_CAPTIONS = {
     "homework", "check", "check this", "please check",
     "check please", "check homework", "check hw", "check h.w.", "check h.w",
+    "review homework", "homework check", "homework review",
+    "chk hw", "chk homework", "plz check", "pls check",
     "hi", "hello",
     "help", "thanks", "thank you", "ok", "yes", "no", "please",
     "good morning", "good afternoon", "good evening", "show",
@@ -5427,11 +5433,13 @@ async def receive_cloud_api_message(request: Request):
                     # "check hw", "check h.w."
                     _cap_lower = caption.lower() if caption else ""
                     _is_hw_check_request = (
-                        _cap_lower in ("check", "chk") or
+                        _cap_lower in ("check", "chk", "plz check", "pls check") or
                         any(
                             _cap_lower.startswith(kw) for kw in [
                                 "check please", "please check", "check homework",
                                 "check hw", "check h.w.", "check h.w",
+                                "review homework", "homework check", "homework review",
+                                "chk hw", "chk homework",
                             ]
                         )
                     )

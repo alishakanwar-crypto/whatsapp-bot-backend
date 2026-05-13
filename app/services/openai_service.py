@@ -1058,6 +1058,9 @@ async def generate_homework_review(
         # ---------------------------------------------------------------
         # STEP 3: Format the final response
         # ---------------------------------------------------------------
+        first_name = student_name.split()[0] if student_name else ""
+        greeting = f"Great effort, {first_name}! ⭐\nI reviewed your homework carefully.\n\n" if first_name else "Great effort! ⭐\nI reviewed your homework carefully.\n\n"
+
         header = "📚 *Homework Review*\n"
         if student_name:
             header += f"*Student:* {student_name}\n"
@@ -1068,17 +1071,16 @@ async def generate_homework_review(
 
         score_str = f"*Score:* {correct_count} out of {total_count} correct"
 
-        # Generate encouraging feedback
         if correct_count == total_count:
-            overall = "*Overall:* Excellent work! All answers are correct. Keep it up! 🌟"
+            overall = "*Overall Performance:* Excellent ✅\nAll answers are correct. Keep it up! 🌟"
         elif correct_count >= total_count * 0.7:
-            overall = f"*Overall:* Great effort! Most answers are correct. Just review the ones marked ❌ and practice carrying over numbers. You're doing well! 😊"
+            overall = "*Overall Performance:* Very Good ✅\nMost answers are correct. Just review the ones marked ❌ and practice carrying over numbers. You're doing well!"
         elif correct_count >= total_count * 0.4:
-            overall = f"*Overall:* Good try! Keep practicing — focus on carrying over numbers carefully when adding columns. You'll get better with practice! 💪"
+            overall = "*Overall Performance:* Good\nKeep practicing — focus on carrying over numbers carefully when adding columns. You'll get better with practice! 💪"
         else:
-            overall = f"*Overall:* Keep trying! Practice makes perfect. Focus on adding one column at a time (ones, then tens, then hundreds, then thousands) and remember to carry over when a column adds up to 10 or more. You can do it! 💪"
+            overall = "*Overall Performance:* Needs Improvement\nKeep trying! Practice makes perfect. Focus on adding one column at a time and remember to carry over when a column adds up to 10 or more. You can do it! 💪"
 
-        return f"{header}\n*Results:*\n{results_str}\n\n{score_str}\n\n{overall}"
+        return f"{greeting}{header}\n*Results:*\n{results_str}\n\n{score_str}\n\n{overall}\n\nKeep practicing and your work will become even better!"
 
     except Exception as e:
         logger.error(f"Homework review vision error: {e}", exc_info=True)
@@ -1092,7 +1094,7 @@ async def _homework_review_fallback(
     grade: str,
     caption_text: str,
 ) -> str:
-    """Fallback: single-step review for non-math or when OCR JSON fails."""
+    """Comprehensive homework review for all subjects and languages."""
     student_context = ""
     if student_name and grade:
         student_context = f"Student: {student_name} ({grade}). "
@@ -1100,23 +1102,62 @@ async def _homework_review_fallback(
         student_context = f"Student: {student_name}. "
 
     prompt = (
-        "You are a school teacher reviewing a student's homework. "
-        f"{student_context}"
-        "A parent sent this photo. Analyze the work and provide feedback.\n\n"
-        "Format your response as:\n"
+        "You are an AI-powered Homework Review & Assessment Assistant for a school.\n"
+        f"{student_context}\n"
+        "A parent sent this photo of their child's homework/assignment/worksheet/notebook.\n\n"
+        "YOUR TASK:\n"
+        "1. Read all handwritten and printed content accurately from the image.\n"
+        "2. Identify the subject (English, Hindi, Mathematics, Science, Social Science, "
+        "Computer Science, French, German, Sanskrit, EVS, GK, or any other subject).\n"
+        "3. Check thoroughly for:\n"
+        "   - Correctness of answers\n"
+        "   - Completion (any missing questions or incomplete answers)\n"
+        "   - Spelling mistakes and grammar errors\n"
+        "   - Conceptual mistakes\n"
+        "   - Calculation errors (verify every math step and final answer)\n"
+        "   - Handwriting clarity\n"
+        "   - Formatting and presentation\n"
+        "   - Diagram labels (if applicable)\n"
+        "   - Sentence structure and language grammar\n"
+        "4. Highlight mistakes clearly with corrections.\n"
+        "5. Provide the correct answer or improved version where needed.\n"
+        "6. If homework is written in Hindi, French, German, or Sanskrit, "
+        "respond in that same language where possible.\n"
+        "7. If multiple subjects are in one image, separate the review subject-wise.\n"
+        "8. If the image is unclear, politely ask for a clearer image.\n\n"
+        "RESPONSE STYLE:\n"
+        "- Be encouraging and positive. Never discourage the student.\n"
+        "- Appreciate effort BEFORE pointing out mistakes.\n"
+        "- Use easy-to-understand corrections.\n"
+        "- Keep replies structured and visually clean.\n\n"
+        "FORMAT YOUR RESPONSE EXACTLY LIKE THIS:\n"
+        f"Great effort{', ' + student_name.split()[0] + '!' if student_name else '!'} ⭐\n"
+        "I reviewed your homework carefully.\n\n"
         "📚 *Homework Review*\n"
         f"{'*Student:* ' + student_name + chr(10) if student_name else ''}"
-        "*Subject:* [subject]\n"
-        "*Topic:* [topic]\n\n"
-        "*Feedback:*\n[Your detailed review with corrections if needed]\n\n"
-        "*Overall:* [Brief encouraging assessment]\n\n"
-        "Be encouraging and specific. If you see errors, explain the correction clearly."
+        "*Subject:* [detected subject]\n"
+        "*Topic:* [detected topic]\n\n"
+        "*Corrections:*\n"
+        "1. [First correction with explanation]\n"
+        "2. [Second correction with explanation]\n"
+        "... (list all corrections found)\n\n"
+        "If everything is correct, say: ✅ All answers are correct!\n\n"
+        "*Overall Performance:* [Excellent / Very Good / Good / Needs Improvement]\n\n"
+        "Keep practicing and your work will become even better!"
     )
     if caption_text:
         prompt += f"\n\nParent's message: {caption_text}"
 
+    system_msg = (
+        "You are a smart, encouraging AI teacher capable of reviewing homework "
+        "of students from all grades accurately and intelligently. "
+        "You can understand English, Hindi, French, German, and Sanskrit. "
+        "Never auto-mark without reviewing properly. Never give random corrections. "
+        "Maintain respectful communication with parents and students at all times."
+    )
+
     messages: list[dict] = [
-        {"role": "system", "content": "You are a helpful and encouraging school teacher."},
+        {"role": "system", "content": system_msg},
         {"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
@@ -1126,7 +1167,7 @@ async def _homework_review_fallback(
     response = await ai_client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
-        max_tokens=1200,
+        max_tokens=2000,
         temperature=0.2,
     )
 
