@@ -942,25 +942,32 @@ async def _homework_review_fallback(
         "• Never skip portions of homework silently.\n\n"
 
         # ── MATHEMATICS & SCIENCE ──
-        "MATHEMATICS & SCIENCE ACCURACY (CRITICAL):\n"
-        "• For EVERY math problem: read the operands and operation from "
-        "the image, then compute the correct answer yourself BEFORE "
-        "comparing to the student's answer.\n"
-        "• Show your working: write out the calculation step-by-step "
-        "(e.g. 3246 + 3123 = 6369) so the parent can see you verified.\n"
-        "• For column addition/subtraction: check each column right-to-"
-        "left, verify carry-over digits.\n"
-        "• For multiplication: verify each partial product and the final "
-        "sum.\n"
-        "• For division: verify quotient × divisor + remainder = dividend.\n"
-        "• Check formulas, validate units, verify diagrams and labels.\n"
-        "• Detect conceptual misunderstanding.\n"
-        "• If you mark an answer WRONG, you MUST show the correct "
-        "calculation step-by-step to prove it.\n"
-        "• NEVER mark a correct answer as wrong. Double-check your own "
-        "computation before declaring an error.\n"
-        "• Read handwritten digits very carefully: 0 vs 9, 1 vs 7, "
-        "3 vs 8, 5 vs 6 can look similar in children's handwriting.\n\n"
+        "MATHEMATICS & SCIENCE ACCURACY (CRITICAL — FOLLOW EXACTLY):\n"
+        "For EVERY math problem you see in the image, you MUST follow "
+        "this exact verification process:\n\n"
+        "STEP A — READ: Carefully read the operands, operation, and the "
+        "student's written answer from the image. Read each digit one by "
+        "one. Children's handwriting can be messy — 0 vs 9, 1 vs 7, "
+        "3 vs 8, 5 vs 6 look similar. If unsure about a digit, consider "
+        "BOTH possibilities before marking wrong.\n\n"
+        "STEP B — COMPUTE: Calculate the correct answer yourself using "
+        "basic arithmetic. For addition: add column-by-column right-to-"
+        "left, tracking carries. For subtraction: subtract column-by-"
+        "column with borrowing. For multiplication: compute each partial "
+        "product then sum. For division: verify quotient × divisor + "
+        "remainder = dividend. WRITE OUT your computation explicitly.\n\n"
+        "STEP C — COMPARE: Compare YOUR computed answer to the student's "
+        "written answer. Only if they are DIFFERENT is it an error.\n\n"
+        "STEP D — DOUBLE-CHECK: Before reporting any error, re-read the "
+        "student's answer from the image one more time and re-compute. "
+        "If there is ANY doubt, mark it correct.\n\n"
+        "RULES:\n"
+        "• ALWAYS show your calculation (e.g. '3246 + 3123 = 6369 ✅').\n"
+        "• If you mark an answer WRONG, show the full correct working.\n"
+        "• NEVER mark a correct answer as wrong — this is the worst "
+        "possible error.\n"
+        "• For science: check formulas, validate units, verify diagrams "
+        "and labels, detect conceptual misunderstanding.\n\n"
 
         # ── LANGUAGE REVIEW ──
         "LANGUAGE REVIEW INTELLIGENCE:\n"
@@ -1043,13 +1050,15 @@ async def _homework_review_fallback(
         model="gpt-4o",
         messages=messages,
         max_tokens=3000,
-        temperature=0.15,
+        temperature=0.1,
     )
 
     reply = response.choices[0].message.content
     if reply is None:
         return "I received the homework photo but could not generate a review. Please try again."
-    return reply.strip()
+    result = reply.strip()
+    logger.info(f"[HOMEWORK REVIEW] Generated review ({len(result)} chars): {result[:300]}")
+    return result
 
 
 async def _send_quota_alert() -> None:
