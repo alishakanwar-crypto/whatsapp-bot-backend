@@ -4549,8 +4549,10 @@ def _caption_is_name_only(caption: str) -> bool:
         if len(w) >= 2 and w.isalpha() and w.lower() not in _NAME_FILLER_WORDS
     ]
 
-    # Must have at least 2 name words (first + last name)
-    if len(name_words) < 2:
+    # A single name word on its own (e.g. "Charu", "Tanishka") is likely
+    # a person sending their name for face registration — accept it.
+    # Two or more name words are also accepted (first + last name).
+    if len(name_words) < 1:
         return False
 
     # Long captions with punctuation are sentences/requests, not names
@@ -5223,7 +5225,7 @@ async def receive_cloud_api_message(request: Request):
                                           "show", "check", "hi", "hello", "help", "please",
                                           "homework", "thanks", "ok", "yes", "no"}
                 ]
-                _is_name_reply = len(_name_words_buf) >= 2 and not _is_negative
+                _is_name_reply = len(_name_words_buf) >= 1 and not _is_negative
 
                 if _is_negative:
                     logger.info(f"[IMAGE BUFFER] Sender {sender} said '{_reply_text}' — NOT for registration, discarding buffer")
