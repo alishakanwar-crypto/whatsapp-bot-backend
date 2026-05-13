@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from app.database import init_db
 from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face, dashboard, relay_dashboard
@@ -38,6 +40,103 @@ class LowercaseURLMiddleware(BaseHTTPMiddleware):
             )
         request.scope["path"] = path.lower()
         return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Law Minister Webhook Middleware (ASGI)
+#
+# This middleware intercepts POST /webhook/cloud BEFORE any FastAPI router.
+# If the webhook is for the Law Minister phone number, it handles it here
+# and returns immediately — never reaching webhook.py.
+#
+# WHY MIDDLEWARE instead of router-level code:
+# webhook.py is a 6000+ line file that gets modified frequently by other
+# features.  Deployments from branches that predate the Law Minister routing
+# code silently drop it.  By placing the routing in main.py (which rarely
+# changes), the Law Minister bot survives ANY webhook.py replacement.
+# ---------------------------------------------------------------------------
+
+_LM_PHONE_ID = os.getenv("LAW_MINISTER_PHONE_ID", "1168433719678061")
+_lm_logger = logging.getLogger("law_minister_middleware")
+
+
+class LawMinisterWebhookMiddleware:
+    """Raw ASGI middleware — intercepts Law Minister webhooks before routers."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+
+        if method != "POST" or path != "/webhook/cloud":
+            await self.app(scope, receive, send)
+            return
+
+        # Read the full request body
+        body_chunks = []
+        while True:
+            message = await receive()
+            body_chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        raw_body = b"".join(body_chunks)
+
+        try:
+            data = json.loads(raw_body)
+        except Exception:
+            # Not valid JSON — pass through to normal handler
+            await self._pass_through(scope, raw_body, send)
+            return
+
+        # Check if ANY change targets the Law Minister phone number
+        is_law_minister = False
+        if data.get("object") == "whatsapp_business_account":
+            for entry in data.get("entry", []):
+                for change in entry.get("changes", []):
+                    phone_id = (
+                        change.get("value", {})
+                        .get("metadata", {})
+                        .get("phone_number_id", "")
+                    )
+                    if phone_id == _LM_PHONE_ID:
+                        is_law_minister = True
+                        break
+                if is_law_minister:
+                    break
+
+        if not is_law_minister:
+            # Not Law Minister — pass through to webhook.py
+            await self._pass_through(scope, raw_body, send)
+            return
+
+        # Handle Law Minister webhook directly
+        _lm_logger.info(
+            f"[MIDDLEWARE] Intercepted Law Minister webhook (phone_id={_LM_PHONE_ID})"
+        )
+        try:
+            from app.services.law_minister_bot import handle_webhook as lm_handle
+
+            result = await lm_handle(data)
+            response = JSONResponse(content=result)
+        except Exception as exc:
+            _lm_logger.error(f"[MIDDLEWARE] Law Minister handler error: {exc}")
+            response = JSONResponse(content={"status": "error", "detail": str(exc)})
+
+        await response(scope, receive, send)
+
+    async def _pass_through(self, scope, raw_body: bytes, send):
+        """Reconstruct the request body and forward to downstream handlers."""
+
+        async def receive_wrapper():
+            return {"type": "http.request", "body": raw_body, "more_body": False}
+
+        await self.app(scope, receive_wrapper, send)
 
 
 @asynccontextmanager
@@ -1264,3 +1363,12 @@ async def privacy_policy():
         "For questions, contact info@ppischool.in.</p>"
         "</body></html>"
     )
+
+
+# ---------------------------------------------------------------------------
+# FINAL STEP: Wrap the FastAPI app with the Law Minister middleware.
+# All @app.get / @app.post decorators above have already registered their
+# routes on the FastAPI instance.  This reassignment only affects what
+# uvicorn sees as the ASGI entry-point (app.main:app).
+# ---------------------------------------------------------------------------
+app = LawMinisterWebhookMiddleware(app)
