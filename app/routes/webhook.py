@@ -4767,6 +4767,44 @@ async def receive_cloud_api_message(request: Request):
                 except Exception as e:
                     logger.error(f"[IMAGE HANDLER] Teacher face reg error: {e}", exc_info=True)
 
+        # ── Explicit "Teacher [name]" face registration ──────────────
+        # Anyone can send a photo with caption like "Teacher Alisha" or
+        # "TEACHER Ravi Kumar" to register a teacher's face.
+        if has_image:
+            _cap_raw_t = (media_info.get("caption", "") or "").strip()
+            _cap_lower_t = _cap_raw_t.lower()
+            _teacher_prefix_match = re.match(
+                r"^teacher\s+(.+)", _cap_lower_t, re.IGNORECASE
+            )
+            if _teacher_prefix_match:
+                _teacher_name_raw = _cap_raw_t[len("teacher "):].strip()
+                # Use original casing from caption
+                _teacher_name_clean = _extract_person_name(_teacher_name_raw) or _teacher_name_raw
+                if _teacher_name_clean and len(_teacher_name_clean) >= 2:
+                    logger.info(
+                        f"[IMAGE HANDLER] Teacher face registration from "
+                        f"'Teacher [name]' caption: sender={sender} "
+                        f"name='{_teacher_name_clean}' caption='{_cap_raw_t}'"
+                    )
+                    sender_digits = re.sub(r"\D", "", sender)
+                    sender_last10 = sender_digits[-10:] if len(sender_digits) >= 10 else sender_digits
+                    synthetic_entry = {
+                        "teacher": _teacher_name_clean,
+                        "grade": "",
+                        "whatsapp": sender_last10,
+                    }
+                    try:
+                        handled = await _try_register_teacher_face(
+                            sender, reply_to, bot_phone, media_info, synthetic_entry,
+                        )
+                        if handled:
+                            return {"status": "ok"}
+                    except Exception as e:
+                        logger.error(
+                            f"[IMAGE HANDLER] Teacher caption face reg error: {e}",
+                            exc_info=True,
+                        )
+
         # ── Name-only face registration (teacher/staff — NOT parents) ──
         # A photo with just a person's name (no class indicator) can be
         # face registration ONLY if the sender is a teacher OR if the
