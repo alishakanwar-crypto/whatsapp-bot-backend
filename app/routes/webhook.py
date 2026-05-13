@@ -225,6 +225,25 @@ import time as _time_mod
 _recent_images: dict[str, dict] = {}
 _RECENT_IMAGE_TTL = 30  # seconds — link image + name within 30s
 
+# Homework review keywords — images with these captions are reviewed by AI
+# and must NEVER be forwarded to teachers (not on WhatsApp, not on email).
+_HOMEWORK_KEYWORDS = frozenset([
+    "check", "chk", "plz check", "pls check",
+    "check please", "please check", "check homework",
+    "check hw", "check h.w.", "check h.w",
+    "review homework", "homework check", "homework review",
+    "chk hw", "chk homework",
+])
+
+
+def _is_homework_caption(text: str) -> bool:
+    """Return True if *text* looks like a homework-review request."""
+    t = text.strip().lower()
+    if t in _HOMEWORK_KEYWORDS:
+        return True
+    return any(t.startswith(kw) for kw in _HOMEWORK_KEYWORDS if " " in kw)
+
+
 # Buffer for forwarded messages — when a parent forwards content, we ask
 # them to clarify what they want before forwarding to the teacher.
 _recent_forwarded: dict[str, dict] = {}
@@ -753,6 +772,11 @@ async def forward_to_teachers_and_confirm(
     If media_info is provided, also forwards the media file to the teacher."""
     teachers = find_mentioned_teachers(message_text)
     if not teachers:
+        return
+
+    # Never forward homework-review images to teachers
+    if media_info and _is_homework_caption(message_text):
+        logger.info(f"[SKIP FWD] Homework caption detected — not forwarding to teachers")
         return
 
     # --- Look up the parent's child name and class from PI Sheet ---
@@ -2068,6 +2092,11 @@ async def try_route_parent_to_class_teacher(
     # Skip if the sender IS a teacher (their messages go through broadcast/relay)
     if _is_teacher_phone(sender):
         return False
+
+    # Never forward homework-review images to teachers
+    if media_info and _is_homework_caption(message_text):
+        logger.info(f"[SKIP FWD] Homework caption detected — not forwarding to class teacher")
+        return True  # Return True to prevent further processing
 
     # Skip trivial / greeting messages
     stripped = message_text.strip()
