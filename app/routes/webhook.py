@@ -4778,9 +4778,24 @@ async def receive_cloud_api_message(request: Request):
             )
             if _teacher_prefix_match:
                 _teacher_name_raw = _cap_raw_t[len("teacher "):].strip()
+                _teacher_name_word_count = len(_teacher_name_raw.split())
+                # Only treat as face registration if the part after "Teacher"
+                # is a short name (1-3 words) and NOT a forwarding/query request.
+                _is_teacher_name_caption = (
+                    1 <= _teacher_name_word_count <= 3
+                    and not _is_forwarding_or_query(_cap_raw_t)
+                    and not any(
+                        kw in _teacher_name_raw.lower()
+                        for kw in [
+                            "convey", "forward", "fwd", "share", "send",
+                            "relay", "inform", "check", "please", "plz",
+                            "pls", "file", "homework", "hw",
+                        ]
+                    )
+                )
                 # Use original casing from caption
                 _teacher_name_clean = _extract_person_name(_teacher_name_raw) or _teacher_name_raw
-                if _teacher_name_clean and len(_teacher_name_clean) >= 2:
+                if _is_teacher_name_caption and _teacher_name_clean and len(_teacher_name_clean) >= 2:
                     logger.info(
                         f"[IMAGE HANDLER] Teacher face registration from "
                         f"'Teacher [name]' caption: sender={sender} "
