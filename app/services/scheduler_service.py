@@ -671,6 +671,7 @@ def start_scheduler() -> None:
     logger.info("Scheduled teacher attendance Excel + summary at 8:05 AM IST daily")
 
     # Also generate on startup (after 180s to let attendance data settle)
+    from app.services.teacher_attendance_excel import generate_teacher_attendance_excel_sync
     scheduler.add_job(
         generate_teacher_attendance_excel_sync,
         trigger="date",
