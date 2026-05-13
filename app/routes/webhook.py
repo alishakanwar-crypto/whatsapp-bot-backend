@@ -861,30 +861,28 @@ async def forward_to_teachers_and_confirm(
                 f"_Reply to this message \u2014 your response will be forwarded to the parent._"
             )
 
-            # Try sending the query directly first (works if conversation
-            # window is already open). This avoids the confusing template.
-            wa_success = await send_whatsapp_message(chat_id, _query_msg)
-            if wa_success:
-                logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
+            # Always send template first (works outside 24-hr window),
+            # then try freeform message as a follow-up.
+            tmpl_ok = await _send_tmpl(
+                t_recipient, "ppis_class_assignment",
+                body_params=[f"Query from {parent_label}", message_text[:400]],
+            )
+            if tmpl_ok:
+                wa_success = True
+                logger.info(f"[FWD] Template sent to {entry['teacher']}")
+                # Also try sending freeform message (richer formatting)
+                await _asyncio_relay.sleep(4)
+                _freeform_ok = await send_whatsapp_message(chat_id, _query_msg)
+                if _freeform_ok:
+                    logger.info(f"[FWD] Freeform query also sent to {entry['teacher']}")
             else:
-                # Conversation window closed — send template to open a
-                # business-initiated window, then resend the actual query.
-                logger.info(f"[FWD] Direct msg failed, sending template for {entry['teacher']}")
-                tmpl_ok = await _send_tmpl(
-                    t_recipient, "ppis_class_assignment",
-                    body_params=[f"Query from {parent_label}", message_text[:400]],
-                )
-                if tmpl_ok:
-                    # Wait for template delivery to open conversation window
-                    await _asyncio_relay.sleep(10)
-                    wa_success = await send_whatsapp_message(chat_id, _query_msg)
-                    if wa_success:
-                        logger.info(f"[FWD] Query sent after template to {entry['teacher']}")
-                    else:
-                        wa_success = True  # template itself was delivered
-                        logger.warning(f"[FWD] Query after template failed for {entry['teacher']}, template delivered")
+                # Template failed — try direct freeform as fallback
+                logger.warning(f"[FWD] Template failed for {entry['teacher']}, trying direct msg")
+                wa_success = await send_whatsapp_message(chat_id, _query_msg)
+                if wa_success:
+                    logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
                 else:
-                    logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
+                    logger.error(f"[FWD] Both template and direct msg failed for {entry['teacher']}")
 
         # Always send email too (reliable channel with full query + attachment)
         email_success = False
@@ -2254,30 +2252,28 @@ async def _forward_query_to_class_teacher(
             f"forwarded back to the parent._"
         )
 
-        # Try sending the query directly first (works if conversation
-        # window is already open). This avoids the confusing template.
-        wa_success = await send_whatsapp_message(chat_id, query_msg)
-        if wa_success:
-            logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
+        # Always send template first (works outside 24-hr window),
+        # then try freeform message as a follow-up.
+        tmpl_ok = await send_cloud_template_message(
+            teacher_recipient, "ppis_class_assignment",
+            body_params=[f"Query from {parent_label}", message_text[:400]],
+        )
+        if tmpl_ok:
+            wa_success = True
+            logger.info(f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})")
+            # Also try sending freeform message (richer formatting)
+            await _asyncio.sleep(4)
+            _freeform_ok = await send_whatsapp_message(chat_id, query_msg)
+            if _freeform_ok:
+                logger.info(f"[PARENT→TEACHER] Freeform query also sent to {teacher_name}")
         else:
-            # Conversation window closed — send template to open a
-            # business-initiated window, then resend the actual query.
-            logger.info(f"[PARENT→TEACHER] Direct msg failed, sending template for {teacher_name}")
-            tmpl_ok = await send_cloud_template_message(
-                teacher_recipient, "ppis_class_assignment",
-                body_params=[f"Query from {parent_label}", message_text[:400]],
-            )
-            if tmpl_ok:
-                # Wait for template delivery to open conversation window
-                await _asyncio.sleep(10)
-                wa_success = await send_whatsapp_message(chat_id, query_msg)
-                if wa_success:
-                    logger.info(f"[PARENT→TEACHER] Query sent after template to {teacher_name}")
-                else:
-                    wa_success = True  # template itself was delivered
-                    logger.warning(f"[PARENT→TEACHER] Query after template failed for {teacher_name}, template delivered")
+            # Template failed — try direct freeform as fallback
+            logger.warning(f"[PARENT→TEACHER] Template failed for {teacher_name}, trying direct msg")
+            wa_success = await send_whatsapp_message(chat_id, query_msg)
+            if wa_success:
+                logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
             else:
-                logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
+                logger.error(f"[PARENT→TEACHER] Both template and direct msg failed for {teacher_name}")
 
         if wa_success:
             # Save conversation for reply relay
