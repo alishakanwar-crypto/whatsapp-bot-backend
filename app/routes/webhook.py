@@ -842,10 +842,6 @@ async def forward_to_teachers_and_confirm(
 
         wa_success = False
         if teacher_phone:
-            import asyncio as _asyncio_relay
-            from app.services.whatsapp_service import (
-                send_cloud_template_message as _send_tmpl,
-            )
             chat_id = _teacher_chat_id(teacher_phone)
             t_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
             if len(t_recipient) == 10:
@@ -864,17 +860,7 @@ async def forward_to_teachers_and_confirm(
             if wa_success:
                 logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
             else:
-                # Conversation window closed — send template as fallback.
-                logger.info(f"[FWD] Direct msg failed, sending template for {entry['teacher']}")
-                tmpl_ok = await _send_tmpl(
-                    t_recipient, "ppis_class_assignment",
-                    body_params=[f"Query from {parent_label}", message_text[:400]],
-                )
-                if tmpl_ok:
-                    wa_success = True
-                    logger.info(f"[FWD] Template sent to {entry['teacher']}")
-                else:
-                    logger.error(f"[FWD] Both direct msg and template failed for {entry['teacher']}")
+                logger.warning(f"[FWD] Direct msg failed for {entry['teacher']} (24-hr window likely closed)")
 
         # Always send email too (reliable channel with full query + attachment)
         email_success = False
@@ -991,7 +977,6 @@ async def try_relay_teacher_reply(
     """
     from app.services.whatsapp_service import (
         forward_cloud_media_to_recipient,
-        send_cloud_template_message,
     )
 
     # Only check private (non-group) chats for teacher relay
@@ -1048,33 +1033,10 @@ async def try_relay_teacher_reply(
     if not is_placeholder:
         text_success = await send_whatsapp_message(original_chat_id, relay_msg)
         if not text_success:
-            # 24-hour window likely closed — send template to re-open
-            logger.info(
-                f"Relay: Direct msg to parent {original_chat_id} failed, "
-                f"sending template to open window"
+            logger.warning(
+                f"Relay: Direct msg to parent {original_chat_id} failed "
+                f"(24-hr window likely closed)"
             )
-            tmpl_ok = await send_cloud_template_message(
-                parent_recipient, "ppis_class_assignment",
-                body_params=[
-                    f"Reply from {teacher_name}",
-                    actual_text[:400],
-                ],
-            )
-            if tmpl_ok:
-                # Wait for template delivery to open conversation window
-                await _asyncio_relay.sleep(4)
-                text_success = await send_whatsapp_message(original_chat_id, relay_msg)
-                if not text_success:
-                    text_success = True  # template itself was delivered
-                    logger.warning(
-                        f"Relay: Direct msg after template also failed for "
-                        f"{original_chat_id}, but template was delivered"
-                    )
-            else:
-                logger.error(
-                    f"Relay: Both direct msg and template failed for "
-                    f"parent {original_chat_id}"
-                )
 
     # If teacher sent media, forward the actual media file
     media_forwarded = False
@@ -2233,12 +2195,8 @@ async def _forward_query_to_class_teacher(
     _dl_bytes2, _dl_mime2 = await _download_media_bytes(media_info)
     logger.info(f"[PARENT→TEACHER] Media download: bytes={len(_dl_bytes2) if _dl_bytes2 else 0}, mime={_dl_mime2}, has_cloud_id={bool(media_info.get('cloud_media_id') if media_info else False)}, has_url={bool(media_info.get('url') if media_info else False)}")
 
-    # Forward via WhatsApp — try direct message first, fall back to template
+    # Forward via WhatsApp — try direct message first
     if teacher_phone:
-        import asyncio as _asyncio
-        from app.services.whatsapp_service import (
-            send_cloud_template_message,
-        )
         chat_id = _teacher_chat_id(teacher_phone)
         teacher_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
         if len(teacher_recipient) == 10:
@@ -2258,17 +2216,7 @@ async def _forward_query_to_class_teacher(
         if wa_success:
             logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
         else:
-            # Conversation window closed — send template as fallback.
-            logger.info(f"[PARENT→TEACHER] Direct msg failed, sending template for {teacher_name}")
-            tmpl_ok = await send_cloud_template_message(
-                teacher_recipient, "ppis_class_assignment",
-                body_params=[f"Query from {parent_label}", message_text[:400]],
-            )
-            if tmpl_ok:
-                wa_success = True
-                logger.info(f"[PARENT→TEACHER] Template sent to {teacher_name} ({teacher_phone})")
-            else:
-                logger.error(f"[PARENT→TEACHER] Both direct msg and template failed for {teacher_name}")
+            logger.warning(f"[PARENT→TEACHER] Direct msg failed for {teacher_name} (24-hr window likely closed)")
 
         if wa_success:
             # Save conversation for reply relay
@@ -2550,9 +2498,9 @@ async def detect_and_handle_teacher_homework_broadcast(
     if len(hw_content) > 900:
         hw_content = hw_content[:900] + "..."
 
-    # Broadcast to all parents using template messages (required outside 24-hr window)
+    # Broadcast to all parents via freeform messages
     from app.services.whatsapp_service import (
-        send_cloud_template_message, get_whatsapp_provider,
+        get_whatsapp_provider,
         forward_cloud_media_to_recipient,
     )
     import asyncio
@@ -2580,24 +2528,10 @@ async def detect_and_handle_teacher_homework_broadcast(
     for phone in parent_phones:
         recipient = f"91{phone}" if len(phone) == 10 else phone
         if get_whatsapp_provider() == "cloud":
-            # Use approved template — try ppis_homework_update first,
-            # fall back to ppis_class_assignment if homework template not yet approved
-            success = await send_cloud_template_message(
-                recipient,
-                "ppis_homework_update",
-                body_params=[matched_grade, hw_content, teacher_name],
-            )
-            if not success:
-                # Fallback: use ppis_class_assignment (UTILITY, APPROVED)
-                fallback_text = f"HW from {teacher_name}"
-                success = await send_cloud_template_message(
-                    recipient,
-                    "ppis_class_assignment",
-                    body_params=[fallback_text, matched_grade],
-                )
+            # Send homework as freeform message
+            hw_msg = f"📚 *Homework — {matched_grade}*\n\nFrom {teacher_name}:\n\n{hw_content}"
+            success = await send_whatsapp_message(recipient, hw_msg)
             # Also send the media file if the teacher attached one
-            # NOTE: add a delay so the template message opens the 24-hour
-            # conversation window before we send a regular media message.
             if success and cached_media_id:
                 await asyncio.sleep(3)
                 from app.services.whatsapp_service import send_cloud_media

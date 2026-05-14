@@ -460,7 +460,6 @@ async def _relay_teacher_email_reply_to_parent(
     from app.database import get_db
     from app.services.whatsapp_service import (
         send_whatsapp_message,
-        send_cloud_template_message,
         get_whatsapp_provider,
         upload_media_bytes_cloud,
         send_cloud_media,
@@ -537,21 +536,9 @@ async def _relay_teacher_email_reply_to_parent(
             wa_recipient = f"91{wa_recipient}"
 
     # Send the text reply
-    text_sent = False
-    if get_whatsapp_provider() == "cloud":
-        text_sent = await send_whatsapp_message(wa_recipient, relay_msg)
-        if not text_sent:
-            # Fallback: send template first to open window, then retry
-            tmpl_ok = await send_cloud_template_message(
-                wa_recipient,
-                "ppis_class_assignment",
-                body_params=[f"Reply from {teacher_name}", teacher_grade],
-            )
-            if tmpl_ok:
-                await asyncio.sleep(4)
-                text_sent = await send_whatsapp_message(wa_recipient, relay_msg)
-    else:
-        text_sent = await send_whatsapp_message(wa_recipient, relay_msg)
+    text_sent = await send_whatsapp_message(wa_recipient, relay_msg)
+    if not text_sent:
+        logger.warning(f"Direct msg to parent {wa_recipient} failed (24-hr window likely closed)")
 
     # Send attachments
     att_sent = 0
@@ -685,11 +672,7 @@ async def _broadcast_email_homework(
     Uses WhatsApp template messages (required for Cloud API outside 24-hr window).
     """
     from app.routes.webhook import _get_parents_by_grade_fuzzy, _get_parents_by_grade
-    from app.services.whatsapp_service import (
-        send_whatsapp_message,
-        send_cloud_template_message,
-        get_whatsapp_provider,
-    )
+    from app.services.whatsapp_service import send_whatsapp_message
 
     matched_grade, parent_phones = await _get_parents_by_grade_fuzzy(target_grade)
     if not parent_phones:
@@ -703,7 +686,6 @@ async def _broadcast_email_homework(
         )
         return
 
-    # Truncate homework content for template parameter limits
     hw_content = parent_msg.strip()
     if len(hw_content) > 900:
         hw_content = hw_content[:900] + "..."
@@ -712,23 +694,8 @@ async def _broadcast_email_homework(
     fail_count = 0
     for phone in parent_phones:
         recipient = f"91{phone}" if len(phone) == 10 else phone
-        if get_whatsapp_provider() == "cloud":
-            # Use template message (required outside 24-hr window)
-            success = await send_cloud_template_message(
-                recipient,
-                "ppis_homework_update",
-                body_params=[matched_grade, hw_content, teacher_name],
-            )
-            if not success:
-                # Fallback to ppis_class_assignment (UTILITY, APPROVED)
-                fallback_text = f"HW from {teacher_name}"
-                success = await send_cloud_template_message(
-                    recipient,
-                    "ppis_class_assignment",
-                    body_params=[fallback_text, matched_grade],
-                )
-        else:
-            success = await send_whatsapp_message(recipient, parent_msg)
+        hw_msg = f"📚 *Homework — {matched_grade}*\n\nFrom {teacher_name}:\n\n{hw_content}"
+        success = await send_whatsapp_message(recipient, hw_msg)
         if success:
             sent_count += 1
         else:

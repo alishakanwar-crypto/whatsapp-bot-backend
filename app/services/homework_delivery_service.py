@@ -338,7 +338,7 @@ async def _send_homework_to_parents(grade: str, homework: str,
 
     Returns (sent_count, failed_count).
     """
-    from app.services.whatsapp_service import send_cloud_template_message
+    from app.services.whatsapp_service import send_whatsapp_message
 
     parents = await _get_parents_for_grade(grade)
     if not parents:
@@ -360,28 +360,13 @@ async def _send_homework_to_parents(grade: str, homework: str,
     sent = 0
     failed = 0
 
-    # Truncate homework if too long for template parameter (max ~1024 chars)
     hw_text = homework[:900] if len(homework) > 900 else homework
 
     for phone in phones_to_send:
         try:
-            # Use ppis_homework_update template (already approved)
-            # Template params: {{1}} = grade, {{2}} = homework text
-            ok = await send_cloud_template_message(
-                phone,
-                "ppis_homework_update",
-                body_params=[grade, hw_text],
-            )
-            if not ok:
-                # Fallback to ppis_class_assignment template
-                ok = await send_cloud_template_message(
-                    phone,
-                    "ppis_class_assignment",
-                    body_params=[
-                        f"Homework for {grade}",
-                        hw_text,
-                    ],
-                )
+            recipient = f"91{phone}" if len(phone) == 10 else phone
+            hw_msg = f"📚 *Homework — {grade}*\n\n{hw_text}"
+            ok = await send_whatsapp_message(recipient, hw_msg)
 
             if ok:
                 sent += 1
