@@ -2394,22 +2394,38 @@ async def _forward_query_to_class_teacher(
         _ct_channels.append("WhatsApp")
     if email_success:
         _ct_channels.append("email")
-    _ct_via = " and ".join(_ct_channels) if _ct_channels else "email"
-    confirm_msg = (
-        f"{_greeting(sender)},\n\n"
-        f"Your query has been forwarded to *{teacher_name}* "
-        f"(Class Teacher, {teacher_grade}) via {_ct_via}.\n\n"
-        f"You will receive the response as soon as the teacher replies.\n\n"
-        f"Thank you for your cooperation.\n"
-        f"Warm regards,\nPP International School"
-    )
-    await send_whatsapp_message(reply_to, confirm_msg)
 
-    logger.info(
-        f"[PARENT→TEACHER] Query from {sender} ({parent_label}) → "
-        f"{teacher_name} ({teacher_grade}) via {_ct_via}"
-    )
-    return True
+    if _ct_channels:
+        _ct_via = " and ".join(_ct_channels)
+        confirm_msg = (
+            f"{_greeting(sender)},\n\n"
+            f"Your query has been forwarded to *{teacher_name}* "
+            f"(Class Teacher, {teacher_grade}) via {_ct_via}.\n\n"
+            f"You will receive the response as soon as the teacher replies.\n\n"
+            f"Thank you for your cooperation.\n"
+            f"Warm regards,\nPP International School"
+        )
+        await send_whatsapp_message(reply_to, confirm_msg)
+        logger.info(
+            f"[PARENT→TEACHER] Query from {sender} ({parent_label}) → "
+            f"{teacher_name} ({teacher_grade}) via {_ct_via}"
+        )
+    else:
+        fail_msg = (
+            f"{_greeting(sender)},\n\n"
+            f"We could not deliver your query to *{teacher_name}* "
+            f"(Class Teacher, {teacher_grade}) at this time.\n\n"
+            f"Please try again later or contact the school office:\n"
+            f"Phone: 011-45161066 / 64 / 63\n"
+            f"Email: info@ppischool.in\n\n"
+            f"Warm regards,\nPP International School"
+        )
+        await send_whatsapp_message(reply_to, fail_msg)
+        logger.error(
+            f"[PARENT→TEACHER] FAILED: Query from {sender} ({parent_label}) → "
+            f"{teacher_name} ({teacher_grade}) — both WhatsApp and email failed"
+        )
+    return wa_success or email_success
 
 
 # ---------------------------------------------------------------------------
