@@ -655,9 +655,11 @@ async def api_send_whatsapp(request: Request):
                 import base64 as _b64
                 try:
                     img_bytes = _b64.b64decode(header_image_base64)
+                    logger.info(f"Uploading header image: {len(img_bytes)} bytes")
                     _header_image_id = await upload_media_bytes_cloud(
                         img_bytes, "image/jpeg", "attendance_snapshot.jpg"
                     )
+                    logger.info(f"Header image uploaded: media_id={_header_image_id}")
                 except Exception as _img_err:
                     logger.warning(f"Failed to upload header image: {_img_err}")
             success = await send_cloud_template_message(
