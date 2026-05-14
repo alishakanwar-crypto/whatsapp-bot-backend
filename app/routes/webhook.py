@@ -2089,6 +2089,13 @@ async def try_route_parent_to_class_teacher(
         logger.info(f"[SKIP FWD] Homework media detected — not forwarding to class teacher")
         return False  # Return False so caller can fall through to homework review
 
+    # Media files should ONLY be forwarded when the caption explicitly
+    # names a teacher (e.g. "send this to Reva maam").  If no teacher is
+    # mentioned, strip the media so only the text query reaches the teacher.
+    if media_info and not find_mentioned_teachers(message_text):
+        logger.info(f"[SKIP MEDIA FWD] No teacher tagged — forwarding text only, not media")
+        media_info = None
+
     # Skip trivial / greeting messages
     stripped = message_text.strip()
     if not stripped or len(stripped) < 3:
@@ -3822,24 +3829,8 @@ async def receive_whatsapp_message(request: Request):
                     await send_whatsapp_message(reply_to, _hw_err)
                 return {"status": "ok"}
 
-            # PRIORITY 3: Caption is a forwarding/query request (no teacher mentioned)
-            _g_is_query = bool(_hw_cap_low_g) and (
-                "?" in _hw_cap_low_g or _is_query_caption(_hw_cap_low_g)
-            )
-            if _g_is_query and _hw_caption_g:
-                logger.info(f"[GREEN IMAGE] Query detected — forwarding to class teacher")
-                routed_g = await try_route_parent_to_class_teacher(
-                    sender, _hw_caption_g, reply_to, media_info,
-                )
-                if not routed_g:
-                    await forward_to_teachers_and_confirm(
-                        sender, _hw_caption_g, reply_to, media_info,
-                    )
-                return {"status": "ok"}
-
-            # PRIORITY 4: No caption → ask what it is
+            # PRIORITY 3: No caption → ask what it is
             if not _hw_caption_g:
-                # No caption → already buffered above, just acknowledge
                 _ask_msg = (
                     "What is this?\n\n"
                     "Is this a photo for *registration*?\n\n"
@@ -3854,18 +3845,13 @@ async def receive_whatsapp_message(request: Request):
                 await send_whatsapp_message(reply_to, _ask_msg)
                 return {"status": "ok"}
 
-            # Caption present but ambiguous — forward to class teacher as a
-            # general query rather than guessing wrong
-            logger.info(f"[GREEN IMAGE] Ambiguous caption — forwarding to class teacher")
-            routed_g2 = await try_route_parent_to_class_teacher(
-                sender, _hw_caption_g, reply_to, media_info,
-            )
-            if routed_g2:
-                return {"status": "ok"}
-            # If routing failed (parent not recognized), acknowledge
-            err_msg = "Your image has been received. Please try sending it again if needed."
-            await save_message(bot_phone, sender, err_msg, "whatsapp", "outgoing")
-            await send_whatsapp_message(reply_to, err_msg)
+            # No teacher explicitly tagged in caption — do NOT auto-forward
+            # media to the class teacher.  Media is only forwarded when the
+            # caption names a teacher (e.g. "send this to Reva maam").
+            logger.info(f"[GREEN IMAGE] No teacher tagged in caption — not forwarding to class teacher for {sender}")
+            doc_msg = "File received successfully."
+            await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
+            await send_whatsapp_message(reply_to, doc_msg)
             return {"status": "ok"}
 
         # Check if a teacher is broadcasting homework to parents of their class
@@ -5042,18 +5028,19 @@ async def receive_cloud_api_message(request: Request):
             f"{message_text}\n\n"
             f"[Forwarded content: \"{_fwd_content[:500]}\"]"
         )
-        # Route to class teacher with combined context
-        parent_routed = await try_route_parent_to_class_teacher(
-            sender, _combined_text, reply_to, _buffered_fwd.get("media_info"),
-        )
-        if parent_routed:
-            return {"status": "ok"}
-        # If not routed (parent not recognized), try mentioned teachers
+        # Only forward media to teacher if caption explicitly names them.
+        # Otherwise route text only (no media attachment).
         _mentioned_fwd = find_mentioned_teachers(message_text)
         if _mentioned_fwd:
             await forward_to_teachers_and_confirm(
                 sender, _combined_text, reply_to, _buffered_fwd.get("media_info"),
             )
+            return {"status": "ok"}
+        # Route text-only to class teacher (no media attachment)
+        parent_routed = await try_route_parent_to_class_teacher(
+            sender, _combined_text, reply_to, None,
+        )
+        if parent_routed:
             return {"status": "ok"}
         # Fall through to normal processing with the combined text
         message_text = _combined_text
@@ -5472,149 +5459,11 @@ async def receive_cloud_api_message(request: Request):
                             await send_whatsapp_message(reply_to, _hw_err_c)
                         return {"status": "ok"}
 
-                    # Forward attachment + text to class teacher (all file types)
-                    # Try parent→teacher routing (works for non-admin parents)
-                    routed = await try_route_parent_to_class_teacher(
-                        sender, forward_text, reply_to, media_info,
-                    )
-                    if routed:
-                        return {"status": "ok"}
-
-                    # For admins who are also parents, or when routing skipped:
-                    # Look up children directly and forward to class teacher
-                    children = await _lookup_parent_child_class(sender)
-                    if children:
-                        # If caption mentions a grade, route to that teacher
-                        grade_teacher = find_teacher_by_grade(forward_text)
-                        if not grade_teacher and len(children) == 1:
-                            # Single child → auto-route to their class teacher
-                            grade_teacher = find_teacher_by_grade(children[0]["grade"])
-                        if not grade_teacher:
-                            # Try matching child name in caption
-                            msg_lower = forward_text.lower()
-                            for child in children:
-                                name_parts = child["student_name"].lower().split()
-                                if any(part in msg_lower for part in name_parts if len(part) > 2):
-                                    grade_teacher = find_teacher_by_grade(child["grade"])
-                                    break
-
-                        if grade_teacher:
-                            child_for_label = children[0]
-                            if len(children) > 1:
-                                # Try to match the specific child
-                                for c in children:
-                                    if c["grade"].lower().replace(" ", "") == grade_teacher["grade"].lower().replace(" ", ""):
-                                        child_for_label = c
-                                        break
-
-                            teacher_name = grade_teacher["teacher"].split("/")[0].strip()
-                            teacher_phone = grade_teacher.get("whatsapp", "")
-                            teacher_email = grade_teacher.get("email", "")
-                            parent_label = f"Parent of {child_for_label['student_name']} ({child_for_label['grade']})"
-
-                            # Download media ONCE for both WhatsApp and email
-                            _dl_bytes3, _dl_mime3 = await _download_media_bytes(media_info)
-
-                            if teacher_phone:
-                                import asyncio as _asyncio_fwd
-                                from app.services.whatsapp_service import (
-                                    send_cloud_template_message as _send_tmpl3,
-                                )
-                                chat_id = _teacher_chat_id(teacher_phone)
-                                _trec = teacher_phone
-                                if len(_trec) == 10:
-                                    _trec = "91" + _trec
-
-                                # Text-only WhatsApp notification — attachments go via email only
-                                _query_msg = (
-                                    f"\U0001f4e9 *{parent_label}* has sent a query on email.\n\n"
-                                    f"Please check your email and revert.\n\n"
-                                    f"_Reply to this message \u2014 your response will be forwarded to the parent._"
-                                )
-
-                                # Try sending the query directly first (works if
-                                # conversation window is already open).
-                                _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
-                                if _fwd_ok:
-                                    logger.info(f"[CLOUD FILE FWD] Direct query sent to {teacher_name}")
-                                else:
-                                    # Conversation window closed — send template to
-                                    # open a business-initiated window, then resend.
-                                    logger.info(f"[CLOUD FILE FWD] Direct msg failed, sending template for {teacher_name}")
-                                    _tmpl_ok = await _send_tmpl3(
-                                        _trec, "ppis_class_assignment",
-                                        body_params=[f"File from {parent_label}", forward_text[:400]],
-                                    )
-                                    if _tmpl_ok:
-                                        # Wait for template delivery to open conversation window
-                                        await _asyncio_fwd.sleep(10)
-                                        _fwd_ok = await send_whatsapp_message(chat_id, _query_msg)
-                                        if _fwd_ok:
-                                            logger.info(f"[CLOUD FILE FWD] Query sent after template to {teacher_name}")
-                                        else:
-                                            _fwd_ok = True  # template itself was delivered
-                                            logger.warning(f"[CLOUD FILE FWD] Query after template failed for {teacher_name}, template delivered")
-                                    else:
-                                        logger.error(f"[CLOUD FILE FWD] Both direct msg and template failed for {teacher_name}")
-
-                            # Always send email with attachment (reliable channel)
-                            if teacher_email:
-                                _email_body3 = (
-                                    f"Dear {teacher_name},\n\n"
-                                    f"{parent_label} has shared the following file/query "
-                                    f"via the PPIS Bot:\n\n"
-                                    f"\"{forward_text[:500]}\"\n\n"
-                                    f"Kindly reply to this email and your response will be "
-                                    f"forwarded back to the parent.\n\n"
-                                    f"Regards,\nPPIS Bot"
-                                )
-                                _ea3 = _make_email_attachments(media_info, _dl_bytes3, _dl_mime3)
-                                _eok3 = await send_email_async(
-                                    teacher_email,
-                                    f"PPIS Bot: File from {parent_label}",
-                                    _email_body3,
-                                    "PP International School",
-                                    attachments=_ea3 or None,
-                                )
-                                if _eok3:
-                                    logger.info(f"[CLOUD FILE FWD] Email with attachment sent to {teacher_name} ({teacher_email})")
-                                else:
-                                    logger.error(f"[CLOUD FILE FWD] Email FAILED for {teacher_name} ({teacher_email})")
-
-                                # Save conversation for 2-way relay
-                                await save_forwarded_conversation(
-                                    teacher_phone=teacher_phone,
-                                    teacher_name=teacher_name,
-                                    teacher_grade=grade_teacher["grade"],
-                                    original_chat_id=reply_to,
-                                    sender_phone=sender,
-                                    original_message=forward_text[:500],
-                                )
-                                confirm = (
-                                    f"Your query has been forwarded to *{teacher_name}* "
-                                    f"({grade_teacher['grade']}) via email. "
-                                    f"You will receive a reply when the teacher responds."
-                                )
-                                await save_message(bot_phone, sender, confirm, "whatsapp", "outgoing")
-                                await send_whatsapp_message(reply_to, confirm)
-                                return {"status": "ok"}
-
-                        elif len(children) > 1:
-                            # Multiple children, can't determine which teacher
-                            child_list = "\n".join(
-                                f"- {c['student_name']} ({c['grade']})" for c in children
-                            )
-                            ask_msg = (
-                                "We have found multiple wards linked to your number:\n"
-                                f"{child_list}\n\n"
-                                "Kindly specify which ward this query is regarding "
-                                "by replying with their name or class."
-                            )
-                            await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, ask_msg)
-                            return {"status": "ok"}
-
-                    # Fallback — simple ack
+                    # No teacher explicitly mentioned and not a homework
+                    # check → do NOT auto-forward to class teacher.
+                    # Media is only forwarded when the caption names a
+                    # teacher (handled in PRIORITY 1 above).
+                    logger.info(f"[MEDIA] No teacher tagged in caption — not forwarding to class teacher for {sender}")
                     doc_msg = "File received successfully."
                     await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
                     await send_whatsapp_message(reply_to, doc_msg)
