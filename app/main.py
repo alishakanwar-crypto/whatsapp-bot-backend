@@ -589,7 +589,7 @@ async def api_send_whatsapp(request: Request):
     today_ist = datetime.now(ist).strftime("%Y-%m-%d")
     today_day = datetime.now(ist).strftime("%A")
     is_attendance_msg = (
-        template_name in ("ppis_attendance_alert", "ppis_teachers_attendance")
+        template_name in ("ppis_attendance_alert", "teacher_attendance_ppis")
         or "marked present" in message.lower()
     )
     # Extract student name from template params for audit logging
