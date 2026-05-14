@@ -3833,13 +3833,7 @@ async def receive_whatsapp_message(request: Request):
             if not _hw_caption_g:
                 _ask_msg = (
                     "What is this?\n\n"
-                    "Is this a photo for *registration*?\n\n"
-                    "\u2022 If you are a *teacher*, write your full name and designation "
-                    "below the photo as a caption and re-send.\n"
-                    "\u2022 If you are a *parent*, write the child's full name along with "
-                    "class and section below the photo as a caption for registration.\n"
-                    "\u2022 If your child has enrolled for *summer camp*, write your "
-                    "child's name below the photo as a caption for registration."
+                    "If this is for face registration, please upload a photo with *name and class* as the caption."
                 )
                 await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
                 await send_whatsapp_message(reply_to, _ask_msg)
@@ -3851,13 +3845,7 @@ async def receive_whatsapp_message(request: Request):
             logger.info(f"[GREEN IMAGE] No teacher tagged in caption — not forwarding to class teacher for {sender}")
             _ask_media = (
                 "What is this?\n\n"
-                "Is this a photo for *registration*?\n\n"
-                "\u2022 If you are a *teacher*, write your full name and designation "
-                "below the photo as a caption and re-send.\n"
-                "\u2022 If you are a *parent*, write the child's full name along with "
-                "class and section below the photo as a caption for registration.\n"
-                "\u2022 If your child has enrolled for *summer camp*, write your "
-                "child's name below the photo as a caption for registration."
+                "If this is for face registration, please upload a photo with *name and class* as the caption."
             )
             await save_message(bot_phone, sender, _ask_media, "whatsapp", "outgoing")
             await send_whatsapp_message(reply_to, _ask_media)
@@ -3986,13 +3974,7 @@ async def receive_whatsapp_message(request: Request):
                 }
             _guard_ask = (
                 "What is this?\n\n"
-                "Is this a photo for *registration*?\n\n"
-                "\u2022 If you are a *teacher*, write your full name and designation "
-                "below the photo as a caption and re-send.\n"
-                "\u2022 If you are a *parent*, write the child's full name along with "
-                "class and section below the photo as a caption for registration.\n"
-                "\u2022 If your child has enrolled for *summer camp*, write your "
-                "child's name below the photo as a caption for registration."
+                "If this is for face registration, please upload a photo with *name and class* as the caption."
             )
             await save_message(bot_phone, sender, _guard_ask, "whatsapp", "outgoing")
             await send_whatsapp_message(reply_to, _guard_ask)
@@ -5369,13 +5351,7 @@ async def receive_cloud_api_message(request: Request):
                         logger.info(f"[IMAGE BUFFER] Buffered captionless image from {sender} — asking for intent")
                         _ask_msg = (
                             "What is this?\n\n"
-                            "Is this a photo for *registration*?\n\n"
-                            "\u2022 If you are a *teacher*, write your full name and designation "
-                            "below the photo as a caption and re-send.\n"
-                            "\u2022 If you are a *parent*, write the child's full name along with "
-                            "class and section below the photo as a caption for registration.\n"
-                            "\u2022 If your child has enrolled for *summer camp*, write your "
-                            "child's name below the photo as a caption for registration."
+                            "If this is for face registration, please upload a photo with *name and class* as the caption."
                         )
                         await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
                         await send_whatsapp_message(reply_to, _ask_msg)
@@ -5406,13 +5382,7 @@ async def receive_cloud_api_message(request: Request):
                         logger.info(f"[IMAGE BUFFER FALLBACK] Captionless image without cloud_media_id from {sender}")
                         _ask_msg_fb = (
                             "What is this?\n\n"
-                            "Is this a photo for *registration*?\n\n"
-                            "\u2022 If you are a *teacher*, write your full name and designation "
-                            "below the photo as a caption and re-send.\n"
-                            "\u2022 If you are a *parent*, write the child's full name along with "
-                            "class and section below the photo as a caption for registration.\n"
-                            "\u2022 If your child has enrolled for *summer camp*, write your "
-                            "child's name below the photo as a caption for registration."
+                            "If this is for face registration, please upload a photo with *name and class* as the caption."
                         )
                         await save_message(bot_phone, sender, _ask_msg_fb, "whatsapp", "outgoing")
                         await send_whatsapp_message(reply_to, _ask_msg_fb)
@@ -5475,13 +5445,7 @@ async def receive_cloud_api_message(request: Request):
                     logger.info(f"[MEDIA] No teacher tagged in caption — not forwarding to class teacher for {sender}")
                     _ask_media2 = (
                         "What is this?\n\n"
-                        "Is this a photo for *registration*?\n\n"
-                        "\u2022 If you are a *teacher*, write your full name and designation "
-                        "below the photo as a caption and re-send.\n"
-                        "\u2022 If you are a *parent*, write the child's full name along with "
-                        "class and section below the photo as a caption for registration.\n"
-                        "\u2022 If your child has enrolled for *summer camp*, write your "
-                        "child's name below the photo as a caption for registration."
+                        "If this is for face registration, please upload a photo with *name and class* as the caption."
                     )
                     await save_message(bot_phone, sender, _ask_media2, "whatsapp", "outgoing")
                     await send_whatsapp_message(reply_to, _ask_media2)
