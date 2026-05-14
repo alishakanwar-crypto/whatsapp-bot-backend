@@ -11,6 +11,8 @@ Uses the same WABA token as the PPIS bot but a different phone number ID.
 import logging
 import os
 import re
+import tempfile
+from datetime import datetime, timezone, timedelta
 
 import httpx
 
@@ -23,6 +25,13 @@ LAW_MINISTER_PHONE_ID = os.getenv(
 
 # WABA ID (shared with PPIS number)
 _WABA_ID = os.getenv("LAW_MINISTER_WABA_ID", "2417647228700804")
+
+# ---------- Admin Configuration ----------
+# Admins: phone numbers (without country code prefix) who have elevated access.
+# They can request message summaries via "summary" / "report" commands.
+ADMINS = {
+    "918796105084": "Ali",
+}
 
 # Token is shared across the WABA — reuse the same Cloud token
 def _get_token() -> str:
@@ -257,6 +266,214 @@ def _is_duplicate(msg_id: str) -> bool:
     return False
 
 
+# ---------- Message Log (DB) ----------
+
+async def _init_lm_tables():
+    """Create Law Minister message log table if not exists."""
+    import aiosqlite
+    from app.database import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS lm_message_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                direction TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                message_type TEXT NOT NULL DEFAULT 'text',
+                content TEXT NOT NULL DEFAULT '',
+                category TEXT DEFAULT '',
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+
+
+async def _log_message(direction: str, sender: str, recipient: str,
+                       content: str, msg_type: str = "text",
+                       category: str = ""):
+    """Log a message to the lm_message_log table."""
+    import aiosqlite
+    from app.database import DB_PATH
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO lm_message_log (direction, sender, recipient, message_type, content, category) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (direction, sender, recipient, msg_type, content[:500], category),
+            )
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to log message: {e}")
+
+
+# ---------- Excel Summary Generation ----------
+
+async def _generate_summary_excel(days: int = 7) -> str | None:
+    """Generate Excel summary of all outbound messages for the last N days.
+
+    Returns the file path of the generated .xlsx file, or None on failure.
+    """
+    import aiosqlite
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill
+    from app.database import DB_PATH
+
+    try:
+        ist = timezone(timedelta(hours=5, minutes=30))
+        cutoff = (datetime.now(ist) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM lm_message_log WHERE timestamp >= ? ORDER BY timestamp DESC",
+                (cutoff,),
+            )
+            rows = await cursor.fetchall()
+
+        if not rows:
+            return None
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Message Summary"
+
+        # Header styling
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="2E86AB", end_color="2E86AB", fill_type="solid")
+
+        headers = ["#", "Direction", "From", "To", "Type", "Content", "Category", "Timestamp (IST)"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        for i, row in enumerate(rows, 2):
+            ts_raw = row["timestamp"] or ""
+            try:
+                ts_dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                ts_ist = ts_dt.astimezone(ist).strftime("%d/%m/%Y %I:%M %p")
+            except Exception:
+                ts_ist = ts_raw
+
+            ws.cell(row=i, column=1, value=i - 1)
+            ws.cell(row=i, column=2, value=row["direction"])
+            ws.cell(row=i, column=3, value=row["sender"])
+            ws.cell(row=i, column=4, value=row["recipient"])
+            ws.cell(row=i, column=5, value=row["message_type"])
+            ws.cell(row=i, column=6, value=row["content"][:200])
+            ws.cell(row=i, column=7, value=row["category"])
+            ws.cell(row=i, column=8, value=ts_ist)
+
+        # Auto-width columns
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or "")) for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
+
+        filepath = tempfile.mktemp(suffix=".xlsx", prefix="lm_summary_")
+        wb.save(filepath)
+        return filepath
+
+    except Exception as e:
+        logger.error(f"Excel generation failed: {e}")
+        return None
+
+
+async def _send_document(to: str, filepath: str, caption: str) -> bool:
+    """Send a document (Excel file) via WhatsApp Cloud API."""
+    token = _get_token()
+    if not token:
+        return False
+
+    recipient = to.split("@")[0] if "@" in to else to
+    if len(recipient) == 10:
+        recipient = "91" + recipient
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Step 1: Upload the file to Meta
+    upload_url = f"https://graph.facebook.com/v21.0/{LAW_MINISTER_PHONE_ID}/media"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            with open(filepath, "rb") as f:
+                resp = await client.post(
+                    upload_url,
+                    headers=headers,
+                    data={"messaging_product": "whatsapp", "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                    files={"file": ("message_summary.xlsx", f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                )
+            if resp.status_code != 200:
+                logger.error(f"Media upload failed: {resp.status_code} {resp.text}")
+                return False
+            media_id = resp.json().get("id")
+
+            # Step 2: Send document message
+            msg_url = f"https://graph.facebook.com/v21.0/{LAW_MINISTER_PHONE_ID}/messages"
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": recipient,
+                "type": "document",
+                "document": {
+                    "id": media_id,
+                    "caption": caption,
+                    "filename": "message_summary.xlsx",
+                },
+            }
+            resp = await client.post(
+                msg_url,
+                json=payload,
+                headers={**headers, "Content-Type": "application/json"},
+                timeout=15.0,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Sent Excel summary to {recipient}")
+                return True
+            logger.error(f"Document send failed: {resp.status_code} {resp.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Send document error: {e}")
+        return False
+
+
+# ---------- Admin Command Handling ----------
+
+async def _handle_admin_command(sender: str, text: str) -> str | None:
+    """Handle admin-specific commands. Returns response text or None."""
+    normalised = text.strip().lower()
+
+    # Summary / Report command
+    if normalised in ("summary", "report", "excel", "log", "messages"):
+        admin_name = ADMINS.get(sender, "Admin")
+        await _send_text(sender, f"Generating message summary for you, {admin_name}... Please wait.")
+
+        filepath = await _generate_summary_excel(days=7)
+        if filepath:
+            ist = timezone(timedelta(hours=5, minutes=30))
+            now_str = datetime.now(ist).strftime("%d/%m/%Y %I:%M %p")
+            caption = f"Law Minister Bot — Message Summary\nGenerated: {now_str}\nPeriod: Last 7 days"
+            sent = await _send_document(sender, filepath, caption)
+            # Clean up temp file
+            try:
+                os.unlink(filepath)
+            except Exception:
+                pass
+            if sent:
+                return None  # Already sent the document
+            return "Failed to send the Excel file. Please try again."
+        else:
+            return "No messages found in the last 7 days."
+
+    # Help command for admin
+    if normalised in ("admin help", "admin", "commands"):
+        return (
+            "Admin Commands:\n"
+            "• *summary* / *report* — Get Excel summary of all bot messages (last 7 days)\n"
+            "• *admin help* — Show this help menu"
+        )
+
+    return None  # Not an admin command
+
+
 # ---------- Main Handler ----------
 
 async def handle_webhook(body: dict) -> dict:
@@ -264,6 +481,9 @@ async def handle_webhook(body: dict) -> dict:
 
     Returns a dict with status and actions taken.
     """
+    # Ensure message log table exists
+    await _init_lm_tables()
+
     actions = []
 
     for entry in body.get("entry", []):
@@ -281,11 +501,59 @@ async def handle_webhook(body: dict) -> dict:
                     logger.info(f"Duplicate message {msg_id}, skipping.")
                     continue
 
+                # Log incoming message
+                await _log_message(
+                    direction="incoming",
+                    sender=sender,
+                    recipient=LAW_MINISTER_PHONE_ID,
+                    content=text,
+                    category="incoming",
+                )
+
+                # Check if sender is admin and handle admin commands
+                if sender in ADMINS:
+                    admin_response = await _handle_admin_command(sender, text)
+                    if admin_response is not None:
+                        sent = await _send_text(sender, admin_response)
+                        await _log_message(
+                            direction="outgoing",
+                            sender=LAW_MINISTER_PHONE_ID,
+                            recipient=sender,
+                            content=admin_response[:500],
+                            category="admin_response",
+                        )
+                        actions.append({
+                            "from": sender,
+                            "text": text,
+                            "category": "admin_command",
+                            "response_sent": sent,
+                        })
+                        continue
+                    elif text.strip().lower() in ("summary", "report", "excel", "log", "messages"):
+                        # Admin command handled (excel sent directly)
+                        actions.append({
+                            "from": sender,
+                            "text": text,
+                            "category": "admin_command",
+                            "response_sent": True,
+                        })
+                        continue
+
                 auto_reply = _get_response(text)
                 if auto_reply:
                     sent = await _send_text(sender, auto_reply)
                     lang = detect_language(text)
                     category = "greeting" if _is_greeting(text) else "unrelated"
+
+                    # Log outgoing response
+                    await _log_message(
+                        direction="outgoing",
+                        sender=LAW_MINISTER_PHONE_ID,
+                        recipient=sender,
+                        content=auto_reply[:500],
+                        category=category,
+                    )
+
                     actions.append({
                         "from": sender,
                         "text": text,
