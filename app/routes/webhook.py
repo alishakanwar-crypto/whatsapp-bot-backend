@@ -3849,9 +3849,18 @@ async def receive_whatsapp_message(request: Request):
             # media to the class teacher.  Media is only forwarded when the
             # caption names a teacher (e.g. "send this to Reva maam").
             logger.info(f"[GREEN IMAGE] No teacher tagged in caption — not forwarding to class teacher for {sender}")
-            doc_msg = "File received successfully."
-            await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
-            await send_whatsapp_message(reply_to, doc_msg)
+            _ask_media = (
+                "What is this?\n\n"
+                "Is this a photo for *registration*?\n\n"
+                "\u2022 If you are a *teacher*, write your full name and designation "
+                "below the photo as a caption and re-send.\n"
+                "\u2022 If you are a *parent*, write the child's full name along with "
+                "class and section below the photo as a caption for registration.\n"
+                "\u2022 If your child has enrolled for *summer camp*, write your "
+                "child's name below the photo as a caption for registration."
+            )
+            await save_message(bot_phone, sender, _ask_media, "whatsapp", "outgoing")
+            await send_whatsapp_message(reply_to, _ask_media)
             return {"status": "ok"}
 
         # Check if a teacher is broadcasting homework to parents of their class
@@ -5464,9 +5473,18 @@ async def receive_cloud_api_message(request: Request):
                     # Media is only forwarded when the caption names a
                     # teacher (handled in PRIORITY 1 above).
                     logger.info(f"[MEDIA] No teacher tagged in caption — not forwarding to class teacher for {sender}")
-                    doc_msg = "File received successfully."
-                    await save_message(bot_phone, sender, doc_msg, "whatsapp", "outgoing")
-                    await send_whatsapp_message(reply_to, doc_msg)
+                    _ask_media2 = (
+                        "What is this?\n\n"
+                        "Is this a photo for *registration*?\n\n"
+                        "\u2022 If you are a *teacher*, write your full name and designation "
+                        "below the photo as a caption and re-send.\n"
+                        "\u2022 If you are a *parent*, write the child's full name along with "
+                        "class and section below the photo as a caption for registration.\n"
+                        "\u2022 If your child has enrolled for *summer camp*, write your "
+                        "child's name below the photo as a caption for registration."
+                    )
+                    await save_message(bot_phone, sender, _ask_media2, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _ask_media2)
                     return {"status": "ok"}
 
         # Check if a teacher is broadcasting homework to parents of their class
