@@ -1,0 +1,22 @@
+app = "ppis-whatsapp-bot"
+primary_region = "bom"
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[mounts]
+  source = "ppis_data"
+  destination = "/data"
+
+[checks]
+  [checks.alive]
+    type = "tcp"
+    port = 8000
+    interval = "30s"
+    timeout = "5s"

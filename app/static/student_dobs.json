@@ -1,0 +1,6365 @@
+[
+  {
+    "name": "NITYA GUPTA",
+    "grade": "Popsicles 1",
+    "dob": "2023-10-01",
+    "father_phone": "9582281605",
+    "mother_phone": "9560179996"
+  },
+  {
+    "name": "SEERAT SETHI",
+    "grade": "Popsicles 1",
+    "dob": "2023-10-06",
+    "father_phone": "7982502090",
+    "mother_phone": "9315683886"
+  },
+  {
+    "name": "ABHINANDAN JAIN",
+    "grade": "Nur 1",
+    "dob": "2022-08-06",
+    "father_phone": "9873359113",
+    "mother_phone": "9873359112"
+  },
+  {
+    "name": "ADHYUTH GUPTA",
+    "grade": "Nur 1",
+    "dob": "2022-11-15",
+    "father_phone": "9871700611",
+    "mother_phone": "9891396593"
+  },
+  {
+    "name": "ANAYA NAGPAL",
+    "grade": "Nur 1",
+    "dob": "2022-06-25",
+    "father_phone": "9999492257",
+    "mother_phone": "8287094218"
+  },
+  {
+    "name": "GAURISHA  GROVER",
+    "grade": "Nur 1",
+    "dob": "2022-05-04",
+    "father_phone": "8368004562",
+    "mother_phone": "8076911902"
+  },
+  {
+    "name": "HRIDAM GUPTA",
+    "grade": "Nur 1",
+    "dob": "2023-03-31",
+    "father_phone": "9953478932",
+    "mother_phone": "9818410502"
+  },
+  {
+    "name": "KIERAT BHOLA",
+    "grade": "Nur 1",
+    "dob": "2023-03-01",
+    "father_phone": "9212313122",
+    "mother_phone": "9720620648"
+  },
+  {
+    "name": "MAAISHA GARG",
+    "grade": "Nur 1",
+    "dob": "2022-10-20",
+    "father_phone": "9891691894",
+    "mother_phone": "9306904477"
+  },
+  {
+    "name": "RAAVIKA BHARDWAJ",
+    "grade": "Nur 1",
+    "dob": "2023-03-21",
+    "father_phone": "9999889104 / 8383026685",
+    "mother_phone": "7292045707"
+  },
+  {
+    "name": "RAGHAV RATHORE",
+    "grade": "Nur 1",
+    "dob": "2022-08-04",
+    "father_phone": "9711870695",
+    "mother_phone": "7011699503"
+  },
+  {
+    "name": "RANVIT SINGH",
+    "grade": "Nur 1",
+    "dob": "2022-05-10",
+    "father_phone": "9871502343",
+    "mother_phone": "9899597090"
+  },
+  {
+    "name": "RUDRA CHAUHAN",
+    "grade": "Nur 1",
+    "dob": "2023-01-02",
+    "father_phone": "9560055134",
+    "mother_phone": "9560055135"
+  },
+  {
+    "name": "SEHNOOR ARORA",
+    "grade": "Nur 1",
+    "dob": "2022-03-03",
+    "father_phone": "9711970097",
+    "mother_phone": "9958011711"
+  },
+  {
+    "name": "SRINIKA HADA",
+    "grade": "Nur 1",
+    "dob": "2022-07-16",
+    "father_phone": "9810127685",
+    "mother_phone": "7011264170"
+  },
+  {
+    "name": "SUYASH MAHAJAN",
+    "grade": "Nur 1",
+    "dob": "2022-08-13",
+    "father_phone": "9654319837",
+    "mother_phone": "9873555820"
+  },
+  {
+    "name": "ADVAIT CHHABRA",
+    "grade": "Nur 2",
+    "dob": "2022-11-19",
+    "father_phone": "9205459818",
+    "mother_phone": "9810317695"
+  },
+  {
+    "name": "AYAANSH LUTHRA",
+    "grade": "Nur 2",
+    "dob": "2022-12-12",
+    "father_phone": "9810360670",
+    "mother_phone": "9810532574"
+  },
+  {
+    "name": "GYANVI CHHABRA",
+    "grade": "Nur 2",
+    "dob": "2022-07-15",
+    "father_phone": "9873281188",
+    "mother_phone": "9210409157"
+  },
+  {
+    "name": "HANSIKA KALRA",
+    "grade": "Nur 2",
+    "dob": "2022-11-15",
+    "father_phone": "9910566725",
+    "mother_phone": "8368117141"
+  },
+  {
+    "name": "HARNOOR KAUR",
+    "grade": "Nur 2",
+    "dob": "2022-12-22",
+    "father_phone": "9873036442",
+    "mother_phone": "9873036442"
+  },
+  {
+    "name": "INAAYA  AGGARWAL",
+    "grade": "Nur 2",
+    "dob": "2023-01-02",
+    "father_phone": "9999198158",
+    "mother_phone": "8860294044"
+  },
+  {
+    "name": "KAIRAV GOEL",
+    "grade": "Nur 2",
+    "dob": "2022-09-18",
+    "father_phone": "8585955905",
+    "mother_phone": "8178364391 / 9654780719"
+  },
+  {
+    "name": "LAVYA SOOD",
+    "grade": "Nur 2",
+    "dob": "2023-02-25",
+    "father_phone": "7065153111",
+    "mother_phone": "7065153111"
+  },
+  {
+    "name": "SAMAIRAH JAIN",
+    "grade": "Nur 2",
+    "dob": "2022-10-10",
+    "father_phone": "8810590995",
+    "mother_phone": "8810590995"
+  },
+  {
+    "name": "SHANAYA TAYAL",
+    "grade": "Nur 2",
+    "dob": "2022-12-22",
+    "father_phone": "9953004912",
+    "mother_phone": "9910737219"
+  },
+  {
+    "name": "SHARVIL JHAMB",
+    "grade": "Nur 2",
+    "dob": "2022-08-03",
+    "father_phone": "9953436197",
+    "mother_phone": "9891323813"
+  },
+  {
+    "name": "SNAISHA JAIN",
+    "grade": "Nur 2",
+    "dob": "2022-09-01",
+    "father_phone": "9718884500",
+    "mother_phone": "9899347270"
+  },
+  {
+    "name": "TAARUSH JAIN",
+    "grade": "Nur 2",
+    "dob": "2023-04-03",
+    "father_phone": "8920172519",
+    "mother_phone": "8586847681"
+  },
+  {
+    "name": "ADVIK SINGHAL",
+    "grade": "Nur 3",
+    "dob": "2022-10-02",
+    "father_phone": "9899726835",
+    "mother_phone": "9999224163"
+  },
+  {
+    "name": "ANAYRA SINGHAL",
+    "grade": "Nur 3",
+    "dob": "2022-07-16",
+    "father_phone": "9999672789",
+    "mother_phone": "9968049604"
+  },
+  {
+    "name": "CHARVIKA JAIN",
+    "grade": "Nur 3",
+    "dob": "2022-08-17",
+    "father_phone": "9560073079",
+    "mother_phone": "8233855150 / 01161380361"
+  },
+  {
+    "name": "DEVANSH MEHTA",
+    "grade": "Nur 3",
+    "dob": "2022-10-08",
+    "father_phone": "7304040777",
+    "mother_phone": "9325688391"
+  },
+  {
+    "name": "DIYA BATRA",
+    "grade": "Nur 3",
+    "dob": "2022-12-12",
+    "father_phone": "8920501744",
+    "mother_phone": "8076095926"
+  },
+  {
+    "name": "GITANSH SINGHAL",
+    "grade": "Nur 3",
+    "dob": "2022-08-13",
+    "father_phone": "9911150118",
+    "mother_phone": "8130943649"
+  },
+  {
+    "name": "LAVISH KHANNA",
+    "grade": "Nur 3",
+    "dob": "2022-07-22",
+    "father_phone": "8860240152",
+    "mother_phone": "7982358131"
+  },
+  {
+    "name": "NAVISH AGARWAL",
+    "grade": "Nur 3",
+    "dob": "2022-08-07",
+    "father_phone": "7503003413",
+    "mother_phone": "7015925946"
+  },
+  {
+    "name": "NIA SAINI",
+    "grade": "Nur 3",
+    "dob": "2023-03-10",
+    "father_phone": "9818012472",
+    "mother_phone": "8125050129"
+  },
+  {
+    "name": "REEVA GARG",
+    "grade": "Nur 3",
+    "dob": "2022-10-05",
+    "father_phone": "9930873526",
+    "mother_phone": "9064166876"
+  },
+  {
+    "name": "SIYA SHARMA",
+    "grade": "Nur 3",
+    "dob": "2022-05-07",
+    "father_phone": "9810424884",
+    "mother_phone": "9999955759"
+  },
+  {
+    "name": "SUKOON KARNANY",
+    "grade": "Nur 3",
+    "dob": "2022-11-14",
+    "father_phone": "9811779887",
+    "mother_phone": "9811770605"
+  },
+  {
+    "name": "VIRAAJ KAPOOR",
+    "grade": "Nur 3",
+    "dob": "2022-11-09",
+    "father_phone": "999644330",
+    "mother_phone": "9711249729"
+  },
+  {
+    "name": "ANHAD SINGH",
+    "grade": "Prep 1",
+    "dob": "2021-06-10",
+    "father_phone": "9711115170",
+    "mother_phone": "9582524536"
+  },
+  {
+    "name": "ARIHA JAIN",
+    "grade": "Prep 1",
+    "dob": "2021-10-14",
+    "father_phone": "9910768204",
+    "mother_phone": "9999568831"
+  },
+  {
+    "name": "ASHWIKA JAIN",
+    "grade": "Prep 1",
+    "dob": "2021-06-21",
+    "father_phone": "7838621236",
+    "mother_phone": "9910953635"
+  },
+  {
+    "name": "AVIRAL SAHNI",
+    "grade": "Prep 1",
+    "dob": "2020-11-01",
+    "father_phone": "9871311838",
+    "mother_phone": "8800391708"
+  },
+  {
+    "name": "DIVYANSHI",
+    "grade": "Prep 1",
+    "dob": "2021-09-21",
+    "father_phone": "9782790413",
+    "mother_phone": "7701832909"
+  },
+  {
+    "name": "IVANA MITTAL",
+    "grade": "Prep 1",
+    "dob": "2021-04-21",
+    "father_phone": "9958629025",
+    "mother_phone": "8447442735"
+  },
+  {
+    "name": "IVANKA JAIN",
+    "grade": "Prep 1",
+    "dob": "2021-05-12",
+    "father_phone": "9999451876",
+    "mother_phone": "9953404426"
+  },
+  {
+    "name": "KAASHVI",
+    "grade": "Prep 1",
+    "dob": "2022-01-17",
+    "father_phone": "9990854306",
+    "mother_phone": "9643961651"
+  },
+  {
+    "name": "KRISHNA SHARMA",
+    "grade": "Prep 1",
+    "dob": "2021-12-20",
+    "father_phone": "9958479508",
+    "mother_phone": "8419949814"
+  },
+  {
+    "name": "MANAN RAWAL",
+    "grade": "Prep 1",
+    "dob": "2022-01-21",
+    "father_phone": "9821070719",
+    "mother_phone": "9354187376"
+  },
+  {
+    "name": "NIRVAAN NAHATA",
+    "grade": "Prep 1",
+    "dob": "2021-11-26",
+    "father_phone": "9966324433",
+    "mother_phone": "9649944997"
+  },
+  {
+    "name": "PRISHA GUPTA",
+    "grade": "Prep 1",
+    "dob": "2021-10-02",
+    "father_phone": "9899216051",
+    "mother_phone": "9643333773"
+  },
+  {
+    "name": "RIDHAAN BANSAL",
+    "grade": "Prep 1",
+    "dob": "2021-12-02",
+    "father_phone": "9873939739",
+    "mother_phone": "9289406658"
+  },
+  {
+    "name": "SAISHA GUPTA",
+    "grade": "Prep 1",
+    "dob": "2021-08-26",
+    "father_phone": "9810104989",
+    "mother_phone": "8368004179"
+  },
+  {
+    "name": "SAMAIRA BANSAL",
+    "grade": "Prep 1",
+    "dob": "2021-07-26",
+    "father_phone": "9899252949",
+    "mother_phone": "9910020495"
+  },
+  {
+    "name": "SHIVANIYA GUPTA",
+    "grade": "Prep 1",
+    "dob": "2021-02-23",
+    "father_phone": "7289971713",
+    "mother_phone": "9599122029"
+  },
+  {
+    "name": "VIAAN JAIN",
+    "grade": "Prep 1",
+    "dob": "2021-08-04",
+    "father_phone": "9711714799",
+    "mother_phone": "9711714999"
+  },
+  {
+    "name": "BHOUMIK SINGH",
+    "grade": "Prep 1",
+    "dob": "2021-08-20",
+    "father_phone": "7503737441",
+    "mother_phone": "7303885912"
+  },
+  {
+    "name": "AAYANSH SINGH",
+    "grade": "Prep 1",
+    "dob": "2021-08-19",
+    "father_phone": "8510071777",
+    "mother_phone": "7678614453"
+  },
+  {
+    "name": "RIDDIT JAIN",
+    "grade": "Prep 1",
+    "dob": "2021-08-14",
+    "father_phone": "9953221112",
+    "mother_phone": "8800532113"
+  },
+  {
+    "name": "BRINDA",
+    "grade": "Prep 1",
+    "dob": "2021-10-02",
+    "father_phone": "9034557755",
+    "mother_phone": "9992484867"
+  },
+  {
+    "name": "DHAIRYA THAKRAL",
+    "grade": "Prep 1",
+    "dob": "2022-03-13",
+    "father_phone": "9999622030",
+    "mother_phone": "8929198212"
+  },
+  {
+    "name": "ANVISHA JAIN",
+    "grade": "Prep 1",
+    "dob": "2021-07-12",
+    "father_phone": "8076123937",
+    "mother_phone": "7289912862"
+  },
+  {
+    "name": "VARDAAN JAIN SHARMA",
+    "grade": "Prep 1",
+    "dob": "2021-12-14",
+    "father_phone": "9999501850",
+    "mother_phone": "99999779698"
+  },
+  {
+    "name": "SHIVEK GARG",
+    "grade": "Prep 1",
+    "dob": "2022-03-20",
+    "father_phone": "9267977558",
+    "mother_phone": "8700512038"
+  },
+  {
+    "name": "ASHER SHARMA",
+    "grade": "Prep 2",
+    "dob": "2021-06-02",
+    "father_phone": "9953542739",
+    "mother_phone": "9811708499"
+  },
+  {
+    "name": "AYUSH PANDEY",
+    "grade": "Prep 2",
+    "dob": "2021-09-03",
+    "father_phone": "9315242124",
+    "mother_phone": "7701985689"
+  },
+  {
+    "name": "DURVIK SACHDEVA",
+    "grade": "Prep 2",
+    "dob": "2021-06-04",
+    "father_phone": "9711416667",
+    "mother_phone": "9711778925"
+  },
+  {
+    "name": "HARNISH MANDIYA",
+    "grade": "Prep 2",
+    "dob": "2021-07-12",
+    "father_phone": "9910131213",
+    "mother_phone": "9999225113"
+  },
+  {
+    "name": "IVAAN JAIN",
+    "grade": "Prep 2",
+    "dob": "2021-11-02",
+    "father_phone": "9711599806",
+    "mother_phone": "9507420420"
+  },
+  {
+    "name": "KIYANSH RAKSHIT",
+    "grade": "Prep 2",
+    "dob": "2022-02-12",
+    "father_phone": "9872997719",
+    "mother_phone": "9876604520"
+  },
+  {
+    "name": "LAVISH SHARMA",
+    "grade": "Prep 2",
+    "dob": "2021-09-24",
+    "father_phone": "9811154650",
+    "mother_phone": "9953034650"
+  },
+  {
+    "name": "Manvik Dalmia",
+    "grade": "Prep 2",
+    "dob": "2021-08-24",
+    "father_phone": "9899798103",
+    "mother_phone": ""
+  },
+  {
+    "name": "MIRAYA KAPOOR",
+    "grade": "Prep 2",
+    "dob": "2021-08-14",
+    "father_phone": "9560413613",
+    "mother_phone": "9810078267"
+  },
+  {
+    "name": "PRASHVI JAIN",
+    "grade": "Prep 2",
+    "dob": "2021-12-27",
+    "father_phone": "9899817797",
+    "mother_phone": "8826123042"
+  },
+  {
+    "name": "Rudraveer Rai Gupta (GOVINDA GUPTA)",
+    "grade": "Prep 2",
+    "dob": "2021-05-05",
+    "father_phone": "8882220012",
+    "mother_phone": "9999742703"
+  },
+  {
+    "name": "SAMAIRA THAURANI",
+    "grade": "Prep 2",
+    "dob": "2021-11-24",
+    "father_phone": "9999939436",
+    "mother_phone": "9999639436"
+  },
+  {
+    "name": "SARVAV GOEL",
+    "grade": "Prep 2",
+    "dob": "2021-08-12",
+    "father_phone": "9873247058",
+    "mother_phone": "9811547058"
+  },
+  {
+    "name": "Shrivee Gupta",
+    "grade": "Prep 2",
+    "dob": "2021-05-10",
+    "father_phone": "9350381466",
+    "mother_phone": "9899021470"
+  },
+  {
+    "name": "GRISHIKA",
+    "grade": "Prep 2",
+    "dob": "2021-01-16",
+    "father_phone": "9582025837",
+    "mother_phone": "9716658414"
+  },
+  {
+    "name": "AVYAAN SHARMA",
+    "grade": "Prep 2",
+    "dob": "2021-02-24",
+    "father_phone": "8950000193",
+    "mother_phone": "7015970502"
+  },
+  {
+    "name": "JIYANSH GARG",
+    "grade": "Prep 2",
+    "dob": "2021-05-30",
+    "father_phone": "9013230906",
+    "mother_phone": "9899225984"
+  },
+  {
+    "name": "KARTIKEY MAHESHWARI",
+    "grade": "Prep 2",
+    "dob": "2021-01-27",
+    "father_phone": "9250128313",
+    "mother_phone": "9625204984"
+  },
+  {
+    "name": "ABHYANSH YADAV",
+    "grade": "Prep 2",
+    "dob": "2020-04-09",
+    "father_phone": "9312563905",
+    "mother_phone": "959876315"
+  },
+  {
+    "name": "SABAR KAUR",
+    "grade": "Prep 2",
+    "dob": "2021-10-29",
+    "father_phone": "9899865151",
+    "mother_phone": "9899825151"
+  },
+  {
+    "name": "KIRAT KAUR",
+    "grade": "Prep 2",
+    "dob": "2021-06-18",
+    "father_phone": "9971997173",
+    "mother_phone": "8448112900"
+  },
+  {
+    "name": "KANISHA BARARIA",
+    "grade": "Prep 2",
+    "dob": "2022-03-11",
+    "father_phone": "9711252256",
+    "mother_phone": "8777811141"
+  },
+  {
+    "name": "SAANCHI SHARMA",
+    "grade": "Prep 2",
+    "dob": "2021-12-21",
+    "father_phone": "9899222544",
+    "mother_phone": "8800422804"
+  },
+  {
+    "name": "AGASTYA TIWARI",
+    "grade": "Prep 3",
+    "dob": "2021-05-27",
+    "father_phone": "9811242853",
+    "mother_phone": "9971075149"
+  },
+  {
+    "name": "AISHMINE BAGGA",
+    "grade": "Prep 3",
+    "dob": "2021-07-01",
+    "father_phone": "9999484393",
+    "mother_phone": "8585930690"
+  },
+  {
+    "name": "KAVYANSH YADAV",
+    "grade": "Prep 3",
+    "dob": "2021-10-26",
+    "father_phone": "7827873423",
+    "mother_phone": "8595964417"
+  },
+  {
+    "name": "KRISHAV THUKRAL",
+    "grade": "Prep 3",
+    "dob": "2021-07-08",
+    "father_phone": "8800240695",
+    "mother_phone": "9811547947"
+  },
+  {
+    "name": "MISHIKA MIGLANI",
+    "grade": "Prep 3",
+    "dob": "2021-11-26",
+    "father_phone": "9213151313",
+    "mother_phone": "8700590846"
+  },
+  {
+    "name": "NAIRA NATHANI",
+    "grade": "Prep 3",
+    "dob": "2021-08-16",
+    "father_phone": "9990888160",
+    "mother_phone": "9811917064, 7011093688"
+  },
+  {
+    "name": "NAISHA BHANSALI",
+    "grade": "Prep 3",
+    "dob": "2021-09-13",
+    "father_phone": "9873307453",
+    "mother_phone": "7888479310"
+  },
+  {
+    "name": "SAMAR GOEL",
+    "grade": "Prep 3",
+    "dob": "2021-08-02",
+    "father_phone": "9825222945",
+    "mother_phone": "9825223730"
+  },
+  {
+    "name": "SARANSH",
+    "grade": "Prep 3",
+    "dob": "2021-07-26",
+    "father_phone": "9654631774",
+    "mother_phone": "9643539597"
+  },
+  {
+    "name": "VIREN SHARMA",
+    "grade": "Prep 3",
+    "dob": "2021-12-09",
+    "father_phone": "9891868005",
+    "mother_phone": "8448623323"
+  },
+  {
+    "name": "YUG GOSWAMI",
+    "grade": "Prep 3",
+    "dob": "2021-09-14",
+    "father_phone": "9810619003",
+    "mother_phone": "9560250545"
+  },
+  {
+    "name": "ZAINAB",
+    "grade": "Prep 3",
+    "dob": "2022-02-21",
+    "father_phone": "9717377687",
+    "mother_phone": "9899312374"
+  },
+  {
+    "name": "ZARA GOEL",
+    "grade": "Prep 3",
+    "dob": "2021-08-02",
+    "father_phone": "9825222945",
+    "mother_phone": "9825223730"
+  },
+  {
+    "name": "ZHIA BELLE ROSA KHATTER",
+    "grade": "Prep 3",
+    "dob": "2022-02-18",
+    "father_phone": "9711017331",
+    "mother_phone": "9213826638"
+  },
+  {
+    "name": "AVYUKT CHOPRA",
+    "grade": "Prep 3",
+    "dob": "2021-09-29",
+    "father_phone": "8860070023",
+    "mother_phone": "9804440111"
+  },
+  {
+    "name": "JIANA ARORA",
+    "grade": "Prep 3",
+    "dob": "2022-03-28",
+    "father_phone": "9654458181",
+    "mother_phone": "9811242403"
+  },
+  {
+    "name": "ITISHA",
+    "grade": "Prep 3",
+    "dob": "2022-03-24",
+    "father_phone": "8010387698",
+    "mother_phone": "7988765038"
+  },
+  {
+    "name": "MANAV",
+    "grade": "Prep 3",
+    "dob": "2020-08-12",
+    "father_phone": "7982095214",
+    "mother_phone": "9354173422"
+  },
+  {
+    "name": "ANIKA VATS",
+    "grade": "Prep 3",
+    "dob": "2022-01-18",
+    "father_phone": "9818772349",
+    "mother_phone": "9319223265"
+  },
+  {
+    "name": "GURSANJH SINGH",
+    "grade": "Prep 3",
+    "dob": "2022-01-14",
+    "father_phone": "9891098180",
+    "mother_phone": "9643274002"
+  },
+  {
+    "name": "RUDRA SINGH",
+    "grade": "Prep 3",
+    "dob": "2020-08-30",
+    "father_phone": "9315447094",
+    "mother_phone": "9625419015"
+  },
+  {
+    "name": "RIDHANSH KUKRETI",
+    "grade": "Prep 3",
+    "dob": "2021-10-14",
+    "father_phone": "8130804400",
+    "mother_phone": "7290934501"
+  },
+  {
+    "name": "Aayansh Goel",
+    "grade": "Grade 1A",
+    "dob": "2020-09-08",
+    "father_phone": "9311906352",
+    "mother_phone": "7982890723"
+  },
+  {
+    "name": "Ahaan Bindal",
+    "grade": "Grade 1A",
+    "dob": "2020-05-16",
+    "father_phone": "9811384302",
+    "mother_phone": "9643121940"
+  },
+  {
+    "name": "Ahaan Garg",
+    "grade": "Grade 1A",
+    "dob": "2020-11-27",
+    "father_phone": "8826719469",
+    "mother_phone": "9015570189"
+  },
+  {
+    "name": "Ananya Jaiswal",
+    "grade": "Grade 1A",
+    "dob": "2020-08-26",
+    "father_phone": "8744090383",
+    "mother_phone": "9919642581"
+  },
+  {
+    "name": "Avyaan Gupta",
+    "grade": "Grade 1A",
+    "dob": "2020-09-21",
+    "father_phone": "9990089493",
+    "mother_phone": "9899569649"
+  },
+  {
+    "name": "Ayaansh",
+    "grade": "Grade 1A",
+    "dob": "2020-07-04",
+    "father_phone": "9911986832",
+    "mother_phone": "8929928419"
+  },
+  {
+    "name": "Bhavika Bajaj",
+    "grade": "Grade 1A",
+    "dob": "2021-04-04",
+    "father_phone": "8506060659",
+    "mother_phone": "8506060682"
+  },
+  {
+    "name": "Dhruvit Gupta",
+    "grade": "Grade 1A",
+    "dob": "2020-12-22",
+    "father_phone": "7838668435",
+    "mother_phone": "8800520802"
+  },
+  {
+    "name": "Dhyansh Rana",
+    "grade": "Grade 1A",
+    "dob": "2020-08-01",
+    "father_phone": "8014480144, 8888888654",
+    "mother_phone": "8282828279"
+  },
+  {
+    "name": "Gaurika Malhotra",
+    "grade": "Grade 1A",
+    "dob": "2020-11-21",
+    "father_phone": "8368756099",
+    "mother_phone": "9319469634"
+  },
+  {
+    "name": "Harjee Singh",
+    "grade": "Grade 1A",
+    "dob": "2021-01-20",
+    "father_phone": "9999461612",
+    "mother_phone": "9910714974"
+  },
+  {
+    "name": "Kiyaan Gupta",
+    "grade": "Grade 1A",
+    "dob": "2020-11-10",
+    "father_phone": "9643480900",
+    "mother_phone": "8447893507"
+  },
+  {
+    "name": "Mohd Sufiyan",
+    "grade": "Grade 1A",
+    "dob": "2019-08-21",
+    "father_phone": "8595954210",
+    "mother_phone": "7827069541"
+  },
+  {
+    "name": "Mysha Maini",
+    "grade": "Grade 1A",
+    "dob": "2020-11-04",
+    "father_phone": "7011630600",
+    "mother_phone": "9625644600"
+  },
+  {
+    "name": "Pranjal",
+    "grade": "Grade 1A",
+    "dob": "2021-01-11",
+    "father_phone": "9953959057",
+    "mother_phone": "9999635191"
+  },
+  {
+    "name": "Purvika Dungarwal",
+    "grade": "Grade 1A",
+    "dob": "2021-01-05",
+    "father_phone": "8588859990",
+    "mother_phone": "8130599906"
+  },
+  {
+    "name": "Radhya Goel",
+    "grade": "Grade 1A",
+    "dob": "2021-01-07",
+    "father_phone": "9953430040",
+    "mother_phone": "9953430040"
+  },
+  {
+    "name": "Saumay Jain",
+    "grade": "Grade 1A",
+    "dob": "2020-10-31",
+    "father_phone": "9716299522",
+    "mother_phone": "7531009522"
+  },
+  {
+    "name": "Sia Gupta",
+    "grade": "Grade 1A",
+    "dob": "2021-02-17",
+    "father_phone": "9891797414",
+    "mother_phone": "9210482315"
+  },
+  {
+    "name": "Trishika Khanna",
+    "grade": "Grade 1A",
+    "dob": "2020-11-15",
+    "father_phone": "9811834585",
+    "mother_phone": "7678467108"
+  },
+  {
+    "name": "Vamika Sharma",
+    "grade": "Grade 1A",
+    "dob": "2020-08-14",
+    "father_phone": "9311399002",
+    "mother_phone": "9717226792"
+  },
+  {
+    "name": "Vivaan Kandpal",
+    "grade": "Grade 1A",
+    "dob": "2020-12-01",
+    "father_phone": "8384011688",
+    "mother_phone": "9971101746"
+  },
+  {
+    "name": "NITYA BANSAL",
+    "grade": "Grade 1A",
+    "dob": "2019-06-20",
+    "father_phone": "8447748164",
+    "mother_phone": "8700073880"
+  },
+  {
+    "name": "PRITANSHI BAJAJ",
+    "grade": "Grade 1A",
+    "dob": "2021-03-09",
+    "father_phone": "9811073212",
+    "mother_phone": "9958012612"
+  },
+  {
+    "name": "TWISHA GOSWAMI",
+    "grade": "Grade 1A",
+    "dob": "2020-05-29",
+    "father_phone": "9354093746",
+    "mother_phone": "9711533053"
+  },
+  {
+    "name": "KAUSTUKI JAISWAL",
+    "grade": "Grade 1A",
+    "dob": "2024-06-01",
+    "father_phone": "9889591452",
+    "mother_phone": "9140640866"
+  },
+  {
+    "name": "HEYMANPREET SINGH",
+    "grade": "Grade 1A",
+    "dob": "2020-10-12",
+    "father_phone": "9911551146",
+    "mother_phone": "7838526396"
+  },
+  {
+    "name": "GAURISHA SAPRA",
+    "grade": "Grade 1A",
+    "dob": "2021-04-19",
+    "father_phone": "9811924962",
+    "mother_phone": "9891437977"
+  },
+  {
+    "name": "Liana Kataria",
+    "grade": "Grade 1A",
+    "dob": "2021-04-13",
+    "father_phone": "9873075388",
+    "mother_phone": "8447220041"
+  },
+  {
+    "name": "LISHIKA GUPTA",
+    "grade": "Grade 1A",
+    "dob": "2020-07-13",
+    "father_phone": "9654661066",
+    "mother_phone": "9818097097"
+  },
+  {
+    "name": "Arisha",
+    "grade": "Grade 1A",
+    "dob": "2020-04-27",
+    "father_phone": "8447153085",
+    "mother_phone": "8447393956"
+  },
+  {
+    "name": "ABHIGYA SINGH",
+    "grade": "Grade 1B",
+    "dob": "2019-12-09",
+    "father_phone": "9210089400",
+    "mother_phone": "7838340449"
+  },
+  {
+    "name": "ARYASH JAIN",
+    "grade": "Grade 1B",
+    "dob": "2020-07-14",
+    "father_phone": "9811787461",
+    "mother_phone": "9711417828"
+  },
+  {
+    "name": "CHIRAG KUMAR",
+    "grade": "Grade 1B",
+    "dob": "2020-01-17",
+    "father_phone": "9555524456, 8368189558",
+    "mother_phone": "6202706134"
+  },
+  {
+    "name": "DRASHYA",
+    "grade": "Grade 1B",
+    "dob": "2020-08-06",
+    "father_phone": "9999251692",
+    "mother_phone": "9466057251"
+  },
+  {
+    "name": "FABIHA",
+    "grade": "Grade 1B",
+    "dob": "2020-08-17",
+    "father_phone": "7895042842",
+    "mother_phone": "8126778454"
+  },
+  {
+    "name": "HRITIK DEV SURI",
+    "grade": "Grade 1B",
+    "dob": "2020-09-14",
+    "father_phone": "8178896197",
+    "mother_phone": "9953622274"
+  },
+  {
+    "name": "HUMAID AHMED",
+    "grade": "Grade 1B",
+    "dob": "2020-11-12",
+    "father_phone": "7503516766",
+    "mother_phone": "7982920601"
+  },
+  {
+    "name": "IVAAN AGGARWAL",
+    "grade": "Grade 1B",
+    "dob": "2020-07-14",
+    "father_phone": "9811025315",
+    "mother_phone": "9899386789"
+  },
+  {
+    "name": "KARMAN SINGH",
+    "grade": "Grade 1B",
+    "dob": "2021-01-07",
+    "father_phone": "9811607665",
+    "mother_phone": "9811603665"
+  },
+  {
+    "name": "KASHVI GUPTA",
+    "grade": "Grade 1B",
+    "dob": "2020-04-27",
+    "father_phone": "7703874757",
+    "mother_phone": "9999240339"
+  },
+  {
+    "name": "KRISHAA TANDON",
+    "grade": "Grade 1B",
+    "dob": "2020-11-06",
+    "father_phone": "9899749434",
+    "mother_phone": "9818680090"
+  },
+  {
+    "name": "LATISHA AGGARWAL",
+    "grade": "Grade 1B",
+    "dob": "2021-03-17",
+    "father_phone": "9818222444",
+    "mother_phone": "9999621662"
+  },
+  {
+    "name": "LITHVIK AGGARWAL",
+    "grade": "Grade 1B",
+    "dob": "2021-03-17",
+    "father_phone": "9818222444",
+    "mother_phone": "9999621662"
+  },
+  {
+    "name": "MEHER CHOPRA",
+    "grade": "Grade 1B",
+    "dob": "2020-02-05",
+    "father_phone": "9810741919",
+    "mother_phone": "9811130303"
+  },
+  {
+    "name": "NOYONIKA DAS",
+    "grade": "Grade 1B",
+    "dob": "2020-10-07",
+    "father_phone": "9350191393",
+    "mother_phone": "7677622997"
+  },
+  {
+    "name": "REEVE KARNANY",
+    "grade": "Grade 1B",
+    "dob": "2020-04-11",
+    "father_phone": "9811779887",
+    "mother_phone": "9811770605"
+  },
+  {
+    "name": "RISHIK VIG",
+    "grade": "Grade 1B",
+    "dob": "2020-08-23",
+    "father_phone": "8882645198",
+    "mother_phone": "-"
+  },
+  {
+    "name": "RUDVIKA SINGH",
+    "grade": "Grade 1B",
+    "dob": "2020-02-21",
+    "father_phone": "8527575888",
+    "mother_phone": "8527992297"
+  },
+  {
+    "name": "SOUMIYA YADAV",
+    "grade": "Grade 1B",
+    "dob": "2020-06-21",
+    "father_phone": "9643198351",
+    "mother_phone": "7838499826"
+  },
+  {
+    "name": "JASMEHAR KAUR",
+    "grade": "Grade 1B",
+    "dob": "2020-10-08",
+    "father_phone": "8178060915",
+    "mother_phone": "9811467910"
+  },
+  {
+    "name": "AGAMYA SHREE",
+    "grade": "Grade 1B",
+    "dob": "2020-10-06",
+    "father_phone": "7428846534",
+    "mother_phone": "9354663678"
+  },
+  {
+    "name": "INAAYA YAKUB ANSARI",
+    "grade": "Grade 1B",
+    "dob": "2020-07-18",
+    "father_phone": "8285335688",
+    "mother_phone": "8368661911"
+  },
+  {
+    "name": "ANAYKA SINGHAL",
+    "grade": "Grade 1B",
+    "dob": "2020-04-30",
+    "father_phone": "9810737836",
+    "mother_phone": ""
+  },
+  {
+    "name": "KABIR TANVEER QUERSHI",
+    "grade": "Grade 1B",
+    "dob": "2019-11-26",
+    "father_phone": "8383808379",
+    "mother_phone": "8076469192"
+  },
+  {
+    "name": "TIYA VERMA",
+    "grade": "Grade 1B",
+    "dob": "2019-08-31",
+    "father_phone": "9820123405",
+    "mother_phone": "9911787803"
+  },
+  {
+    "name": "AMAIRA JAIN",
+    "grade": "Grade 1B",
+    "dob": "2021-03-13",
+    "father_phone": "9873450529",
+    "mother_phone": "9811551260"
+  },
+  {
+    "name": "HEERAT BHATIA",
+    "grade": "Grade 1B",
+    "dob": "2021-04-20",
+    "father_phone": "7827191829",
+    "mother_phone": "9811776138"
+  },
+  {
+    "name": "TEETIKSHA PAL",
+    "grade": "Grade 1B",
+    "dob": "2020-07-05",
+    "father_phone": "9871091785",
+    "mother_phone": "9871401785"
+  },
+  {
+    "name": "SAMARTH RAHUL RANE",
+    "grade": "Grade 1B",
+    "dob": "2020-08-04",
+    "father_phone": "7838033773",
+    "mother_phone": "9805954500"
+  },
+  {
+    "name": "ANAYA GOEL",
+    "grade": "Grade 1B",
+    "dob": "2021-01-18",
+    "father_phone": "987157333",
+    "mother_phone": "9650041234"
+  },
+  {
+    "name": "ANANYA",
+    "grade": "Grade 1B",
+    "dob": "2020-12-26",
+    "father_phone": "9811909931",
+    "mother_phone": "9811909950"
+  },
+  {
+    "name": "ANAISHA JAIN",
+    "grade": "Grade 2A",
+    "dob": "2019-08-14",
+    "father_phone": "9999874223",
+    "mother_phone": "9811122256"
+  },
+  {
+    "name": "ANMOL",
+    "grade": "Grade 2A",
+    "dob": "2019-07-24",
+    "father_phone": "9953862987",
+    "mother_phone": "-"
+  },
+  {
+    "name": "ARADHYA ARORA",
+    "grade": "Grade 2A",
+    "dob": "2020-04-03",
+    "father_phone": "9711068855",
+    "mother_phone": "9643168002"
+  },
+  {
+    "name": "AVI PAL",
+    "grade": "Grade 2A",
+    "dob": "2019-04-09",
+    "father_phone": "9457757342, \t9756457342",
+    "mother_phone": "9457757342, \t9756457342"
+  },
+  {
+    "name": "AVYUKTT GUPTA",
+    "grade": "Grade 2A",
+    "dob": "2019-07-07",
+    "father_phone": "9034962386",
+    "mother_phone": "8689057124"
+  },
+  {
+    "name": "BANROOP KAUR",
+    "grade": "Grade 2A",
+    "dob": "2020-03-03",
+    "father_phone": "9250907022",
+    "mother_phone": "9999289888"
+  },
+  {
+    "name": "DAKSH",
+    "grade": "Grade 2A",
+    "dob": "2019-08-18",
+    "father_phone": "9250127842",
+    "mother_phone": "-"
+  },
+  {
+    "name": "DHRISHIV KALRA",
+    "grade": "Grade 2A",
+    "dob": "2020-02-19",
+    "father_phone": "9910623657",
+    "mother_phone": "9999160053"
+  },
+  {
+    "name": "DHWITI JAIN",
+    "grade": "Grade 2A",
+    "dob": "2019-11-29",
+    "father_phone": "9711304606",
+    "mother_phone": "9643220446"
+  },
+  {
+    "name": "DITYAA RAJORA",
+    "grade": "Grade 2A",
+    "dob": "2018-08-06",
+    "father_phone": "9873001054, 9873001054",
+    "mother_phone": "9873001054, 9873001054"
+  },
+  {
+    "name": "DIYANSH  RAHEJA",
+    "grade": "Grade 2A",
+    "dob": "2019-10-12",
+    "father_phone": "8368103159",
+    "mother_phone": "9873558362"
+  },
+  {
+    "name": "JEVIKA",
+    "grade": "Grade 2A",
+    "dob": "2019-03-30",
+    "father_phone": "9268082782, 8700811947",
+    "mother_phone": "9268082782, 8700811947"
+  },
+  {
+    "name": "KRISHIV AGARWAL",
+    "grade": "Grade 2A",
+    "dob": "2019-11-16",
+    "father_phone": "9311177369",
+    "mother_phone": "8588861620"
+  },
+  {
+    "name": "MUDIT SETHI",
+    "grade": "Grade 2A",
+    "dob": "2019-08-31",
+    "father_phone": "8860264080",
+    "mother_phone": "8700704960"
+  },
+  {
+    "name": "NAIRA BANSIWAL",
+    "grade": "Grade 2A",
+    "dob": "2019-10-24",
+    "father_phone": "9717016242, 8368351816",
+    "mother_phone": "9717016242, 8368351816"
+  },
+  {
+    "name": "NAVYA MEHTA",
+    "grade": "Grade 2A",
+    "dob": "2019-05-07",
+    "father_phone": "9810156989",
+    "mother_phone": "9910101484"
+  },
+  {
+    "name": "RAM SHEKHAWAT",
+    "grade": "Grade 2A",
+    "dob": "2019-04-21",
+    "father_phone": "8130344444",
+    "mother_phone": "8800332259"
+  },
+  {
+    "name": "RUSHANK SABHARWAL",
+    "grade": "Grade 2A",
+    "dob": "2019-06-06",
+    "father_phone": "9811523138",
+    "mother_phone": "9811528666"
+  },
+  {
+    "name": "SAVISHKA ANAND",
+    "grade": "Grade 2A",
+    "dob": "2019-11-07",
+    "father_phone": "9999510510",
+    "mother_phone": "9990560570"
+  },
+  {
+    "name": "SHIVANSH MISHRA",
+    "grade": "Grade 2A",
+    "dob": "2019-07-01",
+    "father_phone": "9643918093",
+    "mother_phone": "9315163042"
+  },
+  {
+    "name": "SHRUTAM JAIN",
+    "grade": "Grade 2A",
+    "dob": "2019-08-20",
+    "father_phone": "9910768204",
+    "mother_phone": "9999568831"
+  },
+  {
+    "name": "UTKARSH",
+    "grade": "Grade 2A",
+    "dob": "2019-08-23",
+    "father_phone": "7503999159",
+    "mother_phone": "9899960878"
+  },
+  {
+    "name": "VIHAAN GOEL",
+    "grade": "Grade 2A",
+    "dob": "2019-09-29",
+    "father_phone": "8376871061",
+    "mother_phone": "8800669667"
+  },
+  {
+    "name": "YERIKA JHAMB",
+    "grade": "Grade 2A",
+    "dob": "2019-11-28",
+    "father_phone": "9953436197",
+    "mother_phone": "9891323813"
+  },
+  {
+    "name": "JASANDEEP SINGH",
+    "grade": "Grade 2A",
+    "dob": "2019-09-26",
+    "father_phone": "9891624019",
+    "mother_phone": "9811613039"
+  },
+  {
+    "name": "DEVANSH",
+    "grade": "Grade 2A",
+    "dob": "2019-05-30",
+    "father_phone": "7292099229, 7292099229",
+    "mother_phone": "7292099229, 7292099229"
+  },
+  {
+    "name": "MYRA SAINI",
+    "grade": "Grade 2A",
+    "dob": "2026-06-13",
+    "father_phone": "9818012472",
+    "mother_phone": "8125050129"
+  },
+  {
+    "name": "ISHVI SETHI",
+    "grade": "Grade 2A",
+    "dob": "2019-11-21",
+    "father_phone": "",
+    "mother_phone": ""
+  },
+  {
+    "name": "UDITI SACHDEVA",
+    "grade": "Grade 2A",
+    "dob": "2020-04-25",
+    "father_phone": "9999987625",
+    "mother_phone": "9717994497"
+  },
+  {
+    "name": "MIDHUL GUPTA",
+    "grade": "Grade 2A",
+    "dob": "2019-12-17",
+    "father_phone": "9310498843",
+    "mother_phone": "9315147065"
+  },
+  {
+    "name": "DEVANSH GOEL",
+    "grade": "Grade 2A",
+    "dob": "2020-02-19",
+    "father_phone": "9873664747",
+    "mother_phone": "9711399234"
+  },
+  {
+    "name": "DEVANK GOEL",
+    "grade": "Grade 2A",
+    "dob": "2020-02-19",
+    "father_phone": "9873664747",
+    "mother_phone": "9711399234"
+  },
+  {
+    "name": "AARAV JHA",
+    "grade": "Grade 2B",
+    "dob": "2019-12-18",
+    "father_phone": "9999273424",
+    "mother_phone": "9555101234"
+  },
+  {
+    "name": "ADHVIKA SINGHAL",
+    "grade": "Grade 2B",
+    "dob": "2020-04-30",
+    "father_phone": "9899726835",
+    "mother_phone": "9999224163"
+  },
+  {
+    "name": "ADVITTA CHHABRA",
+    "grade": "Grade 2B",
+    "dob": "2019-09-09",
+    "father_phone": "8587925773",
+    "mother_phone": "9810317695"
+  },
+  {
+    "name": "AMARA MITTAL",
+    "grade": "Grade 2B",
+    "dob": "2019-08-24",
+    "father_phone": "9716662233",
+    "mother_phone": "9711989867"
+  },
+  {
+    "name": "ANSHIKA TIWARI",
+    "grade": "Grade 2B",
+    "dob": "2019-12-18",
+    "father_phone": "8506938223, 9911631519",
+    "mother_phone": "8506938223, 9911631519"
+  },
+  {
+    "name": "ARSHIYA GARG",
+    "grade": "Grade 2B",
+    "dob": "2020-03-28",
+    "father_phone": "8800350000",
+    "mother_phone": "9873639739"
+  },
+  {
+    "name": "ARYAN MALHOTRA",
+    "grade": "Grade 2B",
+    "dob": "2020-03-14",
+    "father_phone": "9811138864",
+    "mother_phone": "8860276287"
+  },
+  {
+    "name": "ASHVIK",
+    "grade": "Grade 2B",
+    "dob": "2019-09-17",
+    "father_phone": "9599501851, 9250123767",
+    "mother_phone": "9599501851, 9250123767"
+  },
+  {
+    "name": "AYAAN",
+    "grade": "Grade 2B",
+    "dob": "2019-07-08",
+    "father_phone": "9560019002",
+    "mother_phone": "-"
+  },
+  {
+    "name": "CHAHAT KHARBANDA",
+    "grade": "Grade 2B",
+    "dob": "2020-03-25",
+    "father_phone": "7678391262",
+    "mother_phone": "9354644856"
+  },
+  {
+    "name": "DIVYANSHI",
+    "grade": "Grade 2B",
+    "dob": "2019-01-12",
+    "father_phone": "9212160900",
+    "mother_phone": "8595136271"
+  },
+  {
+    "name": "DIVIT SHARMA",
+    "grade": "Grade 2B",
+    "dob": "2020-01-02",
+    "father_phone": "9654686970",
+    "mother_phone": "9810287621"
+  },
+  {
+    "name": "JAS",
+    "grade": "Grade 2B",
+    "dob": "2018-12-12",
+    "father_phone": "9871237585",
+    "mother_phone": "9310920561"
+  },
+  {
+    "name": "KAIRAV",
+    "grade": "Grade 2B",
+    "dob": "2019-02-07",
+    "father_phone": "9278189024",
+    "mother_phone": "9953870187"
+  },
+  {
+    "name": "KAISHA BHOLA",
+    "grade": "Grade 2B",
+    "dob": "2020-03-05",
+    "father_phone": "9212313122",
+    "mother_phone": "9720620648"
+  },
+  {
+    "name": "KIYANSH DHAWAN",
+    "grade": "Grade 2B",
+    "dob": "2019-08-26",
+    "father_phone": "8178888377",
+    "mother_phone": "9996986530"
+  },
+  {
+    "name": "MYRA LAKRA",
+    "grade": "Grade 2B",
+    "dob": "2019-07-22",
+    "father_phone": "9899281535",
+    "mother_phone": "9899992847"
+  },
+  {
+    "name": "PRINIT ARORA",
+    "grade": "Grade 2B",
+    "dob": "2019-09-01",
+    "father_phone": "8826726767",
+    "mother_phone": "9999852552"
+  },
+  {
+    "name": "SAANVI HANDA",
+    "grade": "Grade 2B",
+    "dob": "2019-08-16",
+    "father_phone": "9873470407",
+    "mother_phone": "9873470485"
+  },
+  {
+    "name": "SIDRA",
+    "grade": "Grade 2B",
+    "dob": "2019-12-25",
+    "father_phone": "-",
+    "mother_phone": "9910618652"
+  },
+  {
+    "name": "SOM",
+    "grade": "Grade 2B",
+    "dob": "2020-01-20",
+    "father_phone": "8929019666",
+    "mother_phone": "8929019666"
+  },
+  {
+    "name": "TANISHQ GARG",
+    "grade": "Grade 2B",
+    "dob": "2019-04-20",
+    "father_phone": "9013230906",
+    "mother_phone": "9899225984"
+  },
+  {
+    "name": "VIHAAN SINGLA",
+    "grade": "Grade 2B",
+    "dob": "2019-05-10",
+    "father_phone": "9654443645",
+    "mother_phone": "9971269252"
+  },
+  {
+    "name": "YASHIKA NAHARA",
+    "grade": "Grade 2B",
+    "dob": "2018-04-05",
+    "father_phone": "9971723950",
+    "mother_phone": "7011368098"
+  },
+  {
+    "name": "DEVANSH PARASHAR",
+    "grade": "Grade 2B",
+    "dob": "2018-11-20",
+    "father_phone": "9999771737",
+    "mother_phone": "9999771738"
+  },
+  {
+    "name": "KRIDHAA AGGARWAL",
+    "grade": "Grade 2B",
+    "dob": "2019-09-12",
+    "father_phone": "9999198158",
+    "mother_phone": "8860294044"
+  },
+  {
+    "name": "DAKSH BANSAL",
+    "grade": "Grade 2B",
+    "dob": "2018-12-15",
+    "father_phone": "8700790863",
+    "mother_phone": "9582414958"
+  },
+  {
+    "name": "VIHAAN SINGH",
+    "grade": "Grade 2B",
+    "dob": "2020-02-20",
+    "father_phone": "9711197143",
+    "mother_phone": "8700506195"
+  },
+  {
+    "name": "KRISHVI MOHATA",
+    "grade": "Grade 2B",
+    "dob": "2020-02-07",
+    "father_phone": "9833221762",
+    "mother_phone": "9561722098"
+  },
+  {
+    "name": "IVANSH JAIN",
+    "grade": "Grade 2B",
+    "dob": "2019-08-23",
+    "father_phone": "-",
+    "mother_phone": "7827118936"
+  },
+  {
+    "name": "DAIWIK SAINI",
+    "grade": "Grade 2B",
+    "dob": "2018-05-21",
+    "father_phone": "9990426038",
+    "mother_phone": "8510026038"
+  },
+  {
+    "name": "SAMAIRA JAIN",
+    "grade": "Grade 2B",
+    "dob": "2019-08-17",
+    "father_phone": "9899998324",
+    "mother_phone": "9899941522"
+  },
+  {
+    "name": "LAVISH GOSWAMI",
+    "grade": "Grade 2B",
+    "dob": "2019-10-16",
+    "father_phone": "9999478554",
+    "mother_phone": "8860052621"
+  },
+  {
+    "name": "ATHARV SHARMA",
+    "grade": "Grade 2B",
+    "dob": "2019-09-25",
+    "father_phone": "9871545012",
+    "mother_phone": "9560731155"
+  },
+  {
+    "name": "MIDHUL GUPTA",
+    "grade": "Grade 2B",
+    "dob": "2019-12-17",
+    "father_phone": "9310498843",
+    "mother_phone": "9315147065, 9953536470"
+  },
+  {
+    "name": "AAHAAN BANSAL",
+    "grade": "Grade 3A",
+    "dob": "2019-02-09",
+    "father_phone": "9873357065",
+    "mother_phone": "9988440316"
+  },
+  {
+    "name": "Aarna Bansal",
+    "grade": "Grade 3A",
+    "dob": "2018-09-27",
+    "father_phone": "9811358922",
+    "mother_phone": "9811774879"
+  },
+  {
+    "name": "Aarya Nahata",
+    "grade": "Grade 3A",
+    "dob": "2018-10-16",
+    "father_phone": "9966324433",
+    "mother_phone": "9649944997"
+  },
+  {
+    "name": "Advik Jain",
+    "grade": "Grade 3A",
+    "dob": "2019-02-12",
+    "father_phone": "9818820224",
+    "mother_phone": "9910682366"
+  },
+  {
+    "name": "Akshat Jha",
+    "grade": "Grade 3A",
+    "dob": "2018-08-22",
+    "father_phone": "9999273424",
+    "mother_phone": "9555101234"
+  },
+  {
+    "name": "ANSHDEEP JAISWAL",
+    "grade": "Grade 3A",
+    "dob": "2018-04-05",
+    "father_phone": "8744090383",
+    "mother_phone": "9919642581"
+  },
+  {
+    "name": "Avyukt Jain",
+    "grade": "Grade 3A",
+    "dob": "2018-10-27",
+    "father_phone": "9899077674",
+    "mother_phone": "9654521102"
+  },
+  {
+    "name": "Ayaansh Jain",
+    "grade": "Grade 3A",
+    "dob": "2019-02-22",
+    "father_phone": "9910078735",
+    "mother_phone": "9013771744"
+  },
+  {
+    "name": "Chahak Budhiraja",
+    "grade": "Grade 3A",
+    "dob": "2019-04-05",
+    "father_phone": "8375838383",
+    "mother_phone": "9990999650"
+  },
+  {
+    "name": "Chanchal",
+    "grade": "Grade 3A",
+    "dob": "2018-09-26",
+    "father_phone": "7042058035",
+    "mother_phone": "9667406954"
+  },
+  {
+    "name": "Daksh Saini",
+    "grade": "Grade 3A",
+    "dob": "2018-09-25",
+    "father_phone": "9650746163",
+    "mother_phone": "9354901231"
+  },
+  {
+    "name": "Kiara Agarwal",
+    "grade": "Grade 3A",
+    "dob": "2018-12-02",
+    "father_phone": "9311166518",
+    "mother_phone": "9873842660"
+  },
+  {
+    "name": "DHANITH",
+    "grade": "Grade 3A",
+    "dob": "2018-10-16",
+    "father_phone": "-",
+    "mother_phone": "7701974447"
+  },
+  {
+    "name": "Iyana Gupta",
+    "grade": "Grade 3A",
+    "dob": "2018-11-27",
+    "father_phone": "9212238289",
+    "mother_phone": "9899220433"
+  },
+  {
+    "name": "JAIVARDHAN SHERAWAT",
+    "grade": "Grade 3A",
+    "dob": "2018-03-18",
+    "father_phone": "7982746016, 8376813031",
+    "mother_phone": "8920311401, 9999552880"
+  },
+  {
+    "name": "KAVYA",
+    "grade": "Grade 3A",
+    "dob": "2017-06-25",
+    "father_phone": "8802888111",
+    "mother_phone": "8588040888"
+  },
+  {
+    "name": "NAKSH GOYAL",
+    "grade": "Grade 3A",
+    "dob": "2018-06-25",
+    "father_phone": "9891210263",
+    "mother_phone": "9811166721"
+  },
+  {
+    "name": "Nishant",
+    "grade": "Grade 3A",
+    "dob": "2019-03-25",
+    "father_phone": "9910098574",
+    "mother_phone": "9818271351"
+  },
+  {
+    "name": "SIDHAAN KHANNA",
+    "grade": "Grade 3A",
+    "dob": "2015-11-20",
+    "father_phone": "9811183778, 9811083778",
+    "mother_phone": "9811483778"
+  },
+  {
+    "name": "Deepti Mahour",
+    "grade": "Grade 3A",
+    "dob": "2019-01-13",
+    "father_phone": "9990860669",
+    "mother_phone": "8810498995"
+  },
+  {
+    "name": "SUSHANT KUMAR",
+    "grade": "Grade 3A",
+    "dob": "2018-06-06",
+    "father_phone": "9212557520",
+    "mother_phone": "9711506358"
+  },
+  {
+    "name": "Trishika Puri",
+    "grade": "Grade 3A",
+    "dob": "2017-09-01",
+    "father_phone": "7827698004",
+    "mother_phone": "8700734662"
+  },
+  {
+    "name": "VIRAAJ SAPRA",
+    "grade": "Grade 3A",
+    "dob": "2018-09-03",
+    "father_phone": "9810241415",
+    "mother_phone": "9667350091"
+  },
+  {
+    "name": "Yuvansh",
+    "grade": "Grade 3A",
+    "dob": "2018-05-03",
+    "father_phone": "9811591252",
+    "mother_phone": "9910492967"
+  },
+  {
+    "name": "Yuvin Saini",
+    "grade": "Grade 3A",
+    "dob": "2018-08-21",
+    "father_phone": "9582193601",
+    "mother_phone": "9718886759"
+  },
+  {
+    "name": "Kashika Aggarwal",
+    "grade": "Grade 3A",
+    "dob": "2018-07-12",
+    "father_phone": "9999569276",
+    "mother_phone": "9910063126"
+  },
+  {
+    "name": "AADHYA BHANDARI",
+    "grade": "Grade 3B",
+    "dob": "2018-11-27",
+    "father_phone": "9810638532",
+    "mother_phone": "9818280600"
+  },
+  {
+    "name": "Adhrit Bajaj",
+    "grade": "Grade 3B",
+    "dob": "2018-05-05",
+    "father_phone": "7982026207",
+    "mother_phone": "9811352446"
+  },
+  {
+    "name": "Atharv Agarwal",
+    "grade": "Grade 3B",
+    "dob": "2019-01-02",
+    "father_phone": "9868155636",
+    "mother_phone": "9654638540"
+  },
+  {
+    "name": "AVYAAN SINGH",
+    "grade": "Grade 3B",
+    "dob": "2019-02-21",
+    "father_phone": "9310299828",
+    "mother_phone": "8742933669"
+  },
+  {
+    "name": "Devisha Arora",
+    "grade": "Grade 3B",
+    "dob": "2018-10-23",
+    "father_phone": "9811309296",
+    "mother_phone": "9911614767"
+  },
+  {
+    "name": "Dhiraj",
+    "grade": "Grade 3B",
+    "dob": "2019-01-05",
+    "father_phone": "9873736685",
+    "mother_phone": "8766367905"
+  },
+  {
+    "name": "Dhruvika Gautam",
+    "grade": "Grade 3B",
+    "dob": "2018-08-20",
+    "father_phone": "8171121840",
+    "mother_phone": "7088611999"
+  },
+  {
+    "name": "Himanshu",
+    "grade": "Grade 3B",
+    "dob": "2017-10-03",
+    "father_phone": "9818322050",
+    "mother_phone": "7827111041"
+  },
+  {
+    "name": "Jannat",
+    "grade": "Grade 3B",
+    "dob": "2018-02-09",
+    "father_phone": "9315808354",
+    "mother_phone": "9899087078"
+  },
+  {
+    "name": "SUHANI KAJANIYA",
+    "grade": "Grade 3B",
+    "dob": "2018-03-16",
+    "father_phone": "9717277359",
+    "mother_phone": "8010313010"
+  },
+  {
+    "name": "LAVIK DIDWANIA",
+    "grade": "Grade 3B",
+    "dob": "2019-02-11",
+    "father_phone": "9643629786",
+    "mother_phone": "9873498588"
+  },
+  {
+    "name": "Lavit Parihar",
+    "grade": "Grade 3B",
+    "dob": "2018-12-19",
+    "father_phone": "79822 62068",
+    "mother_phone": "9871936019"
+  },
+  {
+    "name": "Maanik Mohan",
+    "grade": "Grade 3B",
+    "dob": "2019-03-20",
+    "father_phone": "9811971719",
+    "mother_phone": "9711188762"
+  },
+  {
+    "name": "Manvik Mohan",
+    "grade": "Grade 3B",
+    "dob": "2019-03-20",
+    "father_phone": "9811971719",
+    "mother_phone": "9711188762"
+  },
+  {
+    "name": "NAMASHVI",
+    "grade": "Grade 3B",
+    "dob": "2019-03-25",
+    "father_phone": "8239429701",
+    "mother_phone": "9999441704"
+  },
+  {
+    "name": "Phonics Rana",
+    "grade": "Grade 3B",
+    "dob": "2018-06-29",
+    "father_phone": "8014480144, 8888888654",
+    "mother_phone": "8282828279"
+  },
+  {
+    "name": "Pirnoor Bali",
+    "grade": "Grade 3B",
+    "dob": "2017-11-15",
+    "father_phone": "8287825890",
+    "mother_phone": "8860942063"
+  },
+  {
+    "name": "Rushank Sethi",
+    "grade": "Grade 3B",
+    "dob": "2019-02-25",
+    "father_phone": "7982502090",
+    "mother_phone": "9315683886"
+  },
+  {
+    "name": "Samarth Garg",
+    "grade": "Grade 3B",
+    "dob": "2018-11-22",
+    "father_phone": "8826719469",
+    "mother_phone": "9015570189"
+  },
+  {
+    "name": "Snithika Genupala",
+    "grade": "Grade 3B",
+    "dob": "2019-02-21",
+    "father_phone": "7005726636",
+    "mother_phone": "8247343217"
+  },
+  {
+    "name": "Yadvik Gupta",
+    "grade": "Grade 3B",
+    "dob": "2019-02-27",
+    "father_phone": "9810450503",
+    "mother_phone": "9899921660"
+  },
+  {
+    "name": "KRISHA VOHRA",
+    "grade": "Grade 3B",
+    "dob": "2018-09-05",
+    "father_phone": "9899721412",
+    "mother_phone": "9911540183"
+  },
+  {
+    "name": "AHAAN JAIN",
+    "grade": "Grade 3B",
+    "dob": "2018-04-12",
+    "father_phone": "9953308012",
+    "mother_phone": "9871455122"
+  },
+  {
+    "name": "Aveer Khurana",
+    "grade": "Grade 3B",
+    "dob": "2018-09-14",
+    "father_phone": "9999321656",
+    "mother_phone": "9999601650"
+  },
+  {
+    "name": "Mayan Jain",
+    "grade": "Grade 3B",
+    "dob": "2018-08-22",
+    "father_phone": "9811118966",
+    "mother_phone": "9811118951"
+  },
+  {
+    "name": "Saanvi Singhal",
+    "grade": "Grade 3B",
+    "dob": "2018-09-06",
+    "father_phone": "9811755744",
+    "mother_phone": "9999858957"
+  },
+  {
+    "name": "Alfiza",
+    "grade": "Grade 3B",
+    "dob": "2018-04-30",
+    "father_phone": "9313570085",
+    "mother_phone": "9213223885"
+  },
+  {
+    "name": "VIRAJ SHARMA",
+    "grade": "Grade 3B",
+    "dob": "2018-02-14",
+    "father_phone": "9654735515",
+    "mother_phone": "7838775885"
+  },
+  {
+    "name": "Aditi",
+    "grade": "Grade 3C",
+    "dob": "2018-09-05",
+    "father_phone": "9211464876",
+    "mother_phone": "9311093685"
+  },
+  {
+    "name": "Amoha Singh",
+    "grade": "Grade 3C",
+    "dob": "2018-06-25",
+    "father_phone": "9811394439/ 8368330737",
+    "mother_phone": "9911394439/8076454145"
+  },
+  {
+    "name": "Arhaan jain",
+    "grade": "Grade 3C",
+    "dob": "2018-08-04",
+    "father_phone": "7506183708",
+    "mother_phone": "9820455015"
+  },
+  {
+    "name": "AYAAN GOYAL",
+    "grade": "Grade 3C",
+    "dob": "2018-09-28",
+    "father_phone": "9582351304",
+    "mother_phone": "9711548177"
+  },
+  {
+    "name": "AYAAN YADAV",
+    "grade": "Grade 3C",
+    "dob": "2018-06-26",
+    "father_phone": "8527362217",
+    "mother_phone": "9810652217"
+  },
+  {
+    "name": "BHAVYA JAIN",
+    "grade": "Grade 3C",
+    "dob": "2018-04-19",
+    "father_phone": "9711064887",
+    "mother_phone": "8178059553"
+  },
+  {
+    "name": "Gohaan Kumar",
+    "grade": "Grade 3C",
+    "dob": "2018-10-19",
+    "father_phone": "8130305404",
+    "mother_phone": "8595379182"
+  },
+  {
+    "name": "Hargun Budhiraja",
+    "grade": "Grade 3C",
+    "dob": "2019-03-11",
+    "father_phone": "9999990504",
+    "mother_phone": "8287669918"
+  },
+  {
+    "name": "Khushaal Vashistha",
+    "grade": "Grade 3C",
+    "dob": "2018-05-07",
+    "father_phone": "9810999226",
+    "mother_phone": "9810999236"
+  },
+  {
+    "name": "Krishiv Arora",
+    "grade": "Grade 3C",
+    "dob": "2018-06-15",
+    "father_phone": "9654171023",
+    "mother_phone": "8860090442"
+  },
+  {
+    "name": "Madhuram Kumar",
+    "grade": "Grade 3C",
+    "dob": "2018-06-18",
+    "father_phone": "9811006438",
+    "mother_phone": "7428473929"
+  },
+  {
+    "name": "Mehak",
+    "grade": "Grade 3C",
+    "dob": "2018-10-28",
+    "father_phone": "9999173838",
+    "mother_phone": "8860893310"
+  },
+  {
+    "name": "Naamyaa Goel",
+    "grade": "Grade 3C",
+    "dob": "2018-09-02",
+    "father_phone": "9873247058",
+    "mother_phone": "9811547058"
+  },
+  {
+    "name": "Nancy",
+    "grade": "Grade 3C",
+    "dob": "2018-03-08",
+    "father_phone": "8130763519",
+    "mother_phone": "8130763519"
+  },
+  {
+    "name": "Raj",
+    "grade": "Grade 3C",
+    "dob": "2017-08-03",
+    "father_phone": "8745964787",
+    "mother_phone": "7906697411"
+  },
+  {
+    "name": "Rohan Garg",
+    "grade": "Grade 3C",
+    "dob": "2018-04-30",
+    "father_phone": "9868796238",
+    "mother_phone": "9013587207"
+  },
+  {
+    "name": "Suhaan Ahuja",
+    "grade": "Grade 3C",
+    "dob": "2018-06-11",
+    "father_phone": "9818311160",
+    "mother_phone": "8076455224"
+  },
+  {
+    "name": "Syeda Ummeykulsum Minhaji",
+    "grade": "Grade 3C",
+    "dob": "2018-04-16",
+    "father_phone": "9899173080",
+    "mother_phone": "9717421877"
+  },
+  {
+    "name": "Thiya Gupta",
+    "grade": "Grade 3C",
+    "dob": "2017-09-20",
+    "father_phone": "9971797608",
+    "mother_phone": "9313664242"
+  },
+  {
+    "name": "AMRIT NANDA",
+    "grade": "Grade 3C",
+    "dob": "2018-12-08",
+    "father_phone": "9873653735",
+    "mother_phone": "9810453735"
+  },
+  {
+    "name": "NIA JAIN",
+    "grade": "Grade 3C",
+    "dob": "2018-07-27",
+    "father_phone": "9873451160",
+    "mother_phone": "9990873073"
+  },
+  {
+    "name": "SAIAANSH GUPTA",
+    "grade": "Grade 3C",
+    "dob": "2018-10-18",
+    "father_phone": "9310106065",
+    "mother_phone": "9999811020"
+  },
+  {
+    "name": "Yuvaan kataria",
+    "grade": "Grade 3C",
+    "dob": "2018-11-10",
+    "father_phone": "9873075388",
+    "mother_phone": "8447220041"
+  },
+  {
+    "name": "Aarvi Goyal",
+    "grade": "Grade 3C",
+    "dob": "2018-12-18",
+    "father_phone": "9811785919",
+    "mother_phone": "9873021531"
+  },
+  {
+    "name": "Jaksh Agarwal",
+    "grade": "Grade 3C",
+    "dob": "2018-01-17",
+    "father_phone": "9654585122",
+    "mother_phone": "7291846405"
+  },
+  {
+    "name": "ATHARVA GUPTA",
+    "grade": "Grade 3C",
+    "dob": "2018-11-21",
+    "father_phone": "9871797797",
+    "mother_phone": "9971758611"
+  },
+  {
+    "name": "Aviaansh Sabharwal",
+    "grade": "Grade 3C",
+    "dob": "2018-12-26",
+    "father_phone": "9811516474",
+    "mother_phone": "8860006474"
+  },
+  {
+    "name": "Maryam Shadab",
+    "grade": "Grade 3C",
+    "dob": "2018-03-07",
+    "father_phone": "9999091909",
+    "mother_phone": "9997861780"
+  },
+  {
+    "name": "Aaradhya",
+    "grade": "Grade 4A",
+    "dob": "2018-02-24",
+    "father_phone": "9958301402",
+    "mother_phone": "9958301402"
+  },
+  {
+    "name": "ANAYA NAGPAL",
+    "grade": "Grade 4A",
+    "dob": "2018-03-10",
+    "father_phone": "8973855555",
+    "mother_phone": "9982279156"
+  },
+  {
+    "name": "Anaya Thaurani",
+    "grade": "Grade 4A",
+    "dob": "2017-11-01",
+    "father_phone": "9999939436",
+    "mother_phone": "9999639436"
+  },
+  {
+    "name": "BHAVYA MANGLA",
+    "grade": "Grade 4A",
+    "dob": "2018-03-12",
+    "father_phone": "9212536281",
+    "mother_phone": "7042420292"
+  },
+  {
+    "name": "Dikshita",
+    "grade": "Grade 4A",
+    "dob": "2017-04-01",
+    "father_phone": "9910848659",
+    "mother_phone": "991084659"
+  },
+  {
+    "name": "DIVISH JAIN",
+    "grade": "Grade 4A",
+    "dob": "2017-10-04",
+    "father_phone": "9711304606",
+    "mother_phone": "9643220446"
+  },
+  {
+    "name": "Hardik Rawat",
+    "grade": "Grade 4A",
+    "dob": "2016-10-22",
+    "father_phone": "7827496663",
+    "mother_phone": "9599471356"
+  },
+  {
+    "name": "ISHMEET SINGH GUMBER",
+    "grade": "Grade 4A",
+    "dob": "2017-06-26",
+    "father_phone": "9899610635",
+    "mother_phone": "9643783860"
+  },
+  {
+    "name": "JAITIK RAWAT",
+    "grade": "Grade 4A",
+    "dob": "2017-12-22",
+    "father_phone": "9850384289",
+    "mother_phone": "7835824585"
+  },
+  {
+    "name": "Jiansh Royal",
+    "grade": "Grade 4A",
+    "dob": "2017-10-03",
+    "father_phone": "9891897485",
+    "mother_phone": "9582458807"
+  },
+  {
+    "name": "Karan",
+    "grade": "Grade 4A",
+    "dob": "2016-07-03",
+    "father_phone": "9278825788",
+    "mother_phone": "8376991695"
+  },
+  {
+    "name": "Luvish Gupta",
+    "grade": "Grade 4A",
+    "dob": "2018-03-20",
+    "father_phone": "9999994328",
+    "mother_phone": "9999694328"
+  },
+  {
+    "name": "Mahira",
+    "grade": "Grade 4A",
+    "dob": "2017-12-18",
+    "father_phone": "9958786465",
+    "mother_phone": "8802454548"
+  },
+  {
+    "name": "Riddhi Jain",
+    "grade": "Grade 4A",
+    "dob": "2017-07-31",
+    "father_phone": "9811830886",
+    "mother_phone": "9650355677"
+  },
+  {
+    "name": "Ridhima Kukreti",
+    "grade": "Grade 4A",
+    "dob": "2017-10-26",
+    "father_phone": "8130804400",
+    "mother_phone": "7290934501"
+  },
+  {
+    "name": "Ridhvi Juneja",
+    "grade": "Grade 4A",
+    "dob": "2018-02-24",
+    "father_phone": "9212221292/ 9811348008",
+    "mother_phone": "8700904352"
+  },
+  {
+    "name": "RIVAAN BANSIWAL",
+    "grade": "Grade 4A",
+    "dob": "2015-03-09",
+    "father_phone": "9811216865",
+    "mother_phone": "9811230124"
+  },
+  {
+    "name": "Saanvii Yadav",
+    "grade": "Grade 4A",
+    "dob": "2017-09-20",
+    "father_phone": "9899962626",
+    "mother_phone": "9718463636"
+  },
+  {
+    "name": "Samvit Goel",
+    "grade": "Grade 4A",
+    "dob": "2017-08-17",
+    "father_phone": "9811950400",
+    "mother_phone": "9910376769"
+  },
+  {
+    "name": "Satyam Puri",
+    "grade": "Grade 4A",
+    "dob": "2017-10-22",
+    "father_phone": "8585944943",
+    "mother_phone": "8595188485"
+  },
+  {
+    "name": "Vinisha Khera",
+    "grade": "Grade 4A",
+    "dob": "2017-07-20",
+    "father_phone": "8860773509",
+    "mother_phone": "8860973446"
+  },
+  {
+    "name": "Viraaj Jain",
+    "grade": "Grade 4A",
+    "dob": "2018-01-01",
+    "father_phone": "9811875008",
+    "mother_phone": "9899924204"
+  },
+  {
+    "name": "VORANSH PAL TEEKLA",
+    "grade": "Grade 4A",
+    "dob": "2016-08-26",
+    "father_phone": "9871091785",
+    "mother_phone": "9871401785"
+  },
+  {
+    "name": "Yash Gupta",
+    "grade": "Grade 4A",
+    "dob": "2018-03-12",
+    "father_phone": "7838668435",
+    "mother_phone": "8800520802"
+  },
+  {
+    "name": "NAINIKA A SAINI",
+    "grade": "Grade 4A",
+    "dob": "2017-11-01",
+    "father_phone": "9871218365",
+    "mother_phone": "9311154756"
+  },
+  {
+    "name": "MARYAM TANVEER QUERSHI",
+    "grade": "Grade 4A",
+    "dob": "2017-07-07",
+    "father_phone": "8383808379",
+    "mother_phone": "8076469192"
+  },
+  {
+    "name": "SAMAIRA KATARIA",
+    "grade": "Grade 4A",
+    "dob": "2017-07-13",
+    "father_phone": "9999444075",
+    "mother_phone": "9999444736"
+  },
+  {
+    "name": "Chinmay Aggarwal",
+    "grade": "Grade 4A",
+    "dob": "2017-03-28",
+    "father_phone": "9811170203",
+    "mother_phone": "8810203897"
+  },
+  {
+    "name": "Vedansh Singhal",
+    "grade": "Grade 4A",
+    "dob": "2017-09-13",
+    "father_phone": "9999191968",
+    "mother_phone": "9643100520"
+  },
+  {
+    "name": "Navya Singhal",
+    "grade": "Grade 4A",
+    "dob": "2017-08-01",
+    "father_phone": "9999191969",
+    "mother_phone": "9810293263"
+  },
+  {
+    "name": "Yuvaan Gupta",
+    "grade": "Grade 4A",
+    "dob": "2016-12-14",
+    "father_phone": "8130016004",
+    "mother_phone": "9958471189"
+  },
+  {
+    "name": "Shanaya Bagaria",
+    "grade": "Grade 4A",
+    "dob": "2016-11-15",
+    "father_phone": "9911221122",
+    "mother_phone": "9999728728"
+  },
+  {
+    "name": "Dimaira arora",
+    "grade": "Grade 4A",
+    "dob": "2017-09-07",
+    "father_phone": "9810970735",
+    "mother_phone": "95997 37001"
+  },
+  {
+    "name": "Kashvi Garg",
+    "grade": "Grade 4A",
+    "dob": "2017-10-11",
+    "father_phone": "9999955371",
+    "mother_phone": "9540671681"
+  },
+  {
+    "name": "ZARA SURI",
+    "grade": "Grade 4A",
+    "dob": "2017-08-01",
+    "father_phone": "9891262140",
+    "mother_phone": "9582262142(WHATSAPP), 8766330985"
+  },
+  {
+    "name": "Amaira Gupta",
+    "grade": "Grade 4A",
+    "dob": "2017-11-23",
+    "father_phone": "9999118426",
+    "mother_phone": "9999118480"
+  },
+  {
+    "name": "AHHMAD SALEEF GEELANI",
+    "grade": "Grade 4A",
+    "dob": "2016-05-17",
+    "father_phone": "7780857543",
+    "mother_phone": "9906728853"
+  },
+  {
+    "name": "Gaurish Malhotra",
+    "grade": "Grade 4A",
+    "dob": "2017-01-02",
+    "father_phone": "8588042456",
+    "mother_phone": "7701936902"
+  },
+  {
+    "name": "Aarav Sharma",
+    "grade": "Grade 4B",
+    "dob": "2017-08-01",
+    "father_phone": "9910063457",
+    "mother_phone": "9811878908"
+  },
+  {
+    "name": "Amayra Baswan",
+    "grade": "Grade 4B",
+    "dob": "2018-02-01",
+    "father_phone": "9210326456",
+    "mother_phone": "9958512113"
+  },
+  {
+    "name": "ANAYA HADA (same section with Jenika)",
+    "grade": "Grade 4B",
+    "dob": "2018-03-29",
+    "father_phone": "9810127685",
+    "mother_phone": "8077558316"
+  },
+  {
+    "name": "ATHARV MITTAL",
+    "grade": "Grade 4B",
+    "dob": "2017-11-27",
+    "father_phone": "9810018762",
+    "mother_phone": "9313462856"
+  },
+  {
+    "name": "Athrav Gupta",
+    "grade": "Grade 4B",
+    "dob": "2016-08-07",
+    "father_phone": "9213260580",
+    "mother_phone": "9213260580"
+  },
+  {
+    "name": "Baani Chopra",
+    "grade": "Grade 4B",
+    "dob": "2017-02-27",
+    "father_phone": "9810741919",
+    "mother_phone": "9811130303"
+  },
+  {
+    "name": "Divyam Goel",
+    "grade": "Grade 4B",
+    "dob": "2017-08-11",
+    "father_phone": "9311906352",
+    "mother_phone": "7982890723"
+  },
+  {
+    "name": "Garv Bajaj",
+    "grade": "Grade 4B",
+    "dob": "2017-05-25",
+    "father_phone": "9910808206",
+    "mother_phone": "8377897540"
+  },
+  {
+    "name": "GAURISH WASON",
+    "grade": "Grade 4B",
+    "dob": "2017-10-30",
+    "father_phone": "9873915931",
+    "mother_phone": "9999202372"
+  },
+  {
+    "name": "JENIKA KAPOOR (same section with anaya hada)",
+    "grade": "Grade 4B",
+    "dob": "2017-07-10",
+    "father_phone": "9910079669",
+    "mother_phone": "8920584848"
+  },
+  {
+    "name": "Kanishka Bhardwaj",
+    "grade": "Grade 4B",
+    "dob": "2017-10-12",
+    "father_phone": "9910082225",
+    "mother_phone": "9811552506"
+  },
+  {
+    "name": "KIYANSH N DRAVID",
+    "grade": "Grade 4B",
+    "dob": "2016-07-20",
+    "father_phone": "9999151399",
+    "mother_phone": "9654794343"
+  },
+  {
+    "name": "LEVISH SHARMA",
+    "grade": "Grade 4B",
+    "dob": "2017-12-28",
+    "father_phone": "8802639402",
+    "mother_phone": "9711750714"
+  },
+  {
+    "name": "Love",
+    "grade": "Grade 4B",
+    "dob": "2018-03-25",
+    "father_phone": "8802732636",
+    "mother_phone": "8368843313"
+  },
+  {
+    "name": "OJASVI GUPTA",
+    "grade": "Grade 4B",
+    "dob": "2017-09-12",
+    "father_phone": "8287666216",
+    "mother_phone": "8971273169"
+  },
+  {
+    "name": "Priyal",
+    "grade": "Grade 4B",
+    "dob": "2017-05-25",
+    "father_phone": "8595706251",
+    "mother_phone": "9643685893"
+  },
+  {
+    "name": "Samiksha Shukla",
+    "grade": "Grade 4B",
+    "dob": "2017-12-04",
+    "father_phone": "9017055226",
+    "mother_phone": "7503549611"
+  },
+  {
+    "name": "Shivaansh Puri",
+    "grade": "Grade 4B",
+    "dob": "2017-10-22",
+    "father_phone": "8585944943",
+    "mother_phone": "8595188485"
+  },
+  {
+    "name": "SONAKSHI",
+    "grade": "Grade 4B",
+    "dob": "2016-10-14",
+    "father_phone": "9213660519",
+    "mother_phone": "7678107863"
+  },
+  {
+    "name": "Tejas Arora",
+    "grade": "Grade 4B",
+    "dob": "2017-07-31",
+    "father_phone": "8800223011",
+    "mother_phone": "7701821192"
+  },
+  {
+    "name": "Trisha",
+    "grade": "Grade 4B",
+    "dob": "2017-08-27",
+    "father_phone": "7303406220",
+    "mother_phone": "7303406220"
+  },
+  {
+    "name": "Vihana Khera",
+    "grade": "Grade 4B",
+    "dob": "2017-07-20",
+    "father_phone": "8860773509",
+    "mother_phone": "8860973446"
+  },
+  {
+    "name": "Yuvaan Saxena",
+    "grade": "Grade 4B",
+    "dob": "2017-10-26",
+    "father_phone": "7838551117",
+    "mother_phone": "9999052640"
+  },
+  {
+    "name": "TANISHQ GUPTA",
+    "grade": "Grade 4B",
+    "dob": "2017-08-26",
+    "father_phone": "",
+    "mother_phone": "8285011646"
+  },
+  {
+    "name": "TANMEET SINGH DHANJU",
+    "grade": "Grade 4B",
+    "dob": "2016-11-20",
+    "father_phone": "9999919669",
+    "mother_phone": "6283047077"
+  },
+  {
+    "name": "KARANVEER SINGH VIRDI",
+    "grade": "Grade 4B",
+    "dob": "2017-03-02",
+    "father_phone": "9953082801",
+    "mother_phone": "9873813639"
+  },
+  {
+    "name": "DRIVYE KHARBNDA",
+    "grade": "Grade 4B",
+    "dob": "2017-02-28",
+    "father_phone": "9810686675",
+    "mother_phone": "7703848010"
+  },
+  {
+    "name": "RAGHAVI S KUMAR",
+    "grade": "Grade 4B",
+    "dob": "2018-01-09",
+    "father_phone": "9899953521",
+    "mother_phone": "9873061692"
+  },
+  {
+    "name": "Aavya Bansal",
+    "grade": "Grade 5A",
+    "dob": "2017-09-04",
+    "father_phone": "9810550050",
+    "mother_phone": "9810550051"
+  },
+  {
+    "name": "Abdul Samad",
+    "grade": "Grade 5A",
+    "dob": "2016-08-27",
+    "father_phone": "9899178786",
+    "mother_phone": "9560069560"
+  },
+  {
+    "name": "Adhyansh Goyal",
+    "grade": "Grade 5A",
+    "dob": "2016-08-14",
+    "father_phone": "9811730201, 9278730201",
+    "mother_phone": "9711077401"
+  },
+  {
+    "name": "Anaya Nigam",
+    "grade": "Grade 5A",
+    "dob": "2016-07-27",
+    "father_phone": "8384059506",
+    "mother_phone": "9910166525"
+  },
+  {
+    "name": "Atiksh Tuknait",
+    "grade": "Grade 5A",
+    "dob": "2016-03-25",
+    "father_phone": "9818899972",
+    "mother_phone": "9818899742"
+  },
+  {
+    "name": "Avyan Jain",
+    "grade": "Grade 5A",
+    "dob": "2016-05-07",
+    "father_phone": "9311233999",
+    "mother_phone": "9811551260"
+  },
+  {
+    "name": "Ayasha",
+    "grade": "Grade 5A",
+    "dob": "2006-07-03",
+    "father_phone": "8700802245",
+    "mother_phone": "9818775784"
+  },
+  {
+    "name": "Devansh",
+    "grade": "Grade 5A",
+    "dob": "2016-01-16",
+    "father_phone": "8920890284",
+    "mother_phone": "8920890284, 01127100386"
+  },
+  {
+    "name": "Divyanshi Sharma",
+    "grade": "Grade 5A",
+    "dob": "2017-02-28",
+    "father_phone": "9971177312, 9899566846",
+    "mother_phone": "9599070312"
+  },
+  {
+    "name": "GAVISH MAINI",
+    "grade": "Grade 5A",
+    "dob": "2015-10-10",
+    "father_phone": "7011630600",
+    "mother_phone": "9625644600"
+  },
+  {
+    "name": "Iknoor Kaur Arora",
+    "grade": "Grade 5A",
+    "dob": "2017-03-26",
+    "father_phone": "9810008976",
+    "mother_phone": "9971927264"
+  },
+  {
+    "name": "Laavika Bhatteja",
+    "grade": "Grade 5A",
+    "dob": "2016-11-14",
+    "father_phone": "9810816000",
+    "mother_phone": "9311853065"
+  },
+  {
+    "name": "Mohit Gangwal",
+    "grade": "Grade 5A",
+    "dob": "2016-05-15",
+    "father_phone": "9873547457",
+    "mother_phone": "9582493249"
+  },
+  {
+    "name": "MOKSH NANDA",
+    "grade": "Grade 5A",
+    "dob": "2016-08-05",
+    "father_phone": "8588867354",
+    "mother_phone": "9891915140"
+  },
+  {
+    "name": "Naksh Gupta",
+    "grade": "Grade 5A",
+    "dob": "2016-11-02",
+    "father_phone": "9211940240",
+    "mother_phone": "8510940240"
+  },
+  {
+    "name": "Nysa Bansal",
+    "grade": "Grade 5A",
+    "dob": "2017-01-28",
+    "father_phone": "9810873602",
+    "mother_phone": "9910166561"
+  },
+  {
+    "name": "Parth",
+    "grade": "Grade 5A",
+    "dob": "2015-08-11",
+    "father_phone": "9250535065",
+    "mother_phone": "8447784465"
+  },
+  {
+    "name": "Raina Shah",
+    "grade": "Grade 5A",
+    "dob": "2016-05-09",
+    "father_phone": "9911392199",
+    "mother_phone": "9990886786"
+  },
+  {
+    "name": "SAKSHAM HEMWANI",
+    "grade": "Grade 5A",
+    "dob": "2016-05-02",
+    "father_phone": "9212183683",
+    "mother_phone": "9873459470"
+  },
+  {
+    "name": "Sameeksha Bhardwaj",
+    "grade": "Grade 5A",
+    "dob": "2016-06-03",
+    "father_phone": "9910082225, 9910082220",
+    "mother_phone": "9811552506"
+  },
+  {
+    "name": "Shivani",
+    "grade": "Grade 5A",
+    "dob": "2016-05-23",
+    "father_phone": "8802732636",
+    "mother_phone": "8368843313"
+  },
+  {
+    "name": "Vaibhavi Makhija",
+    "grade": "Grade 5A",
+    "dob": "2016-05-11",
+    "father_phone": "9999990100",
+    "mother_phone": "9873344445"
+  },
+  {
+    "name": "Viaan Jain",
+    "grade": "Grade 5A",
+    "dob": "2017-10-04",
+    "father_phone": "9810917584",
+    "mother_phone": "9910132917"
+  },
+  {
+    "name": "Viraaj Bhardwaj",
+    "grade": "Grade 5A",
+    "dob": "2016-04-02",
+    "father_phone": "9873034535",
+    "mother_phone": "9711154535"
+  },
+  {
+    "name": "Virat Saxena",
+    "grade": "Grade 5A",
+    "dob": "2016-05-26",
+    "father_phone": "7838551117",
+    "mother_phone": "9999052640"
+  },
+  {
+    "name": "Yashvi Saini",
+    "grade": "Grade 5A",
+    "dob": "2016-04-11",
+    "father_phone": "9990426038",
+    "mother_phone": "8510026038"
+  },
+  {
+    "name": "HEZAL",
+    "grade": "Grade 5A",
+    "dob": "2016-08-29",
+    "father_phone": "9034557755",
+    "mother_phone": "9992484867"
+  },
+  {
+    "name": "Saanjh Singh",
+    "grade": "Grade 5A",
+    "dob": "2016-05-02",
+    "father_phone": "9958503770",
+    "mother_phone": "8178821944, 9910219073"
+  },
+  {
+    "name": "Arnisha Sharma",
+    "grade": "Grade 5A",
+    "dob": "2016-08-28",
+    "father_phone": "9644623345",
+    "mother_phone": "96446 70678"
+  },
+  {
+    "name": "Medhansh Garg",
+    "grade": "Grade 5A",
+    "dob": "2017-02-24",
+    "father_phone": "9818461336",
+    "mother_phone": "9999048192"
+  },
+  {
+    "name": "Yogesh Kumar Kamboj",
+    "grade": "Grade 5A",
+    "dob": "2016-01-04",
+    "father_phone": "9582877702",
+    "mother_phone": "9873679092"
+  },
+  {
+    "name": "Aarvi Jain",
+    "grade": "Grade 5B",
+    "dob": "2017-02-14",
+    "father_phone": "9711005582",
+    "mother_phone": "9999449585"
+  },
+  {
+    "name": "ADYA GOEL",
+    "grade": "Grade 5B",
+    "dob": "2016-06-05",
+    "father_phone": "9999335305",
+    "mother_phone": "9811788474"
+  },
+  {
+    "name": "Chanchal",
+    "grade": "Grade 5B",
+    "dob": "2016-12-11",
+    "father_phone": "9911312410",
+    "mother_phone": "9667678396"
+  },
+  {
+    "name": "Dheeraj",
+    "grade": "Grade 5B",
+    "dob": "2016-05-11",
+    "father_phone": "8377812136",
+    "mother_phone": "8377812136"
+  },
+  {
+    "name": "Diyaana Bansal",
+    "grade": "Grade 5B",
+    "dob": "2017-03-10",
+    "father_phone": "9899252949",
+    "mother_phone": "9910020495"
+  },
+  {
+    "name": "HARMANPREET SINGH",
+    "grade": "Grade 5B",
+    "dob": "2015-07-31",
+    "father_phone": "9716966613",
+    "mother_phone": "9891449044"
+  },
+  {
+    "name": "Lavik Bajaj",
+    "grade": "Grade 5B",
+    "dob": "2016-02-06",
+    "father_phone": "8506060659",
+    "mother_phone": "8506060682"
+  },
+  {
+    "name": "Mahanth Balayan",
+    "grade": "Grade 5B",
+    "dob": "2017-03-21",
+    "father_phone": "9999303902",
+    "mother_phone": "9999290902"
+  },
+  {
+    "name": "Moksh Goswami",
+    "grade": "Grade 5B",
+    "dob": "2016-04-18",
+    "father_phone": "9810619003",
+    "mother_phone": "9560250545"
+  },
+  {
+    "name": "Myra Chauhan",
+    "grade": "Grade 5B",
+    "dob": "2016-08-10",
+    "father_phone": "9650015060",
+    "mother_phone": "8130064616"
+  },
+  {
+    "name": "Noelle Aggarwal",
+    "grade": "Grade 5B",
+    "dob": "2017-03-19",
+    "father_phone": "9818222444",
+    "mother_phone": "9999621662"
+  },
+  {
+    "name": "Priyanshi",
+    "grade": "Grade 5B",
+    "dob": "2016-02-25",
+    "father_phone": "9599501851",
+    "mother_phone": "9250123767"
+  },
+  {
+    "name": "Reyansh Kapoor",
+    "grade": "Grade 5B",
+    "dob": "2016-11-07",
+    "father_phone": "9891075390",
+    "mother_phone": "9891977477"
+  },
+  {
+    "name": "Saksham",
+    "grade": "Grade 5B",
+    "dob": "2016-04-12",
+    "father_phone": "9211464876",
+    "mother_phone": "9268461976"
+  },
+  {
+    "name": "Samaira Gupta",
+    "grade": "Grade 5B",
+    "dob": "2017-09-03",
+    "father_phone": "9711733330",
+    "mother_phone": "9711733331, 8882510254"
+  },
+  {
+    "name": "Shanaya Mittal",
+    "grade": "Grade 5B",
+    "dob": "2017-04-01",
+    "father_phone": "9871503347",
+    "mother_phone": "9871803347"
+  },
+  {
+    "name": "Shaurya Sharma",
+    "grade": "Grade 5B",
+    "dob": "2017-02-19",
+    "father_phone": "9990321148",
+    "mother_phone": "8368384525"
+  },
+  {
+    "name": "SHIVAAY DHANANIA",
+    "grade": "Grade 5B",
+    "dob": "2016-06-24",
+    "father_phone": "9899364364",
+    "mother_phone": "9898779545"
+  },
+  {
+    "name": "Shivanka Vig",
+    "grade": "Grade 5B",
+    "dob": "2017-01-18",
+    "father_phone": "8882645198",
+    "mother_phone": ""
+  },
+  {
+    "name": "Shrihan Gupta",
+    "grade": "Grade 5B",
+    "dob": "2016-10-13",
+    "father_phone": "9312007595",
+    "mother_phone": "9654149060"
+  },
+  {
+    "name": "Suryansh Doliya",
+    "grade": "Grade 5B",
+    "dob": "2015-09-06",
+    "father_phone": "9992227429",
+    "mother_phone": "9999154430"
+  },
+  {
+    "name": "Vedika Charnalia",
+    "grade": "Grade 5B",
+    "dob": "2017-02-24",
+    "father_phone": "9212222744",
+    "mother_phone": "9654222744"
+  },
+  {
+    "name": "Vinayak Kajaniya",
+    "grade": "Grade 5B",
+    "dob": "2015-04-11",
+    "father_phone": "9717277359",
+    "mother_phone": "8010313010"
+  },
+  {
+    "name": "Virat Agarwal",
+    "grade": "Grade 5B",
+    "dob": "2016-08-26",
+    "father_phone": "9717171330",
+    "mother_phone": "8586926520"
+  },
+  {
+    "name": "VIYAN BANSAL",
+    "grade": "Grade 5B",
+    "dob": "2016-09-29",
+    "father_phone": "9873939739",
+    "mother_phone": "9289406658"
+  },
+  {
+    "name": "Yana Lalwani",
+    "grade": "Grade 5B",
+    "dob": "2016-03-31",
+    "father_phone": "9999405321",
+    "mother_phone": "8860115323"
+  },
+  {
+    "name": "MAAHIRA SAINI",
+    "grade": "Grade 5B",
+    "dob": "2016-10-19",
+    "father_phone": "9899008607",
+    "mother_phone": "9899813384"
+  },
+  {
+    "name": "SAMAYRA NARAYAN",
+    "grade": "Grade 5B",
+    "dob": "2016-11-09",
+    "father_phone": "9911374555",
+    "mother_phone": "9313650005"
+  },
+  {
+    "name": "Jagrit Batra",
+    "grade": "Grade 5B",
+    "dob": "2016-02-04",
+    "father_phone": "8860606960",
+    "mother_phone": "8860606964"
+  },
+  {
+    "name": "Rubani Massaun( Same Section with Iknoor Kaur)",
+    "grade": "Grade 5B",
+    "dob": "2016-10-30",
+    "father_phone": "9811897788",
+    "mother_phone": "9999327444"
+  },
+  {
+    "name": "Hridaan Gupta",
+    "grade": "Grade 5B",
+    "dob": "2016-07-26",
+    "father_phone": "NA",
+    "mother_phone": "9910501777, 9999888506"
+  },
+  {
+    "name": "Shyra Talreja",
+    "grade": "Grade 5B",
+    "dob": "2016-07-12",
+    "father_phone": "9811489914",
+    "mother_phone": "9999504349"
+  },
+  {
+    "name": "Arham Hasan",
+    "grade": "Grade 5B",
+    "dob": "2016-04-10",
+    "father_phone": "8447153085",
+    "mother_phone": "8447393956"
+  },
+  {
+    "name": "Aadya Jhawar",
+    "grade": "Grade 6A",
+    "dob": "2015-06-21",
+    "father_phone": "8447058707",
+    "mother_phone": ""
+  },
+  {
+    "name": "AARAYNA SHARMA",
+    "grade": "Grade 6A",
+    "dob": "2015-12-17",
+    "father_phone": "8950000193",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aashnie Malik",
+    "grade": "Grade 6A",
+    "dob": "2015-07-21",
+    "father_phone": "9818184040",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aashve Malik",
+    "grade": "Grade 6A",
+    "dob": "2015-07-21",
+    "father_phone": "9818184040",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aayansh Baghel",
+    "grade": "Grade 6A",
+    "dob": "2015-04-24",
+    "father_phone": "9810796674",
+    "mother_phone": "9810790975"
+  },
+  {
+    "name": "Anaya Girdhar",
+    "grade": "Grade 6A",
+    "dob": "2015-12-25",
+    "father_phone": "9873731186",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aryan Yadav",
+    "grade": "Grade 6A",
+    "dob": "2015-11-22",
+    "father_phone": "8527362217",
+    "mother_phone": ""
+  },
+  {
+    "name": "DIVYANSH VIJ",
+    "grade": "Grade 6A",
+    "dob": "2015-12-01",
+    "father_phone": "9958088860",
+    "mother_phone": ""
+  },
+  {
+    "name": "Devki",
+    "grade": "Grade 6A",
+    "dob": "2014-08-14",
+    "father_phone": "8383982195",
+    "mother_phone": ""
+  },
+  {
+    "name": "Garvit Jain",
+    "grade": "Grade 6A",
+    "dob": "2016-02-08",
+    "father_phone": "9255183018",
+    "mother_phone": ""
+  },
+  {
+    "name": "GIREESHA LAMBA",
+    "grade": "Grade 6A",
+    "dob": "2015-09-25",
+    "father_phone": "9999686546",
+    "mother_phone": ""
+  },
+  {
+    "name": "Johan Sehgall",
+    "grade": "Grade 6A",
+    "dob": "2015-12-14",
+    "father_phone": "9560040097",
+    "mother_phone": ""
+  },
+  {
+    "name": "Kashish Jain",
+    "grade": "Grade 6A",
+    "dob": "2015-10-31",
+    "father_phone": "9818611345",
+    "mother_phone": "8860595942"
+  },
+  {
+    "name": "Kreedhay Goel",
+    "grade": "Grade 6A",
+    "dob": "2015-06-18",
+    "father_phone": "9999009270",
+    "mother_phone": "9953430041"
+  },
+  {
+    "name": "Kriday Bhardwaj",
+    "grade": "Grade 6A",
+    "dob": "2016-02-26",
+    "father_phone": "9871431690",
+    "mother_phone": ""
+  },
+  {
+    "name": "Leeana Baluja",
+    "grade": "Grade 6A",
+    "dob": "2015-08-07",
+    "father_phone": "9891444474",
+    "mother_phone": "9953338379"
+  },
+  {
+    "name": "LEYSHA JAIN",
+    "grade": "Grade 6A",
+    "dob": "2015-06-13",
+    "father_phone": "9990777330",
+    "mother_phone": ""
+  },
+  {
+    "name": "Mikail Saifi",
+    "grade": "Grade 6A",
+    "dob": "2015-02-16",
+    "father_phone": "9212812797",
+    "mother_phone": ""
+  },
+  {
+    "name": "Mohammad Aadil",
+    "grade": "Grade 6A",
+    "dob": "2015-12-29",
+    "father_phone": "8506046991",
+    "mother_phone": "9319469349"
+  },
+  {
+    "name": "Nimit Singh",
+    "grade": "Grade 6A",
+    "dob": "2015-05-10",
+    "father_phone": "9871502343/ 9838977770",
+    "mother_phone": ""
+  },
+  {
+    "name": "Pranaya Mangal",
+    "grade": "Grade 6A",
+    "dob": "2015-12-03",
+    "father_phone": "9312215044",
+    "mother_phone": ""
+  },
+  {
+    "name": "Priyanshika",
+    "grade": "Grade 6A",
+    "dob": "2015-11-08",
+    "father_phone": "8810316584",
+    "mother_phone": "8810236493"
+  },
+  {
+    "name": "Sakshi",
+    "grade": "Grade 6A",
+    "dob": "2014-06-18",
+    "father_phone": "9210835338",
+    "mother_phone": ""
+  },
+  {
+    "name": "Radhya Aggarwal",
+    "grade": "Grade 6A",
+    "dob": "2016-04-22",
+    "father_phone": "9810640290",
+    "mother_phone": ""
+  },
+  {
+    "name": "Sehajbir Dogra",
+    "grade": "Grade 6A",
+    "dob": "2016-03-19",
+    "father_phone": "9811311320",
+    "mother_phone": ""
+  },
+  {
+    "name": "Vaani Agarwal",
+    "grade": "Grade 6A",
+    "dob": "2015-05-08",
+    "father_phone": "9717171330",
+    "mother_phone": ""
+  },
+  {
+    "name": "Manpreet Kaur Bagga",
+    "grade": "Grade 6A",
+    "dob": "2016-01-08",
+    "father_phone": "9999484393",
+    "mother_phone": ""
+  },
+  {
+    "name": "Vivaan Chhabra",
+    "grade": "Grade 6A",
+    "dob": "2016-02-26",
+    "father_phone": "9810102211",
+    "mother_phone": "9212402212"
+  },
+  {
+    "name": "VRIDDHI SHARMA",
+    "grade": "Grade 6A",
+    "dob": "2015-10-02",
+    "father_phone": "9811978787",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aradhya Gupta",
+    "grade": "Grade 6A",
+    "dob": "2016-01-03",
+    "father_phone": "7703874757",
+    "mother_phone": "Shineupvcsolutions@gmail.com"
+  },
+  {
+    "name": "SHANAYA MITTAL",
+    "grade": "Grade 6A",
+    "dob": "2015-04-08",
+    "father_phone": "9871401318",
+    "mother_phone": ""
+  },
+  {
+    "name": "TANISHQ JESWANI",
+    "grade": "Grade 6A",
+    "dob": "2015-04-05",
+    "father_phone": "9811680220",
+    "mother_phone": ""
+  },
+  {
+    "name": "RUDRANSH GUPTA",
+    "grade": "Grade 6A",
+    "dob": "2015-12-23",
+    "father_phone": "9312649495",
+    "mother_phone": ""
+  },
+  {
+    "name": "Riyansh Gupta",
+    "grade": "Grade 6A",
+    "dob": "2015-08-21",
+    "father_phone": "9582868628",
+    "mother_phone": "9911053312"
+  },
+  {
+    "name": "Anhad Garg",
+    "grade": "Grade 6A",
+    "dob": "2016-01-25",
+    "father_phone": "9810536078",
+    "mother_phone": "8178820348"
+  },
+  {
+    "name": "Anvit Gupta",
+    "grade": "Grade 6A",
+    "dob": "2015-05-31",
+    "father_phone": "9650014424",
+    "mother_phone": "9821944425"
+  },
+  {
+    "name": "Amaira Gupta",
+    "grade": "Grade 6A",
+    "dob": "2015-12-23",
+    "father_phone": "9999990347",
+    "mother_phone": "9871117827"
+  },
+  {
+    "name": "Ahaan Gupta",
+    "grade": "Grade 6A",
+    "dob": "2015-10-01",
+    "father_phone": "9818849555",
+    "mother_phone": "9811017966"
+  },
+  {
+    "name": "Prabhav Goyal",
+    "grade": "Grade 6A",
+    "dob": "2015-06-15",
+    "father_phone": "9717747672",
+    "mother_phone": "9958222450"
+  },
+  {
+    "name": "Rudraan Mittal",
+    "grade": "Grade 6A",
+    "dob": "2015-10-20",
+    "father_phone": "7838444949",
+    "mother_phone": "7838777950"
+  },
+  {
+    "name": "Yuvraaj Goyal",
+    "grade": "Grade 6A",
+    "dob": "2015-09-21",
+    "father_phone": "9811095171",
+    "mother_phone": "9811052072"
+  },
+  {
+    "name": "Rishi Dev",
+    "grade": "Grade 6A",
+    "dob": "2015-07-25",
+    "father_phone": "9818503052",
+    "mother_phone": "9718520265"
+  },
+  {
+    "name": "Rudraa Kumar",
+    "grade": "Grade 6A",
+    "dob": "2015-10-15",
+    "father_phone": "9910303743",
+    "mother_phone": "9650005244"
+  },
+  {
+    "name": "Aadya Juneja",
+    "grade": "Grade 6A",
+    "dob": "2015-10-16",
+    "father_phone": "9999981910",
+    "mother_phone": "junejasak@gmail.com"
+  },
+  {
+    "name": "Suryansh Khari",
+    "grade": "Grade 6A",
+    "dob": "2016-03-31",
+    "father_phone": "9999643338",
+    "mother_phone": ""
+  },
+  {
+    "name": "AMAIRA SURI",
+    "grade": "Grade 6A",
+    "dob": "2015-04-21",
+    "father_phone": "9891262140",
+    "mother_phone": ""
+  },
+  {
+    "name": "Tanishq Jeswani",
+    "grade": "Grade 6A",
+    "dob": "2015-05-04",
+    "father_phone": "9811680220",
+    "mother_phone": "7982911448"
+  },
+  {
+    "name": "Shivansh Goel",
+    "grade": "Grade 6A",
+    "dob": "2015-07-20",
+    "father_phone": "9899065756",
+    "mother_phone": "goel.jitender@gmail.com"
+  },
+  {
+    "name": "ANANT",
+    "grade": "Grade 6A",
+    "dob": "2016-03-16",
+    "father_phone": "9350094241",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aadvik Gupta",
+    "grade": "Grade 6B",
+    "dob": "2015-10-18",
+    "father_phone": "9555309500",
+    "mother_phone": "9560034111"
+  },
+  {
+    "name": "Abbraneel B. Hazarika",
+    "grade": "Grade 6B",
+    "dob": "2015-10-02",
+    "father_phone": "9891211619",
+    "mother_phone": "9891211619"
+  },
+  {
+    "name": "Alshifa",
+    "grade": "Grade 6B",
+    "dob": "2015-08-10",
+    "father_phone": "9958173752",
+    "mother_phone": "9910448522"
+  },
+  {
+    "name": "Navidita",
+    "grade": "Grade 6B",
+    "dob": "2015-09-19",
+    "father_phone": "7838940540",
+    "mother_phone": "9958754049"
+  },
+  {
+    "name": "Arpit",
+    "grade": "Grade 6B",
+    "dob": "2015-01-02",
+    "father_phone": "8750182829",
+    "mother_phone": "8384089044"
+  },
+  {
+    "name": "Asha Kumari",
+    "grade": "Grade 6B",
+    "dob": "2015-07-03",
+    "father_phone": "8700663677",
+    "mother_phone": "9555253452"
+  },
+  {
+    "name": "Bless Harrison",
+    "grade": "Grade 6B",
+    "dob": "2015-12-24",
+    "father_phone": "9873600942",
+    "mother_phone": "9999969742"
+  },
+  {
+    "name": "Eklavya Soni",
+    "grade": "Grade 6B",
+    "dob": "2016-01-19",
+    "father_phone": "9999927993",
+    "mother_phone": "9999827993"
+  },
+  {
+    "name": "GURANSH SINGH",
+    "grade": "Grade 6B",
+    "dob": "2015-12-19",
+    "father_phone": "9250907022",
+    "mother_phone": "9999289888"
+  },
+  {
+    "name": "Hardik bhatia",
+    "grade": "Grade 6B",
+    "dob": "2015-04-27",
+    "father_phone": "9311446262",
+    "mother_phone": "9555255488"
+  },
+  {
+    "name": "Kashvee Bansal",
+    "grade": "Grade 6B",
+    "dob": "2015-10-05",
+    "father_phone": "9810550050",
+    "mother_phone": "9810550051"
+  },
+  {
+    "name": "Khushi Arora",
+    "grade": "Grade 6B",
+    "dob": "2015-05-10",
+    "father_phone": "8800223011",
+    "mother_phone": "7701821192"
+  },
+  {
+    "name": "Lakshita",
+    "grade": "Grade 6B",
+    "dob": "2015-10-01",
+    "father_phone": "9899424716",
+    "mother_phone": "9899127759"
+  },
+  {
+    "name": "Lokisha Chhikara",
+    "grade": "Grade 6B",
+    "dob": "2015-08-07",
+    "father_phone": "9899487803",
+    "mother_phone": "9899487806"
+  },
+  {
+    "name": "Manan Punit Singhal",
+    "grade": "Grade 6B",
+    "dob": "2014-07-19",
+    "father_phone": "9975134818, 7011043831",
+    "mother_phone": "9975134818"
+  },
+  {
+    "name": "Vaishnavi Maheshwari",
+    "grade": "Grade 6B",
+    "dob": "2015-10-30",
+    "father_phone": "7982900001",
+    "mother_phone": "8920879060"
+  },
+  {
+    "name": "Naina Arora",
+    "grade": "Grade 6B",
+    "dob": "2015-06-29",
+    "father_phone": "9818610877",
+    "mother_phone": "9654409884"
+  },
+  {
+    "name": "Rajveer Arora",
+    "grade": "Grade 6B",
+    "dob": "2015-09-14",
+    "father_phone": "9717045000",
+    "mother_phone": "9811623910"
+  },
+  {
+    "name": "Ryan Garg",
+    "grade": "Grade 6B",
+    "dob": "2016-01-30",
+    "father_phone": "9810380004",
+    "mother_phone": "9899288499"
+  },
+  {
+    "name": "Taksh Khanagwal",
+    "grade": "Grade 6B",
+    "dob": "2014-09-28",
+    "father_phone": "9868628045",
+    "mother_phone": "9911899250"
+  },
+  {
+    "name": "Taksh Prajapati",
+    "grade": "Grade 6B",
+    "dob": "2015-08-22",
+    "father_phone": "9213249939",
+    "mother_phone": "7011791105"
+  },
+  {
+    "name": "Tanishi Mahajan",
+    "grade": "Grade 6B",
+    "dob": "2015-06-01",
+    "father_phone": "9810692996",
+    "mother_phone": "8595823599"
+  },
+  {
+    "name": "Viraj Hooda",
+    "grade": "Grade 6B",
+    "dob": "2015-07-23",
+    "father_phone": "9015654272",
+    "mother_phone": "9990054272, 9266629500"
+  },
+  {
+    "name": "Virat Singh Rathore",
+    "grade": "Grade 6B",
+    "dob": "2015-10-20",
+    "father_phone": "9711870695",
+    "mother_phone": "7011699503"
+  },
+  {
+    "name": "Zainul Hussain",
+    "grade": "Grade 6B",
+    "dob": "2015-04-23",
+    "father_phone": "9953283119",
+    "mother_phone": "9953283119"
+  },
+  {
+    "name": "Zeenisha B Hazarika",
+    "grade": "Grade 6B",
+    "dob": "2015-10-02",
+    "father_phone": "9891211619",
+    "mother_phone": "8447920515"
+  },
+  {
+    "name": "AADIDEV SHARMA",
+    "grade": "Grade 6B",
+    "dob": "2015-08-07",
+    "father_phone": "-",
+    "mother_phone": "7290822852/ 8586093939"
+  },
+  {
+    "name": "VIRAAJ OBEROI",
+    "grade": "Grade 6B",
+    "dob": "2015-07-01",
+    "father_phone": "9811692797",
+    "mother_phone": "8799726067"
+  },
+  {
+    "name": "EKROOP SINGH DHANJU",
+    "grade": "Grade 6B",
+    "dob": "2014-10-01",
+    "father_phone": "9999919669",
+    "mother_phone": "6283047077"
+  },
+  {
+    "name": "AARAV JAIN",
+    "grade": "Grade 6B",
+    "dob": "2015-05-06",
+    "father_phone": "9868120835",
+    "mother_phone": "9968105235"
+  },
+  {
+    "name": "Saisha Talreja",
+    "grade": "Grade 6B",
+    "dob": "2015-04-23",
+    "father_phone": "9811447617",
+    "mother_phone": "9811447607"
+  },
+  {
+    "name": "KUSHAGRA DUBEY",
+    "grade": "Grade 6B",
+    "dob": "2015-08-29",
+    "father_phone": "6392317280",
+    "mother_phone": "9198996995"
+  },
+  {
+    "name": "Khush Akoijam",
+    "grade": "Grade 6B",
+    "dob": "2015-12-01",
+    "father_phone": "6444730204/ 64224082446",
+    "mother_phone": "9318355889/9999550822"
+  },
+  {
+    "name": "Pratim Garg",
+    "grade": "Grade 6B",
+    "dob": "2015-07-10",
+    "father_phone": "9871696765",
+    "mother_phone": "9818255065"
+  },
+  {
+    "name": "Arjun Rijhwani",
+    "grade": "Grade 6B",
+    "dob": "2016-04-02",
+    "father_phone": "9990979229",
+    "mother_phone": "9910921892, 9654471892"
+  },
+  {
+    "name": "Kiara Gupta",
+    "grade": "Grade 6B",
+    "dob": "2015-08-10",
+    "father_phone": "9899100734",
+    "mother_phone": "9717972377"
+  },
+  {
+    "name": "Kiyan Gupta",
+    "grade": "Grade 6B",
+    "dob": "2015-08-10",
+    "father_phone": "9899100734",
+    "mother_phone": "9717972377"
+  },
+  {
+    "name": "Piyush Chauhan",
+    "grade": "Grade 6B",
+    "dob": "2015-10-05",
+    "father_phone": "9999973565",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aadhya Anand More",
+    "grade": "Grade 7A",
+    "dob": "2014-10-07",
+    "father_phone": "9773548467",
+    "mother_phone": "7042671408"
+  },
+  {
+    "name": "Aarna Aggarwal",
+    "grade": "Grade 7A",
+    "dob": "2014-10-29",
+    "father_phone": "9811025315",
+    "mother_phone": "9899386789"
+  },
+  {
+    "name": "Abhinav Goyal",
+    "grade": "Grade 7A",
+    "dob": "2014-06-02",
+    "father_phone": "9871066622",
+    "mother_phone": "9910566622"
+  },
+  {
+    "name": "ANKIT",
+    "grade": "Grade 7A",
+    "dob": "2015-02-07",
+    "father_phone": "8810439434",
+    "mother_phone": "8368189854"
+  },
+  {
+    "name": "ANSH SINGH",
+    "grade": "Grade 7A",
+    "dob": "2014-04-26",
+    "father_phone": "8510039108",
+    "mother_phone": "9643264918"
+  },
+  {
+    "name": "ARHAM JAIN",
+    "grade": "Grade 7A",
+    "dob": "2014-11-19",
+    "father_phone": "8447452085",
+    "mother_phone": "7042372453"
+  },
+  {
+    "name": "Awvik Jain",
+    "grade": "Grade 7A",
+    "dob": "2014-10-12",
+    "father_phone": "9811787461",
+    "mother_phone": "9711417828"
+  },
+  {
+    "name": "DHWANI CHOPRA",
+    "grade": "Grade 7A",
+    "dob": "2014-10-30",
+    "father_phone": "9891111130",
+    "mother_phone": "7400042000"
+  },
+  {
+    "name": "Gazal Soni",
+    "grade": "Grade 7A",
+    "dob": "2014-12-25",
+    "father_phone": "9999927991",
+    "mother_phone": "9999627991"
+  },
+  {
+    "name": "ISHIKA",
+    "grade": "Grade 7A",
+    "dob": "2014-11-22",
+    "father_phone": "9069576544",
+    "mother_phone": "9267982706"
+  },
+  {
+    "name": "KAYRA SHERAWAT",
+    "grade": "Grade 7A",
+    "dob": "2014-08-28",
+    "father_phone": "7982746016, 8376813031",
+    "mother_phone": "8920311401, 9999552880"
+  },
+  {
+    "name": "KOMYA BHARDWAJ",
+    "grade": "Grade 7A",
+    "dob": "2014-08-22",
+    "father_phone": "9910714657",
+    "mother_phone": "7678446241"
+  },
+  {
+    "name": "N.Khushal",
+    "grade": "Grade 7A",
+    "dob": "2013-09-27",
+    "father_phone": "9873754998",
+    "mother_phone": "9899865877"
+  },
+  {
+    "name": "Nitya Gupta",
+    "grade": "Grade 7A",
+    "dob": "2014-07-05",
+    "father_phone": "9811442701",
+    "mother_phone": "9911442701"
+  },
+  {
+    "name": "Rabhya Mangal",
+    "grade": "Grade 7A",
+    "dob": "2014-12-18",
+    "father_phone": "9313432777",
+    "mother_phone": "9810181897"
+  },
+  {
+    "name": "RAVJOT",
+    "grade": "Grade 7A",
+    "dob": "2014-07-10",
+    "father_phone": "9716966613",
+    "mother_phone": "9891449044"
+  },
+  {
+    "name": "Reyaansh Chhabra",
+    "grade": "Grade 7A",
+    "dob": "2015-02-10",
+    "father_phone": "9818674889",
+    "mother_phone": "9958671819"
+  },
+  {
+    "name": "Sahib Vohra",
+    "grade": "Grade 7A",
+    "dob": "2014-10-20",
+    "father_phone": "9999112246",
+    "mother_phone": "9718259395"
+  },
+  {
+    "name": "SAMARTH ARORA",
+    "grade": "Grade 7A",
+    "dob": "2014-12-25",
+    "father_phone": "9910945831",
+    "mother_phone": "8882376209"
+  },
+  {
+    "name": "Samarth Khanna",
+    "grade": "Grade 7A",
+    "dob": "2014-12-27",
+    "father_phone": "9811834585",
+    "mother_phone": "7678467108"
+  },
+  {
+    "name": "SAURAV",
+    "grade": "Grade 7A",
+    "dob": "2013-06-27",
+    "father_phone": "9560873473",
+    "mother_phone": "9910519223"
+  },
+  {
+    "name": "Tanu Kumari",
+    "grade": "Grade 7A",
+    "dob": "2013-04-07",
+    "father_phone": "7529987255",
+    "mother_phone": "9582738432"
+  },
+  {
+    "name": "Yashvi Jain",
+    "grade": "Grade 7A",
+    "dob": "2014-06-12",
+    "father_phone": "9818820224",
+    "mother_phone": "9910682366"
+  },
+  {
+    "name": "YUVAAN GOYAL",
+    "grade": "Grade 7A",
+    "dob": "2014-10-27",
+    "father_phone": "9582351304",
+    "mother_phone": "9711548177"
+  },
+  {
+    "name": "AADYA",
+    "grade": "Grade 7A",
+    "dob": "2014-08-30",
+    "father_phone": "-",
+    "mother_phone": "8700197750, WP (9718305474)"
+  },
+  {
+    "name": "Parth",
+    "grade": "Grade 7A",
+    "dob": "2014-11-19",
+    "father_phone": "9899509008",
+    "mother_phone": "9811718201"
+  },
+  {
+    "name": "NAVISH MALIK",
+    "grade": "Grade 7A",
+    "dob": "2014-09-19",
+    "father_phone": "9654417176",
+    "mother_phone": "8130818100"
+  },
+  {
+    "name": "ARADHYA KATARIA",
+    "grade": "Grade 7A",
+    "dob": "2013-08-19",
+    "father_phone": "9999444075",
+    "mother_phone": "9999444736"
+  },
+  {
+    "name": "HAAZIQ",
+    "grade": "Grade 7A",
+    "dob": "2014-12-23",
+    "father_phone": "9311656911",
+    "mother_phone": "9213858794"
+  },
+  {
+    "name": "Barkatdeep Kaur",
+    "grade": "Grade 7A",
+    "dob": "2014-09-08",
+    "father_phone": "7053470081",
+    "mother_phone": "7303374885"
+  },
+  {
+    "name": "Aaradhya Phull",
+    "grade": "Grade 7A",
+    "dob": "2014-11-07",
+    "father_phone": "9873434700",
+    "mother_phone": "9910103483"
+  },
+  {
+    "name": "Aadya Talreja",
+    "grade": "Grade 7A",
+    "dob": "2014-05-19",
+    "father_phone": "9899955518",
+    "mother_phone": "9911055540 / 9811055549"
+  },
+  {
+    "name": "Prabhgun Singh",
+    "grade": "Grade 7A",
+    "dob": "2015-03-30",
+    "father_phone": "9311261070",
+    "mother_phone": "9910376600"
+  },
+  {
+    "name": "Dhwani Chopra",
+    "grade": "Grade 7A",
+    "dob": "2014-10-30",
+    "father_phone": "9891111130",
+    "mother_phone": "7400042000"
+  },
+  {
+    "name": "Suhani Jain",
+    "grade": "Grade 7A",
+    "dob": "2014-08-26",
+    "father_phone": "8094545000, 9643310723",
+    "mother_phone": "9314254136"
+  },
+  {
+    "name": "Aadivitya Aggarwal",
+    "grade": "Grade 7A",
+    "dob": "2014-08-07",
+    "father_phone": "9643003465",
+    "mother_phone": "9015584334"
+  },
+  {
+    "name": "Samaira Chauhan",
+    "grade": "Grade 7A",
+    "dob": "2014-10-27",
+    "father_phone": "8527522933",
+    "mother_phone": "8527522977"
+  },
+  {
+    "name": "Aadya Singhania",
+    "grade": "Grade 7A",
+    "dob": "2014-09-26",
+    "father_phone": "9310219132",
+    "mother_phone": "7428673466"
+  },
+  {
+    "name": "Ivan Sharma",
+    "grade": "Grade 7A",
+    "dob": "2014-04-10",
+    "father_phone": "9968063362",
+    "mother_phone": "9968049776"
+  },
+  {
+    "name": "HEBRON MASSEY",
+    "grade": "Grade 7A",
+    "dob": "2014-11-12",
+    "father_phone": "9313955748",
+    "mother_phone": "9582978108"
+  },
+  {
+    "name": "TEJASV",
+    "grade": "Grade 7A",
+    "dob": "2013-09-10",
+    "father_phone": "9711944906",
+    "mother_phone": ""
+  },
+  {
+    "name": "Aadvik Chugh",
+    "grade": "Grade 7A",
+    "dob": "2014-05-20",
+    "father_phone": "9999968956",
+    "mother_phone": "8585981891"
+  },
+  {
+    "name": "AAYAN",
+    "grade": "Grade 7B",
+    "dob": "2013-11-17",
+    "father_phone": "9213249939",
+    "mother_phone": "7011791105"
+  },
+  {
+    "name": "Advik Anand",
+    "grade": "Grade 7B",
+    "dob": "2014-08-12",
+    "father_phone": "9999510510",
+    "mother_phone": "9990560570"
+  },
+  {
+    "name": "Agastya Jain",
+    "grade": "Grade 7B",
+    "dob": "2014-07-22",
+    "father_phone": "9873299433",
+    "mother_phone": "9899831186"
+  },
+  {
+    "name": "Akshita Daga",
+    "grade": "Grade 7B",
+    "dob": "2015-01-01",
+    "father_phone": "9312820700",
+    "mother_phone": "9311120700"
+  },
+  {
+    "name": "Ansh Saini",
+    "grade": "Grade 7B",
+    "dob": "2013-09-10",
+    "father_phone": "9999853982",
+    "mother_phone": "8459808990"
+  },
+  {
+    "name": "Danya Agarwal",
+    "grade": "Grade 7B",
+    "dob": "2015-03-03",
+    "father_phone": "9312577369",
+    "mother_phone": "9999943893"
+  },
+  {
+    "name": "DEV HANDA",
+    "grade": "Grade 7B",
+    "dob": "2014-10-07",
+    "father_phone": "9873470407",
+    "mother_phone": "9873470485"
+  },
+  {
+    "name": "DRIPTI",
+    "grade": "Grade 7B",
+    "dob": "2014-01-07",
+    "father_phone": "8285616352",
+    "mother_phone": ""
+  },
+  {
+    "name": "Hemang",
+    "grade": "Grade 7B",
+    "dob": "2014-07-26",
+    "father_phone": "9810334328",
+    "mother_phone": "9910767807"
+  },
+  {
+    "name": "Hridhaan Arora",
+    "grade": "Grade 7B",
+    "dob": "2015-02-02",
+    "father_phone": "9873312310",
+    "mother_phone": "9899000674"
+  },
+  {
+    "name": "Ishnoor Kaur",
+    "grade": "Grade 7B",
+    "dob": "2014-05-02",
+    "father_phone": "9811266522",
+    "mother_phone": "9811166457"
+  },
+  {
+    "name": "Md Saad",
+    "grade": "Grade 7B",
+    "dob": "2014-08-17",
+    "father_phone": "9069799786",
+    "mother_phone": "8586880192"
+  },
+  {
+    "name": "Nischay Dewatwal",
+    "grade": "Grade 7B",
+    "dob": "2014-06-11",
+    "father_phone": "9311603170",
+    "mother_phone": "8802388702"
+  },
+  {
+    "name": "Prachi Chauhan",
+    "grade": "Grade 7B",
+    "dob": "2014-06-09",
+    "father_phone": "9638168478",
+    "mother_phone": "8355807871"
+  },
+  {
+    "name": "Pranjal",
+    "grade": "Grade 7B",
+    "dob": "2014-12-12",
+    "father_phone": "9818650860",
+    "mother_phone": "9582430741"
+  },
+  {
+    "name": "Pratyush",
+    "grade": "Grade 7B",
+    "dob": "2014-05-12",
+    "father_phone": "9650369033",
+    "mother_phone": "8920688825"
+  },
+  {
+    "name": "Prince",
+    "grade": "Grade 7B",
+    "dob": "2014-01-21",
+    "father_phone": "9540021525",
+    "mother_phone": "9891817917"
+  },
+  {
+    "name": "RAAVI SHARMA",
+    "grade": "Grade 7B",
+    "dob": "2014-10-07",
+    "father_phone": "9211889900",
+    "mother_phone": "9013515757"
+  },
+  {
+    "name": "Rabhya Chawla",
+    "grade": "Grade 7B",
+    "dob": "2015-01-14",
+    "father_phone": "9899023536",
+    "mother_phone": "9711489320"
+  },
+  {
+    "name": "Reyansh Gupta",
+    "grade": "Grade 7B",
+    "dob": "2015-02-10",
+    "father_phone": "9953545335",
+    "mother_phone": "8527797893"
+  },
+  {
+    "name": "REYANSH BINDAL",
+    "grade": "Grade 7B",
+    "dob": "2014-10-04",
+    "father_phone": "9215843303",
+    "mother_phone": "7042182612"
+  },
+  {
+    "name": "Rudra Sehrawat",
+    "grade": "Grade 7B",
+    "dob": "2014-07-07",
+    "father_phone": "9999387684",
+    "mother_phone": "9811402032"
+  },
+  {
+    "name": "Uzair Singh Arora",
+    "grade": "Grade 7B",
+    "dob": "2014-04-22",
+    "father_phone": "9650518518",
+    "mother_phone": "9971524524, 011-41665900"
+  },
+  {
+    "name": "Vedanshi Jain",
+    "grade": "Grade 7B",
+    "dob": "2014-10-13",
+    "father_phone": "9254183018",
+    "mother_phone": "9267943631"
+  },
+  {
+    "name": "VIHAAN OBEROI",
+    "grade": "Grade 7B",
+    "dob": "2014-08-19",
+    "father_phone": "9811526306",
+    "mother_phone": "9818927548"
+  },
+  {
+    "name": "Veronica Chhabra",
+    "grade": "Grade 7B",
+    "dob": "2015-01-12",
+    "father_phone": "9891848435",
+    "mother_phone": "8368218410"
+  },
+  {
+    "name": "Viraj Rai",
+    "grade": "Grade 7B",
+    "dob": "2014-02-18",
+    "father_phone": "7827666264",
+    "mother_phone": "9999912389"
+  },
+  {
+    "name": "Yashasvi Gauba",
+    "grade": "Grade 7B",
+    "dob": "2014-10-27",
+    "father_phone": "9810179860",
+    "mother_phone": "9818963318"
+  },
+  {
+    "name": "Yuvraaj Chadha",
+    "grade": "Grade 7B",
+    "dob": "2014-08-07",
+    "father_phone": "7838350051",
+    "mother_phone": "9811562081"
+  },
+  {
+    "name": "SWAKSH GULATI",
+    "grade": "Grade 7B",
+    "dob": "2014-11-01",
+    "father_phone": "9953653639",
+    "mother_phone": "9873994125"
+  },
+  {
+    "name": "Smayra Kansal                   (New admission)",
+    "grade": "Grade 7B",
+    "dob": "2014-12-09",
+    "father_phone": "9899250152 as they are separated, so contact to mother only",
+    "mother_phone": "9643805084"
+  },
+  {
+    "name": "Aarna Singhal",
+    "grade": "Grade 7B",
+    "dob": "2014-09-23",
+    "father_phone": "7827359378",
+    "mother_phone": "7827294852"
+  },
+  {
+    "name": "Swaksh Gulati( For AS-2022-23)",
+    "grade": "Grade 7B",
+    "dob": "2014-11-01",
+    "father_phone": "9953653639",
+    "mother_phone": "9873994125"
+  },
+  {
+    "name": "Reyansh Bajaj",
+    "grade": "Grade 7B",
+    "dob": "2014-12-29",
+    "father_phone": "9810999248",
+    "mother_phone": "9968705049"
+  },
+  {
+    "name": "Hebron Massey",
+    "grade": "Grade 7B",
+    "dob": "2014-11-12",
+    "father_phone": "9313955748",
+    "mother_phone": "9582978108"
+  },
+  {
+    "name": "DAKSHA BHALLA",
+    "grade": "Grade 7B",
+    "dob": "2014-10-07",
+    "father_phone": "9211309293",
+    "mother_phone": "9711912508"
+  },
+  {
+    "name": "Aarshey",
+    "grade": "Grade 8A",
+    "dob": "2013-05-28",
+    "father_phone": "807684476",
+    "mother_phone": "8447113100"
+  },
+  {
+    "name": "Anam Jain",
+    "grade": "Grade 8A",
+    "dob": "2013-05-19",
+    "father_phone": "7838215491",
+    "mother_phone": "8800697356, 8076483503"
+  },
+  {
+    "name": "Anshi Jain",
+    "grade": "Grade 8A",
+    "dob": "2013-07-03",
+    "father_phone": "9711005582",
+    "mother_phone": "9999449585"
+  },
+  {
+    "name": "Arihant Jain",
+    "grade": "Grade 8A",
+    "dob": "2014-04-27",
+    "father_phone": "",
+    "mother_phone": "9811126090"
+  },
+  {
+    "name": "Ayaan Bhatia",
+    "grade": "Grade 8A",
+    "dob": "2013-06-05",
+    "father_phone": "9711934325",
+    "mother_phone": "9811776138,"
+  },
+  {
+    "name": "Chahat",
+    "grade": "Grade 8A",
+    "dob": "2014-01-09",
+    "father_phone": "9899641369",
+    "mother_phone": "8076508220"
+  },
+  {
+    "name": "Himanshu",
+    "grade": "Grade 8A",
+    "dob": "2013-06-12",
+    "father_phone": "9818505002",
+    "mother_phone": "7827693051"
+  },
+  {
+    "name": "Kartik Singh",
+    "grade": "Grade 8A",
+    "dob": "2013-09-27",
+    "father_phone": "9211808977",
+    "mother_phone": "9958375313"
+  },
+  {
+    "name": "Manan Saraf",
+    "grade": "Grade 8A",
+    "dob": "2013-11-25",
+    "father_phone": "9818342073",
+    "mother_phone": "9999576887"
+  },
+  {
+    "name": "Manisha",
+    "grade": "Grade 8A",
+    "dob": "2013-07-03",
+    "father_phone": "9999414650",
+    "mother_phone": "9718202901"
+  },
+  {
+    "name": "Mohd. Faiz Husain",
+    "grade": "Grade 8A",
+    "dob": "2014-03-28",
+    "father_phone": "9999336060",
+    "mother_phone": "8810452137, 9999336060"
+  },
+  {
+    "name": "Mohit Yadav",
+    "grade": "Grade 8A",
+    "dob": "2012-05-01",
+    "father_phone": "9210091095",
+    "mother_phone": "NA"
+  },
+  {
+    "name": "Pranaya Goel",
+    "grade": "Grade 8A",
+    "dob": "2013-10-05",
+    "father_phone": "9811950400",
+    "mother_phone": "9910376769"
+  },
+  {
+    "name": "Prishthi Goyal",
+    "grade": "Grade 8A",
+    "dob": "2013-11-04",
+    "father_phone": "9899919570",
+    "mother_phone": "9818002844"
+  },
+  {
+    "name": "Rehan Jaggi",
+    "grade": "Grade 8A",
+    "dob": "2013-01-24",
+    "father_phone": "9816228888",
+    "mother_phone": "9736294136"
+  },
+  {
+    "name": "Ritika",
+    "grade": "Grade 8A",
+    "dob": "2013-07-19",
+    "father_phone": "9717930497",
+    "mother_phone": "9718718029"
+  },
+  {
+    "name": "Suhani Kumari",
+    "grade": "Grade 8A",
+    "dob": "2013-12-29",
+    "father_phone": "9716680656",
+    "mother_phone": "9599469225"
+  },
+  {
+    "name": "Tanya Gupta",
+    "grade": "Grade 8A",
+    "dob": "2013-01-02",
+    "father_phone": "9810104989",
+    "mother_phone": "8368004179"
+  },
+  {
+    "name": "Toyesh Advani",
+    "grade": "Grade 8A",
+    "dob": "2013-07-13",
+    "father_phone": "9810107852",
+    "mother_phone": "9810107850"
+  },
+  {
+    "name": "BHUMIKA",
+    "grade": "Grade 8A",
+    "dob": "2013-11-09",
+    "father_phone": "7291054708",
+    "mother_phone": "9811238139"
+  },
+  {
+    "name": "SAESHAA MAHAJAN",
+    "grade": "Grade 8A",
+    "dob": "2012-10-26",
+    "father_phone": "981107886",
+    "mother_phone": "9667993006"
+  },
+  {
+    "name": "Samyya Gupta",
+    "grade": "Grade 8A",
+    "dob": "2013-11-22",
+    "father_phone": "9810235522",
+    "mother_phone": "9811162355"
+  },
+  {
+    "name": "Dakshpreet Singh",
+    "grade": "Grade 8A",
+    "dob": "2013-06-11",
+    "father_phone": "",
+    "mother_phone": "9717149887"
+  },
+  {
+    "name": "Mikash Thakar",
+    "grade": "Grade 8A",
+    "dob": "2013-07-16",
+    "father_phone": "9868088882",
+    "mother_phone": "9968169922"
+  },
+  {
+    "name": "Shayna Khari",
+    "grade": "Grade 8A",
+    "dob": "2013-07-11",
+    "father_phone": "8010230678",
+    "mother_phone": "8882928554"
+  },
+  {
+    "name": "Aarohi Kapur",
+    "grade": "Grade 8B",
+    "dob": "2013-06-17",
+    "father_phone": "9818082669",
+    "mother_phone": "9871800781"
+  },
+  {
+    "name": "ADITYA",
+    "grade": "Grade 8B",
+    "dob": "2013-11-30",
+    "father_phone": "9958260895",
+    "mother_phone": "9643151361"
+  },
+  {
+    "name": "Advitya N Garg",
+    "grade": "Grade 8B",
+    "dob": "2012-11-23",
+    "father_phone": "9971797608",
+    "mother_phone": "9313664242"
+  },
+  {
+    "name": "Akharnitha Walia",
+    "grade": "Grade 8B",
+    "dob": "2013-11-21",
+    "father_phone": "9811603159",
+    "mother_phone": "9811603159"
+  },
+  {
+    "name": "Aman Tiwari",
+    "grade": "Grade 8B",
+    "dob": "2013-01-13",
+    "father_phone": "8750301488",
+    "mother_phone": "9870367488"
+  },
+  {
+    "name": "Ayaansh Mittal",
+    "grade": "Grade 8B",
+    "dob": "2013-08-27",
+    "father_phone": "9810224766",
+    "mother_phone": "8920768678"
+  },
+  {
+    "name": "Chaitanya Mohan Kirad",
+    "grade": "Grade 8B",
+    "dob": "2013-10-18",
+    "father_phone": "9910085981",
+    "mother_phone": "8368641276"
+  },
+  {
+    "name": "Chitranshi",
+    "grade": "Grade 8B",
+    "dob": "2013-10-18",
+    "father_phone": "9910063457",
+    "mother_phone": "9811878908"
+  },
+  {
+    "name": "Dhurvi",
+    "grade": "Grade 8B",
+    "dob": "2014-01-18",
+    "father_phone": "9289091938",
+    "mother_phone": "9654744788"
+  },
+  {
+    "name": "Gameshwar Kumar",
+    "grade": "Grade 8B",
+    "dob": "2012-10-16",
+    "father_phone": "9654845376",
+    "mother_phone": "8810326058"
+  },
+  {
+    "name": "Jivika Rawat",
+    "grade": "Grade 8B",
+    "dob": "2013-04-04",
+    "father_phone": "9818676843",
+    "mother_phone": "9999214208"
+  },
+  {
+    "name": "Krishna Arora",
+    "grade": "Grade 8B",
+    "dob": "2013-12-30",
+    "father_phone": "9810317531",
+    "mother_phone": "9810017531"
+  },
+  {
+    "name": "Lavisha Bhatla",
+    "grade": "Grade 8B",
+    "dob": "2013-06-06",
+    "father_phone": "9313984313",
+    "mother_phone": "9899164515"
+  },
+  {
+    "name": "Mohd. Asaullah",
+    "grade": "Grade 8B",
+    "dob": "2012-10-28",
+    "father_phone": "9958412082",
+    "mother_phone": "9643112595"
+  },
+  {
+    "name": "Pranaya Pahwa",
+    "grade": "Grade 8B",
+    "dob": "2013-10-05",
+    "father_phone": "9654789108",
+    "mother_phone": "9210195172"
+  },
+  {
+    "name": "Ruhani Chopra",
+    "grade": "Grade 8B",
+    "dob": "2013-04-12",
+    "father_phone": "9810241919",
+    "mother_phone": "9811130303"
+  },
+  {
+    "name": "Ruhi Rai Gupta",
+    "grade": "Grade 8B",
+    "dob": "2014-01-13",
+    "father_phone": "8882220012",
+    "mother_phone": "9999742703"
+  },
+  {
+    "name": "Shagun",
+    "grade": "Grade 8B",
+    "dob": "2013-04-07",
+    "father_phone": "9899491513",
+    "mother_phone": "7838451497"
+  },
+  {
+    "name": "VERONICA SINGH",
+    "grade": "Grade 8B",
+    "dob": "2013-06-18",
+    "father_phone": "9718318777",
+    "mother_phone": "9718218777"
+  },
+  {
+    "name": "Yakshit Goel",
+    "grade": "Grade 8B",
+    "dob": "2014-02-24",
+    "father_phone": "9212000510",
+    "mother_phone": "9213782884"
+  },
+  {
+    "name": "ADDHIRAJ CHOPRA",
+    "grade": "Grade 8B",
+    "dob": "2014-01-11",
+    "father_phone": "9350050100, 9555495550",
+    "mother_phone": "9654537474"
+  },
+  {
+    "name": "SAINA GUPTA",
+    "grade": "Grade 8B",
+    "dob": "2014-01-24",
+    "father_phone": "9310106065",
+    "mother_phone": "9999811020"
+  },
+  {
+    "name": "RUDRA",
+    "grade": "Grade 8B",
+    "dob": "2013-04-26",
+    "father_phone": "7053226077",
+    "mother_phone": "7827075017"
+  },
+  {
+    "name": "Aarush Kataria",
+    "grade": "Grade 8B",
+    "dob": "2013-09-24",
+    "father_phone": "9811609929",
+    "mother_phone": "9999723677"
+  },
+  {
+    "name": "Devank Garg",
+    "grade": "Grade 8B",
+    "dob": "2014-01-06",
+    "father_phone": "9811112707",
+    "mother_phone": "9999534123"
+  },
+  {
+    "name": "Aarav Bhojwani",
+    "grade": "Grade 8B",
+    "dob": "2013-07-12",
+    "father_phone": "9711029132",
+    "mother_phone": "9953002356"
+  },
+  {
+    "name": "Mohammad Ashad",
+    "grade": "Grade 8B",
+    "dob": "2012-08-29",
+    "father_phone": "9810075049",
+    "mother_phone": "8860689497"
+  },
+  {
+    "name": "Aditya Giri",
+    "grade": "Grade 8C",
+    "dob": "2012-08-14",
+    "father_phone": "9899551612",
+    "mother_phone": "9899551612"
+  },
+  {
+    "name": "AISHWARYA BANSAL",
+    "grade": "Grade 8C",
+    "dob": "2014-01-12",
+    "father_phone": "9811454779",
+    "mother_phone": "9873400254"
+  },
+  {
+    "name": "Aradhya Singh",
+    "grade": "Grade 8C",
+    "dob": "2013-07-31",
+    "father_phone": "9310299828",
+    "mother_phone": "8742933669"
+  },
+  {
+    "name": "Ashutosh",
+    "grade": "Grade 8C",
+    "dob": "2013-02-17",
+    "father_phone": "9711479850",
+    "mother_phone": "9354741602"
+  },
+  {
+    "name": "Dhaani Sharma",
+    "grade": "Grade 8C",
+    "dob": "2014-02-01",
+    "father_phone": "9868475637",
+    "mother_phone": "9818418410"
+  },
+  {
+    "name": "Dhannika Bhudhiraja",
+    "grade": "Grade 8C",
+    "dob": "2013-09-27",
+    "father_phone": "9899944752",
+    "mother_phone": "9873495072"
+  },
+  {
+    "name": "IKLEEN KAUR",
+    "grade": "Grade 8C",
+    "dob": "2013-12-25",
+    "father_phone": "9870412506",
+    "mother_phone": "9870412506"
+  },
+  {
+    "name": "MANIK GOYAL",
+    "grade": "Grade 8C",
+    "dob": "2013-07-13",
+    "father_phone": "9818233888",
+    "mother_phone": "9718923888"
+  },
+  {
+    "name": "Nakul",
+    "grade": "Grade 8C",
+    "dob": "2013-04-01",
+    "father_phone": "7982922884",
+    "mother_phone": "7982922884"
+  },
+  {
+    "name": "Priyansh Arora",
+    "grade": "Grade 8C",
+    "dob": "2014-01-23",
+    "father_phone": "9810002549",
+    "mother_phone": "9818820219"
+  },
+  {
+    "name": "Priyanshi",
+    "grade": "Grade 8C",
+    "dob": "2013-09-08",
+    "father_phone": "9266769989",
+    "mother_phone": "9211551233"
+  },
+  {
+    "name": "Saanvi Goel",
+    "grade": "Grade 8C",
+    "dob": "2013-05-02",
+    "father_phone": "9810149808",
+    "mother_phone": "9868017767"
+  },
+  {
+    "name": "Samay Gupta",
+    "grade": "Grade 8C",
+    "dob": "2013-04-22",
+    "father_phone": "8800109861",
+    "mother_phone": "9643449404"
+  },
+  {
+    "name": "Seher Saini",
+    "grade": "Grade 8C",
+    "dob": "2013-04-08",
+    "father_phone": "9654856596",
+    "mother_phone": "8510026038"
+  },
+  {
+    "name": "Shanaya Gupta",
+    "grade": "Grade 8C",
+    "dob": "2014-03-05",
+    "father_phone": "9990089493",
+    "mother_phone": "9899569649"
+  },
+  {
+    "name": "Shanaya Gupta",
+    "grade": "Grade 8C",
+    "dob": "2013-09-18",
+    "father_phone": "9711733330",
+    "mother_phone": "9711733331"
+  },
+  {
+    "name": "Shubh Shah",
+    "grade": "Grade 8C",
+    "dob": "2014-06-19",
+    "father_phone": "9313046664",
+    "mother_phone": "9310212677"
+  },
+  {
+    "name": "Somiya Ahirwar",
+    "grade": "Grade 8C",
+    "dob": "2013-11-12",
+    "father_phone": "9654644027",
+    "mother_phone": "7428862821"
+  },
+  {
+    "name": "Tushar Gupta",
+    "grade": "Grade 8C",
+    "dob": "2014-03-20",
+    "father_phone": "8851049749",
+    "mother_phone": "7678197773"
+  },
+  {
+    "name": "Yamini",
+    "grade": "Grade 8C",
+    "dob": "2013-11-06",
+    "father_phone": "9211875050",
+    "mother_phone": "9211875050"
+  },
+  {
+    "name": "Yashas Agarwal",
+    "grade": "Grade 8C",
+    "dob": "2013-12-03",
+    "father_phone": "9311177369",
+    "mother_phone": "8588861620"
+  },
+  {
+    "name": "Yuvakshi Vashistha",
+    "grade": "Grade 8C",
+    "dob": "2013-04-02",
+    "father_phone": "9810999226",
+    "mother_phone": "9810999236"
+  },
+  {
+    "name": "Smayan Garg",
+    "grade": "Grade 8C",
+    "dob": "2014-02-06",
+    "father_phone": "9818430430",
+    "mother_phone": "9717430430"
+  },
+  {
+    "name": "Harkunwar Singh",
+    "grade": "Grade 8C",
+    "dob": "2013-12-17",
+    "father_phone": "9871079494",
+    "mother_phone": "9718079494"
+  },
+  {
+    "name": "Reyansh Sharma",
+    "grade": "Grade 8C",
+    "dob": "2013-12-24",
+    "father_phone": "9910222446",
+    "mother_phone": "9810931921"
+  },
+  {
+    "name": "Aarav Hora",
+    "grade": "Grade 8C",
+    "dob": "2014-01-10",
+    "father_phone": "9811028362",
+    "mother_phone": "9873873187"
+  },
+  {
+    "name": "Ekaansh Soni",
+    "grade": "Grade 8C",
+    "dob": "2014-03-25",
+    "father_phone": "8587820115",
+    "mother_phone": "8587820114"
+  },
+  {
+    "name": "Dwij Sharma",
+    "grade": "Grade 8C",
+    "dob": "2013-06-02",
+    "father_phone": "9958788600",
+    "mother_phone": "9958788800"
+  },
+  {
+    "name": "Shayna Luthra",
+    "grade": "Grade 8C",
+    "dob": "2013-08-05",
+    "father_phone": "9871251000",
+    "mother_phone": "9818951000"
+  },
+  {
+    "name": "Shiven Goel",
+    "grade": "Grade 8C",
+    "dob": "2013-11-28",
+    "father_phone": "9810114953",
+    "mother_phone": "9810542543"
+  },
+  {
+    "name": "Shaurya Singhal",
+    "grade": "Grade 8C",
+    "dob": "2013-09-30",
+    "father_phone": "9999672789",
+    "mother_phone": "9968049604 (Landline No. - 01135636180)"
+  },
+  {
+    "name": "Aadhish Basia",
+    "grade": "Grade 8C",
+    "dob": "2013-09-23",
+    "father_phone": "8222811893",
+    "mother_phone": "9310145095"
+  },
+  {
+    "name": "Alina Gupta",
+    "grade": "Grade 8C",
+    "dob": "2013-10-30",
+    "father_phone": "9999118426",
+    "mother_phone": "9999118480"
+  },
+  {
+    "name": "Aakarsh Bansal",
+    "grade": "Grade 9A",
+    "dob": "2012-08-30",
+    "father_phone": "9811358922",
+    "mother_phone": "9811774879"
+  },
+  {
+    "name": "Aanya Bansal",
+    "grade": "Grade 9A",
+    "dob": "2012-06-15",
+    "father_phone": "9810873602",
+    "mother_phone": "9910166561"
+  },
+  {
+    "name": "Aarna Gupta",
+    "grade": "Grade 9A",
+    "dob": "2013-03-23",
+    "father_phone": "9811442701",
+    "mother_phone": "9911442701"
+  },
+  {
+    "name": "Aastha",
+    "grade": "Grade 9A",
+    "dob": "2013-02-04",
+    "father_phone": "9990221719",
+    "mother_phone": "8920466579"
+  },
+  {
+    "name": "Aksh",
+    "grade": "Grade 9A",
+    "dob": "2012-06-16",
+    "father_phone": "9910412495",
+    "mother_phone": "9810863251"
+  },
+  {
+    "name": "Anjali Goyal",
+    "grade": "Grade 9A",
+    "dob": "2012-10-16",
+    "father_phone": "8920067259",
+    "mother_phone": "9871113250"
+  },
+  {
+    "name": "Aparjeet Goswami",
+    "grade": "Grade 9A",
+    "dob": "2012-04-22",
+    "father_phone": "9873719003",
+    "mother_phone": "9873749003"
+  },
+  {
+    "name": "Arhaan Wadhwa",
+    "grade": "Grade 9A",
+    "dob": "2013-01-09",
+    "father_phone": "9899802677",
+    "mother_phone": "9718886869"
+  },
+  {
+    "name": "Darun Bansal",
+    "grade": "Grade 9A",
+    "dob": "2013-01-28",
+    "father_phone": "9811642879",
+    "mother_phone": "9899100892"
+  },
+  {
+    "name": "DAYVISHA GOYAL",
+    "grade": "Grade 9A",
+    "dob": "2013-01-25",
+    "father_phone": "9891210263",
+    "mother_phone": "9811166721"
+  },
+  {
+    "name": "Dev Mehta",
+    "grade": "Grade 9A",
+    "dob": "2013-03-04",
+    "father_phone": "9810156989",
+    "mother_phone": "9910101484"
+  },
+  {
+    "name": "Devansh Gupta",
+    "grade": "Grade 9A",
+    "dob": "2012-06-12",
+    "father_phone": "9212238289",
+    "mother_phone": "9899220433"
+  },
+  {
+    "name": "Diya Bansal",
+    "grade": "Grade 9A",
+    "dob": "2013-01-28",
+    "father_phone": "9811642879",
+    "mother_phone": "9899100892"
+  },
+  {
+    "name": "Hrehaan Singh",
+    "grade": "Grade 9A",
+    "dob": "2012-06-30",
+    "father_phone": "9818378700",
+    "mother_phone": "9818761717"
+  },
+  {
+    "name": "Kaayna Gupta",
+    "grade": "Grade 9A",
+    "dob": "2012-05-23",
+    "father_phone": "9312007595",
+    "mother_phone": "9654149060"
+  },
+  {
+    "name": "Prithvi Chauhan",
+    "grade": "Grade 9A",
+    "dob": "2012-10-10",
+    "father_phone": "8802442450",
+    "mother_phone": "9899356547"
+  },
+  {
+    "name": "Priyansh Arora",
+    "grade": "Grade 9A",
+    "dob": "2013-01-04",
+    "father_phone": "9811551514/9213512386",
+    "mother_phone": "9213512384"
+  },
+  {
+    "name": "Yug Chauhan",
+    "grade": "Grade 9A",
+    "dob": "2012-06-04",
+    "father_phone": "9638168478",
+    "mother_phone": "8355807871"
+  },
+  {
+    "name": "RISHANK SHARMA",
+    "grade": "Grade 9A",
+    "dob": "2012-08-23",
+    "father_phone": "9911888743",
+    "mother_phone": "7011080968"
+  },
+  {
+    "name": "PALAK SARAWAGI",
+    "grade": "Grade 9A",
+    "dob": "2012-12-09",
+    "father_phone": "9116868468",
+    "mother_phone": "9116868068"
+  },
+  {
+    "name": "Arshan",
+    "grade": "Grade 9A",
+    "dob": "2012-05-31",
+    "father_phone": "7678661509",
+    "mother_phone": "8700768135"
+  },
+  {
+    "name": "Dipanshu Mendwal",
+    "grade": "Grade 9A",
+    "dob": "2012-04-18",
+    "father_phone": "8920137099",
+    "mother_phone": "7827216730"
+  },
+  {
+    "name": "Mannat",
+    "grade": "Grade 9A",
+    "dob": "2012-12-10",
+    "father_phone": "9210449210",
+    "mother_phone": "9911808364"
+  },
+  {
+    "name": "Avik Jain",
+    "grade": "Grade 9A",
+    "dob": "2012-12-19",
+    "father_phone": "9599120000",
+    "mother_phone": "9910274650"
+  },
+  {
+    "name": "Rishik Makhija",
+    "grade": "Grade 9A",
+    "dob": "2012-07-26",
+    "father_phone": "9811589238",
+    "mother_phone": "9911553600"
+  },
+  {
+    "name": "Akshara",
+    "grade": "Grade 9A",
+    "dob": "2013-02-17",
+    "father_phone": "9582466263",
+    "mother_phone": "8377030912"
+  },
+  {
+    "name": "HARRY SINGH",
+    "grade": "Grade 9A",
+    "dob": "2012-09-24",
+    "father_phone": "8393949500",
+    "mother_phone": "9718909070"
+  },
+  {
+    "name": "Chahat Chugh(New Admission)",
+    "grade": "Grade 9A",
+    "dob": "2012-11-03",
+    "father_phone": "9686630313",
+    "mother_phone": "9343141646"
+  },
+  {
+    "name": "Siya Goel",
+    "grade": "Grade 9A",
+    "dob": "2012-10-17",
+    "father_phone": "9899065756",
+    "mother_phone": "9873098667"
+  },
+  {
+    "name": "Dheeraj Kohli",
+    "grade": "Grade 9A",
+    "dob": "2012-09-24",
+    "father_phone": "9873905658",
+    "mother_phone": "9873905658"
+  },
+  {
+    "name": "Devank Sabharwal",
+    "grade": "Grade 9A",
+    "dob": "2012-05-15",
+    "father_phone": "9212618494",
+    "mother_phone": "9773670013"
+  },
+  {
+    "name": "Anika Garg",
+    "grade": "Grade 9B",
+    "dob": "2013-03-02",
+    "father_phone": "9868796238",
+    "mother_phone": "9013587207"
+  },
+  {
+    "name": "ARYAN DEEP",
+    "grade": "Grade 9B",
+    "dob": "2011-12-22",
+    "father_phone": "9711098983",
+    "mother_phone": "9873515491"
+  },
+  {
+    "name": "ARYAN YADAV",
+    "grade": "Grade 9B",
+    "dob": "2012-05-19",
+    "father_phone": "9871113121",
+    "mother_phone": "9871740045"
+  },
+  {
+    "name": "DELIYA",
+    "grade": "Grade 9B",
+    "dob": "2011-06-06",
+    "father_phone": "9899610061",
+    "mother_phone": "9560415686"
+  },
+  {
+    "name": "Divesh Kumar",
+    "grade": "Grade 9B",
+    "dob": "2012-07-17",
+    "father_phone": "9910882399",
+    "mother_phone": "9756808335"
+  },
+  {
+    "name": "Divyansh Chutani",
+    "grade": "Grade 9B",
+    "dob": "2012-04-19",
+    "father_phone": "9818290550",
+    "mother_phone": "9213183871"
+  },
+  {
+    "name": "Faiz",
+    "grade": "Grade 9B",
+    "dob": "2012-09-10",
+    "father_phone": "9891874443",
+    "mother_phone": "9873175333"
+  },
+  {
+    "name": "Gaurvika Bahri",
+    "grade": "Grade 9B",
+    "dob": "2013-01-14",
+    "father_phone": "9650662896",
+    "mother_phone": "9654950522"
+  },
+  {
+    "name": "Havish Jain",
+    "grade": "Grade 9B",
+    "dob": "2012-11-06",
+    "father_phone": "9254183018",
+    "mother_phone": "9267943631"
+  },
+  {
+    "name": "Ihtisham Ahmad Ansari",
+    "grade": "Grade 9B",
+    "dob": "2013-02-26",
+    "father_phone": "9811459500",
+    "mother_phone": "9911459500"
+  },
+  {
+    "name": "Vihaan Gupta",
+    "grade": "Grade 9B",
+    "dob": "2013-02-11",
+    "father_phone": "9643790280",
+    "mother_phone": "8744851622"
+  },
+  {
+    "name": "Siddharth",
+    "grade": "Grade 9B",
+    "dob": "2012-12-12",
+    "father_phone": "9810016945",
+    "mother_phone": "9891112276"
+  },
+  {
+    "name": "Om Arora",
+    "grade": "Grade 9B",
+    "dob": "2013-03-24",
+    "father_phone": "8447518568",
+    "mother_phone": "9999705905"
+  },
+  {
+    "name": "Mahir Sharma",
+    "grade": "Grade 9B",
+    "dob": "2013-01-02",
+    "father_phone": "9999798950",
+    "mother_phone": "9582233650"
+  },
+  {
+    "name": "REYANSH THAKKAR",
+    "grade": "Grade 9B",
+    "dob": "2012-11-25",
+    "father_phone": "9319173079",
+    "mother_phone": "9015599243"
+  },
+  {
+    "name": "Vihaan Gupta",
+    "grade": "Grade 9B",
+    "dob": "2012-10-06",
+    "father_phone": "8527797893",
+    "mother_phone": "9953545335"
+  },
+  {
+    "name": "VRITI ARORA",
+    "grade": "Grade 9B",
+    "dob": "2013-01-21",
+    "father_phone": "7834893163",
+    "mother_phone": "9315911610"
+  },
+  {
+    "name": "KYNA JAIN",
+    "grade": "Grade 9B",
+    "dob": "2012-11-02",
+    "father_phone": "9871298928",
+    "mother_phone": "9650999892"
+  },
+  {
+    "name": "IRA CHAUDHARY",
+    "grade": "Grade 9B",
+    "dob": "2012-03-02",
+    "father_phone": "-",
+    "mother_phone": "9953427404, 9999844520"
+  },
+  {
+    "name": "GARV JAIN",
+    "grade": "Grade 9B",
+    "dob": "2011-05-25",
+    "father_phone": "9210114710",
+    "mother_phone": "8802913859, WP(9873744174)"
+  },
+  {
+    "name": "Daksh",
+    "grade": "Grade 9B",
+    "dob": "2012-10-26",
+    "father_phone": "7428743766",
+    "mother_phone": "8920412944"
+  },
+  {
+    "name": "Zoya",
+    "grade": "Grade 9B",
+    "dob": "2012-12-23",
+    "father_phone": "8851943416",
+    "mother_phone": "9891721049"
+  },
+  {
+    "name": "Alina",
+    "grade": "Grade 9B",
+    "dob": "2012-10-28",
+    "father_phone": "9871713909",
+    "mother_phone": "9354451503"
+  },
+  {
+    "name": "AARUSH SHARMA",
+    "grade": "Grade 9B",
+    "dob": "2012-04-09",
+    "father_phone": "8700292716",
+    "mother_phone": "8218911320"
+  },
+  {
+    "name": "Riya",
+    "grade": "Grade 9B",
+    "dob": "2010-08-10",
+    "father_phone": "9718726726",
+    "mother_phone": "9267968446"
+  },
+  {
+    "name": "Vivaan Shyam Sapra",
+    "grade": "Grade 9B",
+    "dob": "2012-05-21",
+    "father_phone": "9811924962",
+    "mother_phone": "9891437977"
+  },
+  {
+    "name": "Aarav Garg",
+    "grade": "Grade 9B",
+    "dob": "2012-11-30",
+    "father_phone": "9811380800",
+    "mother_phone": "9818981996"
+  },
+  {
+    "name": "Vidhan Gupta",
+    "grade": "Grade 9B",
+    "dob": "2012-07-06",
+    "father_phone": "9818621214",
+    "mother_phone": "9910333833"
+  },
+  {
+    "name": "Janvi Garg",
+    "grade": "Grade 9B",
+    "dob": "2012-05-16",
+    "father_phone": "9958100581",
+    "mother_phone": "9958650683"
+  },
+  {
+    "name": "Aham Kumar",
+    "grade": "Grade 9B",
+    "dob": "2012-08-12",
+    "father_phone": "9268048431",
+    "mother_phone": "7982632789, 8377847587"
+  },
+  {
+    "name": "Aarav Gupta",
+    "grade": "Grade 9C",
+    "dob": "2012-10-21",
+    "father_phone": "9899248863",
+    "mother_phone": "9990362959"
+  },
+  {
+    "name": "Aarshiya Gupta",
+    "grade": "Grade 9C",
+    "dob": "2012-10-21",
+    "father_phone": "9899248863",
+    "mother_phone": "9990362959"
+  },
+  {
+    "name": "Aayansh Gupta",
+    "grade": "Grade 9C",
+    "dob": "2012-10-21",
+    "father_phone": "9899248863",
+    "mother_phone": "9990362959"
+  },
+  {
+    "name": "Arohi Agarwal",
+    "grade": "Grade 9C",
+    "dob": "2013-02-12",
+    "father_phone": "9311166518",
+    "mother_phone": "9873842660"
+  },
+  {
+    "name": "Arnav Garg",
+    "grade": "Grade 9C",
+    "dob": "2013-01-02",
+    "father_phone": "9810273489",
+    "mother_phone": "9650091489"
+  },
+  {
+    "name": "Ayush Raj",
+    "grade": "Grade 9C",
+    "dob": "2012-04-12",
+    "father_phone": "9717802455",
+    "mother_phone": "8800867055"
+  },
+  {
+    "name": "Darshit",
+    "grade": "Grade 9C",
+    "dob": "2012-06-11",
+    "father_phone": "9899957476",
+    "mother_phone": "9711273794"
+  },
+  {
+    "name": "DHAIRYA MANN",
+    "grade": "Grade 9C",
+    "dob": "2012-03-16",
+    "father_phone": "9250112222",
+    "mother_phone": "7838343998"
+  },
+  {
+    "name": "Dhanvi",
+    "grade": "Grade 9C",
+    "dob": "2012-04-12",
+    "father_phone": "9250488520",
+    "mother_phone": "8076027403"
+  },
+  {
+    "name": "Hridyam Kumar",
+    "grade": "Grade 9C",
+    "dob": "2012-07-20",
+    "father_phone": "9811006438",
+    "mother_phone": "9811006804"
+  },
+  {
+    "name": "Inaya Goel",
+    "grade": "Grade 9C",
+    "dob": "2012-07-30",
+    "father_phone": "9899906352",
+    "mother_phone": "9999737003"
+  },
+  {
+    "name": "Prisha Rawal",
+    "grade": "Grade 9C",
+    "dob": "2013-03-21",
+    "father_phone": "9811973445",
+    "mother_phone": "9818972445"
+  },
+  {
+    "name": "Ishant Verma",
+    "grade": "Grade 9C",
+    "dob": "2012-08-11",
+    "father_phone": "9999356956",
+    "mother_phone": "9971130765"
+  },
+  {
+    "name": "Kavya Gupta",
+    "grade": "Grade 9C",
+    "dob": "2012-05-23",
+    "father_phone": "9312007595",
+    "mother_phone": "9654149060"
+  },
+  {
+    "name": "Krishiv Wadhwa",
+    "grade": "Grade 9C",
+    "dob": "2013-01-24",
+    "father_phone": "9811136103",
+    "mother_phone": "9873588341"
+  },
+  {
+    "name": "Mayank",
+    "grade": "Grade 9C",
+    "dob": "2011-08-29",
+    "father_phone": "9711652808",
+    "mother_phone": "8860207026"
+  },
+  {
+    "name": "Naman Jain",
+    "grade": "Grade 9C",
+    "dob": "2013-03-31",
+    "father_phone": "9810383650",
+    "mother_phone": "9350383650"
+  },
+  {
+    "name": "Rashi Goyal",
+    "grade": "Grade 9C",
+    "dob": "2013-03-29",
+    "father_phone": "9871066622",
+    "mother_phone": "9910566622"
+  },
+  {
+    "name": "Ravita Jain",
+    "grade": "Grade 9C",
+    "dob": "2012-06-01",
+    "father_phone": "9717166626",
+    "mother_phone": "8076538182"
+  },
+  {
+    "name": "Navyam Soni",
+    "grade": "Grade 9C",
+    "dob": "2012-11-14",
+    "father_phone": "9999927991",
+    "mother_phone": "9999627991"
+  },
+  {
+    "name": "Kavya Mangal",
+    "grade": "Grade 9C",
+    "dob": "2012-07-18",
+    "father_phone": "9313432777",
+    "mother_phone": "9810181897"
+  },
+  {
+    "name": "Bhavya Kumar Verma",
+    "grade": "Grade 9C",
+    "dob": "2013-01-12",
+    "father_phone": "9811818500",
+    "mother_phone": "9871751294"
+  },
+  {
+    "name": "Monish",
+    "grade": "Grade 9C",
+    "dob": "2012-11-11",
+    "father_phone": "9971030503",
+    "mother_phone": "8810425915"
+  },
+  {
+    "name": "KRITIKA KATHURIA",
+    "grade": "Grade 9C",
+    "dob": "2012-12-17",
+    "father_phone": "9582313232",
+    "mother_phone": "9310295320"
+  },
+  {
+    "name": "LOUKYA JAIN",
+    "grade": "Grade 9C",
+    "dob": "2012-10-30",
+    "father_phone": "9811679010",
+    "mother_phone": "9811675227"
+  },
+  {
+    "name": "ARADHAYA GUPTA",
+    "grade": "Grade 9C",
+    "dob": "2012-05-14",
+    "father_phone": "9811175467",
+    "mother_phone": "9811370867"
+  },
+  {
+    "name": "Adhvik Jain",
+    "grade": "Grade 9C",
+    "dob": "2012-10-27",
+    "father_phone": "9891144913",
+    "mother_phone": "7289011810"
+  },
+  {
+    "name": "Gianna Garg",
+    "grade": "Grade 9C",
+    "dob": "2012-07-05",
+    "father_phone": "9811581159",
+    "mother_phone": "9911581159"
+  },
+  {
+    "name": "Kaushik Murugan",
+    "grade": "Grade 9C",
+    "dob": "2012-12-02",
+    "father_phone": "9884085872\n \n 8130579032",
+    "mother_phone": "9003288968"
+  },
+  {
+    "name": "Rashit Nagpal",
+    "grade": "Grade 9C",
+    "dob": "2012-11-04",
+    "father_phone": "9899371588",
+    "mother_phone": "9899618178"
+  },
+  {
+    "name": "Loukya Jain",
+    "grade": "Grade 9C",
+    "dob": "2012-10-30",
+    "father_phone": "9811679010",
+    "mother_phone": "9811675227"
+  },
+  {
+    "name": "Joyita",
+    "grade": "Grade 9C",
+    "dob": "2012-12-16",
+    "father_phone": "8607601234",
+    "mother_phone": "9467021311"
+  },
+  {
+    "name": "Aadya Bansal",
+    "grade": "Grade 10A",
+    "dob": "2012-03-19",
+    "father_phone": "9891970344",
+    "mother_phone": "9350770500"
+  },
+  {
+    "name": "Aadya Chhabra",
+    "grade": "Grade 10A",
+    "dob": "2012-02-15",
+    "father_phone": "9205459818",
+    "mother_phone": "9810317695"
+  },
+  {
+    "name": "Aaravya Mehra",
+    "grade": "Grade 10A",
+    "dob": "2011-05-20",
+    "father_phone": "9873093000",
+    "mother_phone": "9873353895"
+  },
+  {
+    "name": "Ahimsa Jain",
+    "grade": "Grade 10A",
+    "dob": "2012-03-18",
+    "father_phone": "7838215491",
+    "mother_phone": "8800697356"
+  },
+  {
+    "name": "ATHARVA PRASAD",
+    "grade": "Grade 10A",
+    "dob": "2011-07-14",
+    "father_phone": "9999779110",
+    "mother_phone": "9818115991"
+  },
+  {
+    "name": "Anagha Tyagi",
+    "grade": "Grade 10A",
+    "dob": "2010-11-23",
+    "father_phone": "9068974448",
+    "mother_phone": "9068974662"
+  },
+  {
+    "name": "Ekamjeet Singh",
+    "grade": "Grade 10A",
+    "dob": "2012-01-01",
+    "father_phone": "9582866744\n9310069697",
+    "mother_phone": "9999866744"
+  },
+  {
+    "name": "Farida Dogra",
+    "grade": "Grade 10A",
+    "dob": "2012-01-13",
+    "father_phone": "9811311320",
+    "mother_phone": "7838113113"
+  },
+  {
+    "name": "Gurliv Singh",
+    "grade": "Grade 10A",
+    "dob": "2011-09-07",
+    "father_phone": "9999012294",
+    "mother_phone": "9718099555"
+  },
+  {
+    "name": "Izaan Faisal",
+    "grade": "Grade 10A",
+    "dob": "2012-02-24",
+    "father_phone": "9810895824",
+    "mother_phone": "9910895824"
+  },
+  {
+    "name": "Kapish Oberoi",
+    "grade": "Grade 10A",
+    "dob": "2011-09-13",
+    "father_phone": "9999993952",
+    "mother_phone": "9899999781"
+  },
+  {
+    "name": "Mysha Makhija",
+    "grade": "Grade 10A",
+    "dob": "2011-12-04",
+    "father_phone": "9999990100",
+    "mother_phone": "9873344445"
+  },
+  {
+    "name": "Reeyansh Chhikara",
+    "grade": "Grade 10A",
+    "dob": "2012-02-13",
+    "father_phone": "9899487803",
+    "mother_phone": "9899487806"
+  },
+  {
+    "name": "Revant Jain",
+    "grade": "Grade 10A",
+    "dob": "2012-01-17",
+    "father_phone": "9999653200",
+    "mother_phone": "9871574172"
+  },
+  {
+    "name": "Sanchit Anand",
+    "grade": "Grade 10A",
+    "dob": "2011-05-30",
+    "father_phone": "9873901269",
+    "mother_phone": "9582646161"
+  },
+  {
+    "name": "Reanna Bhatteja",
+    "grade": "Grade 10A",
+    "dob": "2011-09-02",
+    "father_phone": "9810816000",
+    "mother_phone": "9311853065"
+  },
+  {
+    "name": "Vidyut Kalra",
+    "grade": "Grade 10A",
+    "dob": "2012-03-27",
+    "father_phone": "8920060749",
+    "mother_phone": "7048958789"
+  },
+  {
+    "name": "Nomaan",
+    "grade": "Grade 10A",
+    "dob": "2010-09-30",
+    "father_phone": "9871795758",
+    "mother_phone": "8700584908"
+  },
+  {
+    "name": "Maanas Chhabra",
+    "grade": "Grade 10A",
+    "dob": "2012-02-10",
+    "father_phone": "9818674889",
+    "mother_phone": "9958671819"
+  },
+  {
+    "name": "Khushi Daga",
+    "grade": "Grade 10A",
+    "dob": "2011-08-13",
+    "father_phone": "9810320700",
+    "mother_phone": "9350520700"
+  },
+  {
+    "name": "Chhavi Bhatia",
+    "grade": "Grade 10A",
+    "dob": "2011-08-18",
+    "father_phone": "9911154131",
+    "mother_phone": "9911104131"
+  },
+  {
+    "name": "Luvya Bajaj",
+    "grade": "Grade 10A",
+    "dob": "2011-05-03",
+    "father_phone": "9810999248",
+    "mother_phone": "9968705049"
+  },
+  {
+    "name": "Annant Massaun",
+    "grade": "Grade 10A",
+    "dob": "2011-12-27",
+    "father_phone": "9811897788",
+    "mother_phone": "9999327444"
+  },
+  {
+    "name": "Laksh Goyal",
+    "grade": "Grade 10A",
+    "dob": "2012-02-28",
+    "father_phone": "9711083644",
+    "mother_phone": "7838316722"
+  },
+  {
+    "name": "Revant Jain",
+    "grade": "Grade 10A",
+    "dob": "2012-01-17",
+    "father_phone": "9999653200",
+    "mother_phone": "9871574172"
+  },
+  {
+    "name": "Rohit Rajput",
+    "grade": "Grade 10A",
+    "dob": "2011-05-16",
+    "father_phone": "9811219930",
+    "mother_phone": "7836001452"
+  },
+  {
+    "name": "Khushi Sharma",
+    "grade": "Grade 10A",
+    "dob": "2012-01-28",
+    "father_phone": "9810880226",
+    "mother_phone": "9650973366"
+  },
+  {
+    "name": "Uday Goyal",
+    "grade": "Grade 10A",
+    "dob": "2011-04-04",
+    "father_phone": "9350051839",
+    "mother_phone": "9871113251"
+  },
+  {
+    "name": "Shauryaa Khari",
+    "grade": "Grade 10A",
+    "dob": "2012-02-12",
+    "father_phone": "9999643337",
+    "mother_phone": "9999643338, 8595802528"
+  },
+  {
+    "name": "Aadya Jain",
+    "grade": "Grade 10A",
+    "dob": "2011-10-28",
+    "father_phone": "9911087778",
+    "mother_phone": "9336035008"
+  },
+  {
+    "name": "GARVISH SINGH",
+    "grade": "Grade 10A",
+    "dob": "2011-02-14",
+    "father_phone": "9999996480",
+    "mother_phone": "9736972369"
+  },
+  {
+    "name": "HIYA NANDA",
+    "grade": "Grade 10A",
+    "dob": "2011-09-23",
+    "father_phone": "8588867354",
+    "mother_phone": "9891915140"
+  },
+  {
+    "name": "AKSHIT DUA",
+    "grade": "Grade 10B",
+    "dob": "2011-09-09",
+    "father_phone": "9811482970",
+    "mother_phone": "8285601699"
+  },
+  {
+    "name": "Daksh Kumar",
+    "grade": "Grade 10B",
+    "dob": "2011-11-18",
+    "father_phone": "9953282766",
+    "mother_phone": "9289077534"
+  },
+  {
+    "name": "Aryaman Sharma",
+    "grade": "Grade 10B",
+    "dob": "2011-11-04",
+    "father_phone": "9811387775",
+    "mother_phone": "9911387775"
+  },
+  {
+    "name": "Dev Jain",
+    "grade": "Grade 10B",
+    "dob": "2009-06-29",
+    "father_phone": "-",
+    "mother_phone": "8920386430, 9999452053"
+  },
+  {
+    "name": "Drishti Chawla",
+    "grade": "Grade 10B",
+    "dob": "2012-03-23",
+    "father_phone": "8146354142",
+    "mother_phone": "9780874078"
+  },
+  {
+    "name": "Gauri Bajaj",
+    "grade": "Grade 10B",
+    "dob": "2011-05-21",
+    "father_phone": "9911222201, 9990032540",
+    "mother_phone": "9990000540"
+  },
+  {
+    "name": "Raunak Gupta",
+    "grade": "Grade 10B",
+    "dob": "2011-09-25",
+    "father_phone": "9667307771",
+    "mother_phone": "8447893507"
+  },
+  {
+    "name": "Ridaa Seth",
+    "grade": "Grade 10B",
+    "dob": "2011-09-29",
+    "father_phone": "9999939191",
+    "mother_phone": "9716436622"
+  },
+  {
+    "name": "Rudransh",
+    "grade": "Grade 10B",
+    "dob": "2011-12-14",
+    "father_phone": "9868475637",
+    "mother_phone": "9818418410"
+  },
+  {
+    "name": "Saksham Sharma",
+    "grade": "Grade 10B",
+    "dob": "2011-12-03",
+    "father_phone": "9811296517",
+    "mother_phone": "8700819323"
+  },
+  {
+    "name": "Sanaa Sachdeva",
+    "grade": "Grade 10B",
+    "dob": "2011-06-06",
+    "father_phone": "9811578900",
+    "mother_phone": "9015791391"
+  },
+  {
+    "name": "Sanchit Gupta",
+    "grade": "Grade 10B",
+    "dob": "2011-12-22",
+    "father_phone": "9650193122",
+    "mother_phone": "9312789885"
+  },
+  {
+    "name": "Vedant Kandoi",
+    "grade": "Grade 10B",
+    "dob": "2012-03-01",
+    "father_phone": "8377007000",
+    "mother_phone": "9910348165"
+  },
+  {
+    "name": "MANNAT",
+    "grade": "Grade 10B",
+    "dob": "2011-08-02",
+    "father_phone": "8766213391",
+    "mother_phone": "9899941995"
+  },
+  {
+    "name": "SUHANA GAMBHIR",
+    "grade": "Grade 10B",
+    "dob": "2011-06-27",
+    "father_phone": "8851941601",
+    "mother_phone": "9811087160"
+  },
+  {
+    "name": "AANYA KEJRIWAL",
+    "grade": "Grade 10B",
+    "dob": "2011-10-07",
+    "father_phone": "8010073311",
+    "mother_phone": "7042987311"
+  },
+  {
+    "name": "Aasmi Suri",
+    "grade": "Grade 10B",
+    "dob": "2012-01-01",
+    "father_phone": "9811411233",
+    "mother_phone": "9211890102"
+  },
+  {
+    "name": "Harjas Singh Arora",
+    "grade": "Grade 10B",
+    "dob": "2011-04-24",
+    "father_phone": "9810008976",
+    "mother_phone": "8130305040"
+  },
+  {
+    "name": "Saanvi Mangla",
+    "grade": "Grade 10B",
+    "dob": "2011-10-21",
+    "father_phone": "9811590442",
+    "mother_phone": "9278279756"
+  },
+  {
+    "name": "Charvi Tandon",
+    "grade": "Grade 10B",
+    "dob": "2011-04-04",
+    "father_phone": "9582558785",
+    "mother_phone": "9582558785"
+  },
+  {
+    "name": "Ayra Bajaj",
+    "grade": "Grade 10B",
+    "dob": "2011-04-20",
+    "father_phone": "9810776630",
+    "mother_phone": "9810945945"
+  },
+  {
+    "name": "YUVRAJ MEHTA",
+    "grade": "Grade 10B",
+    "dob": "2010-10-12",
+    "father_phone": "9884021008",
+    "mother_phone": "9789867416"
+  },
+  {
+    "name": "Dev Thukral",
+    "grade": "Grade 10B",
+    "dob": "2011-12-01",
+    "father_phone": "9811724987",
+    "mother_phone": "9899580479"
+  },
+  {
+    "name": "Rohan Thukral",
+    "grade": "Grade 10B",
+    "dob": "2011-12-01",
+    "father_phone": "9811724987",
+    "mother_phone": "9899580479"
+  },
+  {
+    "name": "Vanisha Aggarwal",
+    "grade": "Grade 10B",
+    "dob": "2011-05-05",
+    "father_phone": "9650500555",
+    "mother_phone": "9871732837"
+  },
+  {
+    "name": "Divit Bansal",
+    "grade": "Grade 10B",
+    "dob": "2012-03-22",
+    "father_phone": "9311393200",
+    "mother_phone": "9811393200"
+  },
+  {
+    "name": "Maitri Jain",
+    "grade": "Grade 10B",
+    "dob": "2011-04-30",
+    "father_phone": "9999565690",
+    "mother_phone": "9899622143"
+  },
+  {
+    "name": "Ruhaan Sawhney",
+    "grade": "Grade 10B",
+    "dob": "2011-12-05",
+    "father_phone": "9971113698",
+    "mother_phone": "9818728444"
+  },
+  {
+    "name": "Aakash Juneja",
+    "grade": "Grade 10B",
+    "dob": "2011-07-26",
+    "father_phone": "9999981910",
+    "mother_phone": "9811206885"
+  },
+  {
+    "name": "Shaurya Veer Khari",
+    "grade": "Grade 10B",
+    "dob": "2011-09-04",
+    "father_phone": "8010230678",
+    "mother_phone": "8882928554"
+  },
+  {
+    "name": "Satvik Hira",
+    "grade": "Grade 10B",
+    "dob": "2011-04-01",
+    "father_phone": "9818553748",
+    "mother_phone": "9650941825"
+  },
+  {
+    "name": "Raahi Bakhai",
+    "grade": "Grade 10B",
+    "dob": "2011-10-26",
+    "father_phone": "9873320708",
+    "mother_phone": "9873620708"
+  },
+  {
+    "name": "Advika Jain",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-03-25",
+    "father_phone": "9868532662",
+    "mother_phone": "9910631356"
+  },
+  {
+    "name": "ADITYA NAKAI",
+    "grade": "Grade 10A OLD",
+    "dob": "2009-11-23",
+    "father_phone": "8920841352",
+    "mother_phone": "9625196495"
+  },
+  {
+    "name": "Alaina Bhushan",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-02-28",
+    "father_phone": "9711111699",
+    "mother_phone": "9811613232"
+  },
+  {
+    "name": "Anahita Aggarwal",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-09-21",
+    "father_phone": "7065363436 /70077770522",
+    "mother_phone": "9891775803"
+  },
+  {
+    "name": "Ananya Bansal",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-02-11",
+    "father_phone": "9811154335",
+    "mother_phone": "9899536166/8368260266"
+  },
+  {
+    "name": "Arvind Anand",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-10-08",
+    "father_phone": "8130665664",
+    "mother_phone": "9540151269"
+  },
+  {
+    "name": "Bhavi Jain",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-09-29",
+    "father_phone": "8130665664",
+    "mother_phone": "9910682366"
+  },
+  {
+    "name": "Bhawana",
+    "grade": "Grade 10A OLD",
+    "dob": "2009-10-24",
+    "father_phone": "9990566432",
+    "mother_phone": "9718448852"
+  },
+  {
+    "name": "Hrithvik Walia",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-03-09",
+    "father_phone": "8929537296",
+    "mother_phone": "9811603159"
+  },
+  {
+    "name": "INODAEY DHIMAN",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-12-18",
+    "father_phone": "9899184836",
+    "mother_phone": "9654141996"
+  },
+  {
+    "name": "Ishaan Arora",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-01-15",
+    "father_phone": "9811196666",
+    "mother_phone": "8285446447"
+  },
+  {
+    "name": "Ishika Arora",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-01-15",
+    "father_phone": "9811196666",
+    "mother_phone": "8285446447"
+  },
+  {
+    "name": "Ishaan Bhardwaj",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-01-22",
+    "father_phone": "9871431690",
+    "mother_phone": "9871530586"
+  },
+  {
+    "name": "JASLEEN KAUR",
+    "grade": "Grade 10A OLD",
+    "dob": "2009-06-10",
+    "father_phone": "9999461612",
+    "mother_phone": "9910714974"
+  },
+  {
+    "name": "Jayesh Jain",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-06-28",
+    "father_phone": "9910956008",
+    "mother_phone": "8368492101"
+  },
+  {
+    "name": "Kashvi Goel",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-02-14",
+    "father_phone": "9818107162",
+    "mother_phone": "9899829998"
+  },
+  {
+    "name": "Keshav Bansal",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-09-05",
+    "father_phone": "9212739941",
+    "mother_phone": "9953301784"
+  },
+  {
+    "name": "Krishiv",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-01-28",
+    "father_phone": "8860182228",
+    "mother_phone": "9971531102"
+  },
+  {
+    "name": "Mohammed Haadi Yahya",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-12-24",
+    "father_phone": "9811376786",
+    "mother_phone": "9868527297"
+  },
+  {
+    "name": "Mehak Goyal",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-06-15",
+    "father_phone": "9811730201",
+    "mother_phone": "9711077401"
+  },
+  {
+    "name": "Pawani Juneja",
+    "grade": "Grade 10A OLD",
+    "dob": "2009-03-11",
+    "father_phone": "9718159286",
+    "mother_phone": "9667700280"
+  },
+  {
+    "name": "Saanvi Sapra",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-01-20",
+    "father_phone": "9810241415",
+    "mother_phone": "9667350091"
+  },
+  {
+    "name": "Sanvi Gupta",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-07-05",
+    "father_phone": "9999300014",
+    "mother_phone": "9999893230"
+  },
+  {
+    "name": "Shalin Sultan Hurra",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-11-27",
+    "father_phone": "9910463332, 9910363332",
+    "mother_phone": "8700415726"
+  },
+  {
+    "name": "SHAWN KUMAR",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-09-10",
+    "father_phone": "9315564767",
+    "mother_phone": "9650023661"
+  },
+  {
+    "name": "SHREY SARAF",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-06-19",
+    "father_phone": "9973602961",
+    "mother_phone": "8877232424"
+  },
+  {
+    "name": "SHREYAN KUMAR",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-09-10",
+    "father_phone": "9315564767",
+    "mother_phone": "9650023661"
+  },
+  {
+    "name": "Tanish Mangla",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-09-13",
+    "father_phone": "9811590442",
+    "mother_phone": "9278279756"
+  },
+  {
+    "name": "Suhana Vohra",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-07-31",
+    "father_phone": "9999112246",
+    "mother_phone": "9718259395"
+  },
+  {
+    "name": "DIVYAANSH LEKHI",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-01-03",
+    "father_phone": "9310145926",
+    "mother_phone": "8700413565"
+  },
+  {
+    "name": "Himanish Sabharwal",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-06-15",
+    "father_phone": "9212618494",
+    "mother_phone": "9773670013"
+  },
+  {
+    "name": "Rajveer",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-01-26",
+    "father_phone": "9810449598 (old)",
+    "mother_phone": "9654710098 (old) / 7982723256"
+  },
+  {
+    "name": "Veer Ravi Chhikara",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-01-21",
+    "father_phone": "9818068364",
+    "mother_phone": "7838259755"
+  },
+  {
+    "name": "Sadeevjit Singh",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-12-16",
+    "father_phone": "9311261070",
+    "mother_phone": "9310261070"
+  },
+  {
+    "name": "Sanaa Gupta",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-04-11",
+    "father_phone": "9810640532",
+    "mother_phone": "9711260268"
+  },
+  {
+    "name": "Rajveer",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-01-26",
+    "father_phone": "9810449598 (old)",
+    "mother_phone": "9654710098 (old) / 7982723256"
+  },
+  {
+    "name": "Suvam Chopra",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-05-07",
+    "father_phone": "9891111130",
+    "mother_phone": "7400042000"
+  },
+  {
+    "name": "Sesha Arora",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-06-05",
+    "father_phone": "9811142568",
+    "mother_phone": "9873317313"
+  },
+  {
+    "name": "Kunal Khanduri",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-01-28",
+    "father_phone": "9650143970",
+    "mother_phone": "8447662225"
+  },
+  {
+    "name": "Pratham Goel",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-11-30",
+    "father_phone": "9810060112",
+    "mother_phone": "9910550112"
+  },
+  {
+    "name": "Pranav Kumar",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-10-07",
+    "father_phone": "9555101114, 7065881710",
+    "mother_phone": "9650435401"
+  },
+  {
+    "name": "Palak",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-01-12",
+    "father_phone": "9868584255",
+    "mother_phone": "9582499480"
+  },
+  {
+    "name": "Akshita Murugan",
+    "grade": "Grade 10A OLD",
+    "dob": "2011-02-04",
+    "father_phone": "9884085872",
+    "mother_phone": "9003288968"
+  },
+  {
+    "name": "Navya Mahajan",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-01-25",
+    "father_phone": "9871560909",
+    "mother_phone": "8368767682"
+  },
+  {
+    "name": "Sagar Goyal",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-05-15",
+    "father_phone": "9350051839",
+    "mother_phone": "9871113251"
+  },
+  {
+    "name": "Agrima Rohatgi",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-12-01",
+    "father_phone": "9311287556",
+    "mother_phone": "9311256219"
+  },
+  {
+    "name": "ADVITA SETHI",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-03-06",
+    "father_phone": "-",
+    "mother_phone": "9810763856"
+  },
+  {
+    "name": "ADHVIK SHARMA",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-07-12",
+    "father_phone": "7503891084",
+    "mother_phone": "9811755579"
+  },
+  {
+    "name": "Ayana Sahni  (Strike Off)",
+    "grade": "Grade 10A OLD",
+    "dob": "2010-08-28",
+    "father_phone": "9899794372",
+    "mother_phone": "8447773594"
+  }
+]
