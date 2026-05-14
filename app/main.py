@@ -575,7 +575,7 @@ async def api_send_whatsapp(request: Request):
         if header_secret != agent_secret:
             raise HTTPException(status_code=401, detail="Invalid or missing agent secret")
 
-    from app.services.whatsapp_service import send_whatsapp_message, send_whatsapp_force, send_cloud_template_message
+    from app.services.whatsapp_service import send_whatsapp_message, send_whatsapp_force, send_cloud_template_message, upload_media_bytes_cloud
     from app.database import get_db
     body = await request.json()
     phone = body.get("phone", "")
@@ -583,6 +583,7 @@ async def api_send_whatsapp(request: Request):
     template_name = body.get("template_name", "")
     template_params = body.get("template_params", [])
     language_code = body.get("language_code", "en")
+    header_image_base64 = body.get("header_image_base64", "")
 
     # --- Block attendance notifications on holidays and Sundays ---
     ist = timezone(timedelta(hours=5, minutes=30))
@@ -648,10 +649,22 @@ async def api_send_whatsapp(request: Request):
             continue
 
         if template_name:
+            # Upload header image if provided (teacher attendance snapshots)
+            _header_image_id = None
+            if header_image_base64:
+                import base64 as _b64
+                try:
+                    img_bytes = _b64.b64decode(header_image_base64)
+                    _header_image_id = await upload_media_bytes_cloud(
+                        img_bytes, "image/jpeg", "attendance_snapshot.jpg"
+                    )
+                except Exception as _img_err:
+                    logger.warning(f"Failed to upload header image: {_img_err}")
             success = await send_cloud_template_message(
                 digits, template_name,
                 language_code=language_code,
                 body_params=template_params or None,
+                header_image_id=_header_image_id,
             )
         elif message:
             success = await send_whatsapp_force(digits, message)
