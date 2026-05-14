@@ -842,10 +842,8 @@ async def forward_to_teachers_and_confirm(
 
         wa_success = False
         if teacher_phone:
-            import asyncio as _asyncio_fwd
             from app.services.whatsapp_service import (
                 send_cloud_template_message as _send_tmpl,
-                forward_cloud_media_to_recipient as _fwd_media,
                 upload_media_bytes_cloud as _upload_media,
             )
             chat_id = _teacher_chat_id(teacher_phone)
@@ -853,62 +851,51 @@ async def forward_to_teachers_and_confirm(
             if len(t_recipient) == 10:
                 t_recipient = "91" + t_recipient
 
-            _query_msg = (
-                f"\U0001f4e9 *{parent_label}* has sent a query.\n\n"
-                f"\"{message_text[:500]}\"\n\n"
-                f"_Reply to this message \u2014 your response will be forwarded to the parent._"
-            )
-
-            # Try freeform message first (works if 24-hr window is open)
-            wa_success = await send_whatsapp_message(chat_id, _query_msg)
-            if wa_success:
-                logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
-                # Also forward the media attachment if present
-                if media_info and media_info.get("cloud_media_id"):
-                    await _asyncio_fwd.sleep(2)
-                    try:
-                        await _fwd_media(
-                            media_info, chat_id,
-                            caption=f"Attachment from {parent_label}",
-                        )
-                        logger.info(f"[FWD] Media forwarded to {entry['teacher']}")
-                    except Exception as _me:
-                        logger.error(f"[FWD] Media forward failed for {entry['teacher']}: {_me}")
-            else:
-                # 24-hr window closed — use template with media header
-                logger.info(f"[FWD] Direct msg failed, using template for {entry['teacher']}")
+            # ALWAYS use template for media queries (freeform silently
+            # fails outside the 24-hr window — Cloud API returns 200 but
+            # delivery fails with error 131047).
+            if media_info and _dl_bytes:
                 _media_type = (media_info or {}).get("type", "")
                 _is_image = _media_type in ("imageMessage", "image")
                 _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
 
-                # Upload media for template header if available
                 _hdr_img_id = None
                 _hdr_doc_id = None
                 _hdr_doc_fname = None
-                if _dl_bytes and media_info:
-                    _uploaded_id = await _upload_media(
-                        _dl_bytes, _dl_mime or "application/octet-stream",
-                        media_info.get("filename", "file"),
-                    )
-                    if _uploaded_id:
-                        if _is_image:
-                            _hdr_img_id = _uploaded_id
-                        else:
-                            _hdr_doc_id = _uploaded_id
-                            _hdr_doc_fname = media_info.get("filename", "file")
+                _uploaded_id = await _upload_media(
+                    _dl_bytes, _dl_mime or "application/octet-stream",
+                    media_info.get("filename", "file"),
+                )
+                if _uploaded_id:
+                    if _is_image:
+                        _hdr_img_id = _uploaded_id
+                    else:
+                        _hdr_doc_id = _uploaded_id
+                        _hdr_doc_fname = media_info.get("filename", "file")
 
-                tmpl_ok = await _send_tmpl(
+                wa_success = await _send_tmpl(
                     t_recipient, _tmpl_name,
                     body_params=[parent_label, message_text[:400]],
                     header_image_id=_hdr_img_id,
                     header_document_id=_hdr_doc_id,
                     header_document_filename=_hdr_doc_fname,
                 )
-                if tmpl_ok:
-                    wa_success = True
-                    logger.info(f"[FWD] Template {_tmpl_name} sent to {entry['teacher']}")
+                if wa_success:
+                    logger.info(f"[FWD] Template {_tmpl_name} with media sent to {entry['teacher']}")
                 else:
-                    logger.error(f"[FWD] Template send also failed for {entry['teacher']}")
+                    logger.error(f"[FWD] Template send failed for {entry['teacher']}")
+            else:
+                # No media — send freeform text
+                _query_msg = (
+                    f"\U0001f4e9 *{parent_label}* has sent a query.\n\n"
+                    f"\"{message_text[:500]}\"\n\n"
+                    f"_Reply to this message \u2014 your response will be forwarded to the parent._"
+                )
+                wa_success = await send_whatsapp_message(chat_id, _query_msg)
+                if wa_success:
+                    logger.info(f"[FWD] Direct query sent to {entry['teacher']}")
+                else:
+                    logger.warning(f"[FWD] Direct msg failed for {entry['teacher']}")
 
         # Always send email too (reliable channel with full query + attachment)
         email_success = False
@@ -2249,12 +2236,12 @@ async def _forward_query_to_class_teacher(
     _dl_bytes2, _dl_mime2 = await _download_media_bytes(media_info)
     logger.info(f"[PARENT→TEACHER] Media download: bytes={len(_dl_bytes2) if _dl_bytes2 else 0}, mime={_dl_mime2}, has_cloud_id={bool(media_info.get('cloud_media_id') if media_info else False)}, has_url={bool(media_info.get('url') if media_info else False)}")
 
-    # Forward via WhatsApp — try direct message first, template fallback
+    # Forward via WhatsApp — ALWAYS use template for media queries
+    # (freeform silently fails outside 24-hr window — Cloud API returns
+    # 200 but delivery fails with error 131047).
     if teacher_phone:
-        import asyncio as _asyncio_ct
         from app.services.whatsapp_service import (
             send_cloud_template_message as _send_tmpl_ct,
-            forward_cloud_media_to_recipient as _fwd_media_ct,
             upload_media_bytes_cloud as _upload_media_ct,
         )
         chat_id = _teacher_chat_id(teacher_phone)
@@ -2262,31 +2249,7 @@ async def _forward_query_to_class_teacher(
         if len(teacher_recipient) == 10:
             teacher_recipient = "91" + teacher_recipient
 
-        query_msg = (
-            f"\U0001f4e9 *{parent_label}* has sent a query.\n\n"
-            f"\"{message_text[:500]}\"\n\n"
-            f"_Reply to this message \u2014 your response will be "
-            f"forwarded back to the parent._"
-        )
-
-        # Try freeform message first (works if 24-hr window is open)
-        wa_success = await send_whatsapp_message(chat_id, query_msg)
-        if wa_success:
-            logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name} ({teacher_phone})")
-            # Also forward the media attachment if present
-            if media_info and media_info.get("cloud_media_id"):
-                await _asyncio_ct.sleep(2)
-                try:
-                    await _fwd_media_ct(
-                        media_info, chat_id,
-                        caption=f"Attachment from {parent_label}",
-                    )
-                    logger.info(f"[PARENT→TEACHER] Media forwarded to {teacher_name}")
-                except Exception as _me2:
-                    logger.error(f"[PARENT→TEACHER] Media forward failed: {_me2}")
-        else:
-            # 24-hr window closed — use template with media header
-            logger.info(f"[PARENT→TEACHER] Direct msg failed, using template for {teacher_name}")
+        if media_info and _dl_bytes2:
             _media_type2 = (media_info or {}).get("type", "")
             _is_image2 = _media_type2 in ("imageMessage", "image")
             _tmpl_name2 = "ppis_parent_query_1" if _is_image2 else "ppis_parent_query_2"
@@ -2294,30 +2257,41 @@ async def _forward_query_to_class_teacher(
             _hdr_img_id2 = None
             _hdr_doc_id2 = None
             _hdr_doc_fname2 = None
-            if _dl_bytes2 and media_info:
-                _uploaded_id2 = await _upload_media_ct(
-                    _dl_bytes2, _dl_mime2 or "application/octet-stream",
-                    media_info.get("filename", "file"),
-                )
-                if _uploaded_id2:
-                    if _is_image2:
-                        _hdr_img_id2 = _uploaded_id2
-                    else:
-                        _hdr_doc_id2 = _uploaded_id2
-                        _hdr_doc_fname2 = media_info.get("filename", "file")
+            _uploaded_id2 = await _upload_media_ct(
+                _dl_bytes2, _dl_mime2 or "application/octet-stream",
+                media_info.get("filename", "file"),
+            )
+            if _uploaded_id2:
+                if _is_image2:
+                    _hdr_img_id2 = _uploaded_id2
+                else:
+                    _hdr_doc_id2 = _uploaded_id2
+                    _hdr_doc_fname2 = media_info.get("filename", "file")
 
-            tmpl_ok2 = await _send_tmpl_ct(
+            wa_success = await _send_tmpl_ct(
                 teacher_recipient, _tmpl_name2,
                 body_params=[parent_label, message_text[:400]],
                 header_image_id=_hdr_img_id2,
                 header_document_id=_hdr_doc_id2,
                 header_document_filename=_hdr_doc_fname2,
             )
-            if tmpl_ok2:
-                wa_success = True
-                logger.info(f"[PARENT→TEACHER] Template {_tmpl_name2} sent to {teacher_name}")
+            if wa_success:
+                logger.info(f"[PARENT→TEACHER] Template {_tmpl_name2} with media sent to {teacher_name}")
             else:
-                logger.error(f"[PARENT→TEACHER] Template send also failed for {teacher_name}")
+                logger.error(f"[PARENT→TEACHER] Template send failed for {teacher_name}")
+        else:
+            # No media — send freeform text
+            query_msg = (
+                f"\U0001f4e9 *{parent_label}* has sent a query.\n\n"
+                f"\"{message_text[:500]}\"\n\n"
+                f"_Reply to this message \u2014 your response will be "
+                f"forwarded back to the parent._"
+            )
+            wa_success = await send_whatsapp_message(chat_id, query_msg)
+            if wa_success:
+                logger.info(f"[PARENT→TEACHER] Direct query sent to {teacher_name}")
+            else:
+                logger.warning(f"[PARENT→TEACHER] Direct msg failed for {teacher_name}")
 
         if wa_success:
             # Save conversation for reply relay
