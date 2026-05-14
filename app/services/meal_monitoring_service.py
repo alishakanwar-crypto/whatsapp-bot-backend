@@ -155,7 +155,7 @@ async def run_meal_monitoring(break_type: str = "lunch",
     from app.services.whatsapp_service import (
         upload_base64_image_cloud,
         send_cloud_media,
-        send_cloud_template_message,
+        send_whatsapp_message,
     )
 
     now_ist = datetime.now(IST)
@@ -275,28 +275,12 @@ async def run_meal_monitoring(break_type: str = "lunch",
                 sent_phones.add(digits)
 
                 try:
-                    # NONE of our templates have header components, so media
-                    # MUST always be sent as a separate message after the
-                    # template (which opens a conversation window).
-                    tmpl_ok = await send_cloud_template_message(
-                        digits,
-                        "ppis_meal_update",
-                        body_params=[grade_label, date_str, capture_ts],
-                    )
+                    # Send meal update as freeform text
+                    meal_msg = f"🍽️ *Meal Update — {grade_label}*\n\n{date_str} at {capture_ts}"
+                    msg_ok = await send_whatsapp_message(digits, meal_msg)
 
-                    if not tmpl_ok:
-                        # Fallback: use ppis_class_assignment template
-                        tmpl_ok = await send_cloud_template_message(
-                            digits,
-                            "ppis_class_assignment",
-                            body_params=[
-                                f"Meal update: {grade_label}",
-                                f"{date_str} {capture_ts}",
-                            ],
-                        )
-
-                    if tmpl_ok and media_id:
-                        # Send image separately after template opens window
+                    if msg_ok and media_id:
+                        # Send image separately after text message
                         await asyncio.sleep(2)
                         img_ok = await send_cloud_media(
                             digits, "image", media_id=media_id, caption=caption,
@@ -310,7 +294,7 @@ async def run_meal_monitoring(break_type: str = "lunch",
                         if not img_ok:
                             logger.error(f"Meal monitoring: image send FAILED for {digits} after retry")
 
-                    if tmpl_ok:
+                    if msg_ok:
                         grade_sent += 1
                     else:
                         grade_failed += 1

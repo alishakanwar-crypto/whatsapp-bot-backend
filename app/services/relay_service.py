@@ -434,7 +434,6 @@ async def send_relay_message_to_parent(
     """
     from app.services.whatsapp_service import (
         send_whatsapp_message,
-        send_cloud_template_message,
         forward_cloud_media_to_recipient,
     )
     from app.services.email_service import send_email_async
@@ -470,19 +469,10 @@ async def send_relay_message_to_parent(
             f"Warm regards,\nPP International School"
         )
 
-        # Try direct WhatsApp first
+        # Try direct WhatsApp
         wa_ok = await send_whatsapp_message(recipient, parent_msg)
         if not wa_ok:
-            # Template fallback
-            tmpl_ok = await send_cloud_template_message(
-                recipient, "ppis_class_assignment",
-                body_params=[f"Message from {teacher_name}", teacher_grade],
-            )
-            if tmpl_ok:
-                await asyncio.sleep(4)
-                wa_ok = await send_whatsapp_message(recipient, parent_msg)
-                if not wa_ok:
-                    wa_ok = True  # template was delivered
+            logger.warning(f"Direct msg to parent {recipient} failed (24-hr window likely closed)")
 
         # Send media if present
         if wa_ok and media_info and media_info.get("cloud_media_id"):
@@ -532,7 +522,6 @@ async def send_relay_message_to_teacher(
     """
     from app.services.whatsapp_service import (
         send_whatsapp_message,
-        send_cloud_template_message,
         forward_cloud_media_to_recipient,
     )
     from app.services.email_service import send_email_async
@@ -574,15 +563,7 @@ async def send_relay_message_to_teacher(
 
         wa_ok = await send_whatsapp_message(chat_id, query_msg)
         if not wa_ok:
-            tmpl_ok = await send_cloud_template_message(
-                recipient, "ppis_class_assignment",
-                body_params=[f"Query from {parent_label}", message_text[:400]],
-            )
-            if tmpl_ok:
-                await asyncio.sleep(4)
-                wa_ok = await send_whatsapp_message(chat_id, query_msg)
-                if not wa_ok:
-                    wa_ok = True  # template delivered
+            logger.warning(f"Direct msg to teacher {recipient} failed (24-hr window likely closed)")
 
         if wa_ok and media_info:
             await asyncio.sleep(3)
