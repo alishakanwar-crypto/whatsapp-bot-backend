@@ -122,7 +122,7 @@ def _attendance_notif_name(person_id: str, name: str) -> str:
     display = name.title() if name == name.upper() else name
     if person_id.startswith("TEACHER_"):
         return f"Dear {display}, you have been"
-    return f"Dear Parent, {display} has been"
+    return f"{display} has been"
 
 
 @router.post("/attendance/report")
