@@ -582,13 +582,14 @@ async def api_send_whatsapp(request: Request):
     message = body.get("message", "")
     template_name = body.get("template_name", "")
     template_params = body.get("template_params", [])
+    language_code = body.get("language_code", "en")
 
     # --- Block attendance notifications on holidays and Sundays ---
     ist = timezone(timedelta(hours=5, minutes=30))
     today_ist = datetime.now(ist).strftime("%Y-%m-%d")
     today_day = datetime.now(ist).strftime("%A")
     is_attendance_msg = (
-        template_name == "ppis_attendance_alert"
+        template_name in ("ppis_attendance_alert", "ppis_teachers_attendance")
         or "marked present" in message.lower()
     )
     # Extract student name from template params for audit logging
@@ -648,7 +649,9 @@ async def api_send_whatsapp(request: Request):
 
         if template_name:
             success = await send_cloud_template_message(
-                digits, template_name, body_params=template_params or None,
+                digits, template_name,
+                language_code=language_code,
+                body_params=template_params or None,
             )
         elif message:
             success = await send_whatsapp_force(digits, message)

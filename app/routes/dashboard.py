@@ -121,8 +121,15 @@ def _attendance_notif_name(person_id: str, name: str) -> str:
     """Format notification greeting: title-case ALL-CAPS names."""
     display = name.title() if name == name.upper() else name
     if person_id.startswith("TEACHER_"):
-        return f"Dear {display}, you have been"
+        return display  # Just the name — template has "Dear {{1}}, you have been"
     return f"{display} has been"
+
+
+def _attendance_template(person_id: str) -> tuple[str, str]:
+    """Return (template_name, language_code) for attendance notifications."""
+    if person_id.startswith("TEACHER_"):
+        return "ppis_teachers_attendance", "en_GB"
+    return "ppis_attendance_alert", "en"
 
 
 @router.post("/attendance/report")
@@ -235,6 +242,7 @@ async def report_attendance(request: Request):
                         time_str = "this morning"
 
                     notif_name = _attendance_notif_name(person_id, name)
+                    tpl_name, tpl_lang = _attendance_template(person_id)
 
                     phone_list = [p.strip() for p in phones.split(",") if p.strip()]
                     for ph in phone_list:
@@ -243,7 +251,8 @@ async def report_attendance(request: Request):
                             digits = "91" + digits
                         if len(digits) >= 12:
                             ok = await send_cloud_template_message(
-                                digits, "ppis_attendance_alert",
+                                digits, tpl_name,
+                                language_code=tpl_lang,
                                 body_params=[notif_name, time_str],
                             )
                             if ok:
@@ -335,6 +344,7 @@ async def resend_missed_notifications():
                 time_str = "this morning"
 
             notif_name = _attendance_notif_name(person_id, name)
+            tpl_name, tpl_lang = _attendance_template(person_id)
 
             phone_list = [p.strip() for p in phones.split(",") if p.strip()]
             any_ok = False
@@ -344,7 +354,8 @@ async def resend_missed_notifications():
                     digits = "91" + digits
                 if len(digits) >= 12:
                     ok = await send_cloud_template_message(
-                        digits, "ppis_attendance_alert",
+                        digits, tpl_name,
+                        language_code=tpl_lang,
                         body_params=[notif_name, time_str],
                     )
                     if ok:
@@ -404,6 +415,7 @@ async def resend_all_notifications():
                 time_str = "this morning"
 
             notif_name = _attendance_notif_name(person_id, name)
+            tpl_name, tpl_lang = _attendance_template(person_id)
 
             phone_list = [p.strip() for p in phones.split(",") if p.strip()]
             any_ok = False
@@ -413,7 +425,8 @@ async def resend_all_notifications():
                     digits = "91" + digits
                 if len(digits) >= 12:
                     ok = await send_cloud_template_message(
-                        digits, "ppis_attendance_alert",
+                        digits, tpl_name,
+                        language_code=tpl_lang,
                         body_params=[notif_name, time_str],
                     )
                     if ok:
@@ -1018,6 +1031,7 @@ async def approve_review(review_id: int):
                 time_str = "this morning"
 
             notif_name = _attendance_notif_name(person_id, name)
+            tpl_name, tpl_lang = _attendance_template(person_id)
 
             phone_list = [p.strip() for p in phones.split(",") if p.strip()]
             for ph in phone_list:
@@ -1026,7 +1040,8 @@ async def approve_review(review_id: int):
                     digits = "91" + digits
                 if len(digits) >= 12:
                     ok = await send_cloud_template_message(
-                        digits, "ppis_attendance_alert",
+                        digits, tpl_name,
+                        language_code=tpl_lang,
                         body_params=[notif_name, time_str],
                     )
                     if ok:
@@ -1345,9 +1360,11 @@ async def retry_failed_notifications():
             nd_id, person_id, name, phone, attempts = r
 
             notif_name = _attendance_notif_name(person_id, name)
+            tpl_name, tpl_lang = _attendance_template(person_id)
 
             ok = await send_cloud_template_message(
-                phone, "ppis_attendance_alert",
+                phone, tpl_name,
+                language_code=tpl_lang,
                 body_params=[notif_name, "this morning"],
             )
             if ok:
