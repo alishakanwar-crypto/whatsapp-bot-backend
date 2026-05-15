@@ -600,10 +600,11 @@ async def _send_homework_to_parents(grade: str, homework: str,
     )
     del image_bytes  # free memory
 
-    # Format the text message (always includes date/class/period as fallback)
-    text_body = _format_homework_message(grade, period_label, date_str, homework)
-    # Truncate for template parameter limit (~1024 chars)
-    text_body = text_body[:900] if len(text_body) > 900 else text_body
+    # Build the 5 template variables
+    now_ist = datetime.now(IST)
+    day_name = now_ist.strftime("%A")  # e.g. "Friday"
+    # Truncate content for template parameter limit (~1024 chars)
+    hw_content = homework[:900] if len(homework) > 900 else homework
 
     sent = 0
     failed = 0
@@ -611,30 +612,19 @@ async def _send_homework_to_parents(grade: str, homework: str,
     for phone in phones_to_send:
         try:
             if media_id:
-                # Send template with image header + text body
+                # Send ppis_classwork_homework template with IMAGE header + 5 body params
                 ok = await send_cloud_template_message(
                     phone,
-                    "ppis_homework_update",
-                    body_params=[text_body],
+                    "ppis_classwork_homework",
+                    body_params=[day_name, date_str, grade, period_label, hw_content],
                     header_image_id=media_id,
                 )
             else:
-                # Fallback: text-only template
+                # Fallback: text-only (no image)
                 ok = await send_cloud_template_message(
                     phone,
-                    "ppis_homework_update",
-                    body_params=[text_body],
-                )
-
-            if not ok:
-                # Second fallback: ppis_class_assignment template
-                ok = await send_cloud_template_message(
-                    phone,
-                    "ppis_class_assignment",
-                    body_params=[
-                        f"Homework for {grade}",
-                        text_body,
-                    ],
+                    "ppis_classwork_homework",
+                    body_params=[day_name, date_str, grade, period_label, hw_content],
                 )
 
             if ok:
