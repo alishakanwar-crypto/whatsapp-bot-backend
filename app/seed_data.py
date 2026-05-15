@@ -959,5 +959,41 @@ SEED_CAMERA_MAPPING = {
         "channel": 18,
         "description": "GERMAN ROOM",
         "cam_type": ""
-    }
+    },
+    "Reception C4": {
+        "dvr_index": 1,
+        "channel": 52,
+        "description": "Reception C4",
+        "cam_type": ""
+    },
+    "Reception C3": {
+        "dvr_index": 1,
+        "channel": 53,
+        "description": "Reception C3",
+        "cam_type": ""
+    },
+    "ENTRY GATE-1": {
+        "dvr_index": 2,
+        "channel": 20,
+        "description": "ENTRY GATE-1",
+        "cam_type": ""
+    },
+    "ASSEMBLY AREA": {
+        "dvr_index": 2,
+        "channel": 21,
+        "description": "ASSEMBLY AREA",
+        "cam_type": ""
+    },
+    "SPORTS ROOM": {
+        "dvr_index": 2,
+        "channel": 22,
+        "description": "SPORTS ROOM",
+        "cam_type": ""
+    },
+    "Administration": {
+        "dvr_index": 2,
+        "channel": 23,
+        "description": "Administration",
+        "cam_type": ""
+    },
 }
