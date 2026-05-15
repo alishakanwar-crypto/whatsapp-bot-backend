@@ -50,6 +50,10 @@ PERIOD_LABELS = {
     6: "Period 6 (11:00–11:30)",
 }
 
+# Grades eligible for automated homework delivery.
+# Phase 1 rollout: only Grade 9-12. Other grades will be added later.
+_HOMEWORK_ELIGIBLE_GRADES = re.compile(r"Grade\s*(9|10|11|12)", re.IGNORECASE)
+
 # Cached Google access token
 _google_access_token: str = ""
 _google_token_expiry: datetime | None = None
@@ -503,6 +507,11 @@ async def run_homework_delivery(period: int) -> dict:
     for doc_info in docs:
         grade = doc_info["grade"]
         doc_id = doc_info["doc_id"]
+
+        # Phase 1: only deliver for eligible grades (Grade 9-12)
+        if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
+            continue
+
         results["grades_checked"] += 1
 
         # Fetch doc content (authenticated)
@@ -895,6 +904,10 @@ async def daily_clear_all_docs() -> dict:
     for doc_info in docs:
         grade = doc_info["grade"]
         doc_id = doc_info["doc_id"]
+
+        # Phase 1: only clear eligible grades (Grade 9-12)
+        if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
+            continue
 
         ok = await _clear_google_doc(doc_id, grade)
         if ok:
