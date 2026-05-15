@@ -412,14 +412,6 @@ async def _broadcast_email_homework(
                 "ppis_homework_update",
                 body_params=[matched_grade, hw_content, teacher_name],
             )
-            if not success:
-                # Fallback to ppis_class_assignment (UTILITY, APPROVED)
-                fallback_text = f"HW from {teacher_name}"
-                success = await send_cloud_template_message(
-                    recipient,
-                    "ppis_class_assignment",
-                    body_params=[fallback_text, matched_grade],
-                )
         else:
             success = await send_whatsapp_message(recipient, parent_msg)
         if success:
