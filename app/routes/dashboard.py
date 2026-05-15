@@ -1500,13 +1500,14 @@ def _generate_teacher_report_excel(
     )
 
     # Title row
-    ws.merge_cells("A1:F1")
+    ws.merge_cells("A1:H1")
     ws["A1"] = f"PP International School — Teacher/Staff Attendance — {report_date}"
     ws["A1"].font = Font(bold=True, size=14, color="2F5496")
     ws["A1"].alignment = Alignment(horizontal="center")
 
     # Headers
-    headers = ["S.No", "Name", "Status", "Time Detected", "Camera", "Confidence"]
+    headers = ["S.No", "Teacher Name", "Attendance Status", "Entry Time (IST)",
+               "Camera Source", "Confidence %", "Notification Status", "Remarks"]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=3, column=col, value=h)
         cell.font = header_font
@@ -1532,14 +1533,20 @@ def _generate_teacher_report_excel(
         time_str = ""
         camera = ""
         conf = ""
+        notif_status = ""
+        remarks = ""
         if att:
             present_count += 1
             time_str = att.get("time", "")
             camera = att.get("camera", "")
             conf_val = att.get("confidence", 0)
             conf = f"{conf_val}%"
+            notif_status = "Sent" if att.get("notification_sent") else "Pending"
+            remarks = "Face verified via recognition"
         else:
             absent_count += 1
+            notif_status = "N/A"
+            remarks = "Not detected during attendance window"
 
         ws.cell(row=row, column=1, value=idx).border = border
         ws.cell(row=row, column=2, value=t["name"]).border = border
@@ -1550,6 +1557,10 @@ def _generate_teacher_report_excel(
         ws.cell(row=row, column=4, value=time_str).border = border
         ws.cell(row=row, column=5, value=camera).border = border
         ws.cell(row=row, column=6, value=conf).border = border
+        notif_cell = ws.cell(row=row, column=7, value=notif_status)
+        notif_cell.border = border
+        notif_cell.alignment = Alignment(horizontal="center")
+        ws.cell(row=row, column=8, value=remarks).border = border
         row += 1
 
     # Summary row
@@ -1566,10 +1577,12 @@ def _generate_teacher_report_excel(
     # Column widths
     ws.column_dimensions["A"].width = 6
     ws.column_dimensions["B"].width = 28
-    ws.column_dimensions["C"].width = 12
+    ws.column_dimensions["C"].width = 18
     ws.column_dimensions["D"].width = 18
     ws.column_dimensions["E"].width = 28
     ws.column_dimensions["F"].width = 14
+    ws.column_dimensions["G"].width = 20
+    ws.column_dimensions["H"].width = 38
 
     # ── Sheet 2: Teacher Database ──
     ws2 = wb.create_sheet("Teacher Database")
@@ -1644,11 +1657,11 @@ async def teacher_attendance_report(report_date: str | None = None):
 
     db = await get_db()
     try:
-        # All registered teachers
+        # All registered teachers (including principal)
         cur = await db.execute(
             "SELECT DISTINCT person_id, name, phone, role "
             "FROM agent_registered_faces "
-            "WHERE person_id LIKE 'TEACHER_%' "
+            "WHERE person_id LIKE 'TEACHER_%' OR person_id LIKE 'PRINCIPAL_%' "
             "ORDER BY name"
         )
         teachers = [
@@ -1658,9 +1671,11 @@ async def teacher_attendance_report(report_date: str | None = None):
 
         # Today's teacher attendance
         cur = await db.execute(
-            "SELECT person_id, student_name, camera_label, confidence, logged_at "
+            "SELECT person_id, student_name, camera_label, confidence, logged_at, "
+            "notification_sent "
             "FROM attendance_records "
-            "WHERE person_id LIKE 'TEACHER_%' AND date(logged_at) = ? "
+            "WHERE (person_id LIKE 'TEACHER_%' OR person_id LIKE 'PRINCIPAL_%') "
+            "AND date(logged_at) = ? "
             "ORDER BY logged_at",
             (today,),
         )
@@ -1680,6 +1695,7 @@ async def teacher_attendance_report(report_date: str | None = None):
                 "camera": r[2] or "",
                 "confidence": round(r[3] * 100, 1) if r[3] else 0,
                 "time": time_str,
+                "notification_sent": bool(r[5]) if r[5] is not None else False,
             })
     finally:
         await db.close()
@@ -1714,7 +1730,7 @@ async def email_teacher_attendance_report(
         cur = await db.execute(
             "SELECT DISTINCT person_id, name, phone, role "
             "FROM agent_registered_faces "
-            "WHERE person_id LIKE 'TEACHER_%' "
+            "WHERE person_id LIKE 'TEACHER_%' OR person_id LIKE 'PRINCIPAL_%' "
             "ORDER BY name"
         )
         teachers = [
@@ -1723,9 +1739,11 @@ async def email_teacher_attendance_report(
         ]
 
         cur = await db.execute(
-            "SELECT person_id, student_name, camera_label, confidence, logged_at "
+            "SELECT person_id, student_name, camera_label, confidence, logged_at, "
+            "notification_sent "
             "FROM attendance_records "
-            "WHERE person_id LIKE 'TEACHER_%' AND date(logged_at) = ? "
+            "WHERE (person_id LIKE 'TEACHER_%' OR person_id LIKE 'PRINCIPAL_%') "
+            "AND date(logged_at) = ? "
             "ORDER BY logged_at",
             (today,),
         )
@@ -1745,6 +1763,7 @@ async def email_teacher_attendance_report(
                 "camera": r[2] or "",
                 "confidence": round(r[3] * 100, 1) if r[3] else 0,
                 "time": time_str,
+                "notification_sent": bool(r[5]) if r[5] is not None else False,
             })
     finally:
         await db.close()
