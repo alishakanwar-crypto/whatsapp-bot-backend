@@ -95,6 +95,51 @@ async def _get_parents_for_grade(grade: str) -> list[dict]:
         await db.close()
 
 
+async def _get_verified_present_students(grade: str) -> set[str]:
+    """Return set of student names verified PRESENT today via face recognition.
+
+    Only students with a confirmed attendance record logged today are included.
+    This is used to filter meal snapshot recipients — only parents of students
+    who were verified present through face recognition receive meal updates.
+    """
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT DISTINCT student_name FROM attendance_records "
+            "WHERE grade LIKE ? AND status = 'present' "
+            "AND date(logged_at) = date('now')",
+            (f"{grade}%",),
+        )
+        rows = await cursor.fetchall()
+        return {r[0].strip().lower() for r in rows}
+    finally:
+        await db.close()
+
+
+async def _get_parents_for_verified_students(grade: str) -> list[dict]:
+    """Return parents only for students verified PRESENT today via attendance.
+
+    Cross-checks the attendance_records table to ensure only students
+    who passed face recognition verification receive meal snapshot notifications.
+    """
+    verified = await _get_verified_present_students(grade)
+    if not verified:
+        logger.info(f"Meal monitoring: no verified-present students for {grade} today")
+        return []
+
+    all_parents = await _get_parents_for_grade(grade)
+    filtered = [
+        p for p in all_parents
+        if p["student_name"].strip().lower() in verified
+    ]
+    logger.info(
+        f"Meal monitoring: {grade} — {len(verified)} verified present, "
+        f"{len(filtered)}/{len(all_parents)} parents eligible"
+    )
+    return filtered
+
+
 # Grades eligible for meal monitoring snapshots.
 # Summer camp (younger) students are excluded — only senior grades get snapshots.
 _MEAL_ELIGIBLE_GRADES = re.compile(r"Grade\s*(9|10|11|12)", re.IGNORECASE)
@@ -251,8 +296,8 @@ async def run_meal_monitoring(break_type: str = "lunch",
             f"Be Assured, your child has taken meal."
         )
 
-        # Get all parents of this grade
-        parents = await _get_parents_for_grade(grade)
+        # Get only parents of students verified PRESENT today via face recognition
+        parents = await _get_parents_for_verified_students(grade)
         if not parents:
             logger.warning(f"Meal monitoring: no parents found for {grade}")
             await _log_meal_snapshot(grade, camera_key, break_type, capture_ts, 0, 0, "no_parents")
