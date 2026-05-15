@@ -380,36 +380,15 @@ send_whatsapp_message.last_wa_id = ""  # type: ignore[attr-defined]
 
 
 async def send_whatsapp_force(to: str, message: str) -> bool:
-    """Force-send a WhatsApp message, opening the conversation window first.
+    """Send a WhatsApp text message (best-effort).
 
-    Meta Cloud API silently drops regular messages when the 24-hour
-    conversation window is closed (returns 200 OK but never delivers).
-    This function sends the approved ``ppis_class_assignment`` template
-    first to guarantee the window is open, then sends the actual message
-    as a regular text.
+    NOTE: Freeform text messages only work within the 24-hour conversation
+    window.  For media queries to teachers, use template-based sending
+    (ppis_parent_query_1 / ppis_parent_query_2) instead of this function.
 
-    Use this for ALL proactive/outbound messages where the recipient may
-    not have messaged the bot recently (teacher forwarding, attendance
-    notifications, homework broadcasts, etc.).
+    This function is kept for text-only notifications (attendance, relay)
+    where delivery is best-effort and email serves as the reliable backup.
     """
-    import asyncio
-
-    recipient = to.split("@")[0] if "@" in to else to
-    if len(recipient) == 10:
-        recipient = "91" + recipient
-
-    # Open conversation window with the single approved template
-    window_ok = await send_cloud_template_message(
-        recipient,
-        "ppis_class_assignment",
-        body_params=["New message", "for you via PPIS Bot"],
-    )
-    if not window_ok:
-        logger.error(f"[FORCE] Template failed for {recipient}, trying regular send")
-        return await send_whatsapp_message(to, message)
-
-    # Window is open — send the real content
-    await asyncio.sleep(1)
     return await send_whatsapp_message(to, message)
 
 

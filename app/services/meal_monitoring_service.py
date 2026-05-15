@@ -343,17 +343,6 @@ async def run_meal_monitoring(break_type: str = "lunch",
                         body_params=[grade_label, date_str, capture_ts],
                     )
 
-                    if not tmpl_ok:
-                        # Fallback: use ppis_class_assignment template
-                        tmpl_ok = await send_cloud_template_message(
-                            digits,
-                            "ppis_class_assignment",
-                            body_params=[
-                                f"Meal update: {grade_label}",
-                                f"{date_str} {capture_ts}",
-                            ],
-                        )
-
                     if tmpl_ok and media_id:
                         # Send image separately after template opens window
                         await asyncio.sleep(2)

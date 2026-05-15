@@ -452,30 +452,14 @@ def _teacher_chat_id(phone: str) -> str:
 
 
 async def _ensure_conversation_window(recipient: str) -> bool:
-    """Send a lightweight template to open the 24-hour conversation window.
+    """Placeholder — ppis_class_assignment template was removed.
 
-    Meta Cloud API only allows free-form messages within 24 hours of the
-    last message from the recipient.  Template messages bypass this
-    restriction.  We use the single approved ``ppis_class_assignment``
-    template with minimal filler text solely to open the window — the
-    *real* content (query text + media) is sent as regular messages
-    immediately after.
-
-    Returns True if the window is now open (template sent or regular
-    messages were already succeeding).
+    This function is kept for backward compatibility but now always
+    returns False since no generic window-opener template exists.
+    For media forwarding, use ppis_parent_query_1/ppis_parent_query_2 templates directly.
     """
-    from app.services.whatsapp_service import send_cloud_template_message
-
-    ok = await send_cloud_template_message(
-        recipient,
-        "ppis_class_assignment",
-        body_params=["New message", "for you from a parent"],
-    )
-    if ok:
-        logger.info(f"[WINDOW] Template sent to {recipient} — conversation window open")
-    else:
-        logger.warning(f"[WINDOW] Template FAILED for {recipient}")
-    return ok
+    logger.warning(f"[WINDOW] No generic template available for {recipient}")
+    return False
 
 
 async def save_forwarded_conversation(
@@ -785,32 +769,59 @@ async def forward_to_teachers_and_confirm(
 
         wa_success = False
         if teacher_phone:
-            import asyncio as _asyncio_relay
-            from app.services.whatsapp_service import forward_cloud_media_to_recipient
+            from app.services.whatsapp_service import (
+                send_cloud_template_message as _send_tmpl,
+                upload_media_bytes_cloud as _upload_media,
+                download_cloud_media as _download_media,
+            )
 
             chat_id = _teacher_chat_id(teacher_phone)
             t_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
             if len(t_recipient) == 10:
                 t_recipient = "91" + t_recipient
 
-            # Force-send: opens conversation window if needed, then sends content
-            wa_success = await send_whatsapp_force(chat_id, notification)
+            # ALWAYS use templates for media queries — freeform silently
+            # fails outside the 24-hour window (Cloud API returns 200 but
+            # delivery fails with error 131047).
+            if media_info and media_info.get("cloud_media_id"):
+                # Download media from Cloud API and re-upload for template
+                _dl_bytes, _dl_mime = await _download_media(media_info["cloud_media_id"])
+                if _dl_bytes:
+                    _media_type = media_info.get("type", "")
+                    _is_image = _media_type in ("imageMessage", "image")
+                    _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
 
-            # Send media after text (window is now open)
-            if wa_success and media_info:
-                await _asyncio_relay.sleep(2)
-                _mok = False
-                try:
-                    _mok = await forward_cloud_media_to_recipient(
-                        media_info, chat_id,
-                        caption=_media_caption_for_teacher,
+                    _uploaded_id = await _upload_media(
+                        _dl_bytes, _dl_mime or "application/octet-stream",
+                        media_info.get("filename", "file"),
                     )
-                except Exception as _me:
-                    logger.error(f"[FWD MEDIA] Cloud error: {_me}")
-                if _mok:
-                    logger.info(f"[FWD MEDIA] Media sent to {entry['teacher']}")
+                    if _uploaded_id:
+                        _hdr_img_id = _uploaded_id if _is_image else None
+                        _hdr_doc_id = None if _is_image else _uploaded_id
+                        _hdr_doc_fname = None if _is_image else media_info.get("filename", "file")
+
+                        wa_success = await _send_tmpl(
+                            t_recipient, _tmpl_name,
+                            body_params=[parent_label, message_text[:400]],
+                            header_image_id=_hdr_img_id,
+                            header_document_id=_hdr_doc_id,
+                            header_document_filename=_hdr_doc_fname,
+                        )
+                        if wa_success:
+                            logger.info(f"[FWD] Template {_tmpl_name} with media sent to {entry['teacher']}")
+                        else:
+                            logger.error(f"[FWD] Template send FAILED for {entry['teacher']}")
+                    else:
+                        logger.error(f"[FWD] Media re-upload failed for {entry['teacher']}")
                 else:
-                    logger.error(f"[FWD MEDIA] FAILED media to {entry['teacher']}")
+                    logger.error(f"[FWD] Media download failed for {entry['teacher']}")
+            else:
+                # No media — send freeform text (best effort)
+                wa_success = await send_whatsapp_message(chat_id, notification)
+                if wa_success:
+                    logger.info(f"[FWD] Text query sent to {entry['teacher']}")
+                else:
+                    logger.warning(f"[FWD] Text msg failed for {entry['teacher']} (24hr window likely closed)")
 
         # Always send email too (Cloud API text may not deliver outside 24h window)
         email_success = False
@@ -2044,34 +2055,59 @@ async def _forward_query_to_class_teacher(
         f"Please reply — your response will be forwarded to the parent."
     )
 
-    # Forward via WhatsApp — template opens 24h window, then real content
+    # Forward via WhatsApp — ALWAYS use templates for media queries
+    # (freeform silently fails outside 24-hr window with error 131047)
     if teacher_phone:
-        import asyncio as _asyncio
-        from app.services.whatsapp_service import forward_cloud_media_to_recipient
+        from app.services.whatsapp_service import (
+            send_cloud_template_message as _send_tmpl,
+            upload_media_bytes_cloud as _upload_media,
+            download_cloud_media as _download_media,
+        )
 
         chat_id = _teacher_chat_id(teacher_phone)
         teacher_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
         if len(teacher_recipient) == 10:
             teacher_recipient = "91" + teacher_recipient
 
-        # Force-send: opens conversation window if needed, then sends content
-        wa_success = await send_whatsapp_force(chat_id, notification)
+        if media_info and media_info.get("cloud_media_id"):
+            # Download and re-upload media, then send via template
+            _dl_bytes, _dl_mime = await _download_media(media_info["cloud_media_id"])
+            if _dl_bytes:
+                _media_type = media_info.get("type", "")
+                _is_image = _media_type in ("imageMessage", "image")
+                _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
 
-        # Send media after text
-        if wa_success and media_info:
-            logger.info(f"[PARENT→TEACHER] Sending media to {teacher_name}")
-            await _asyncio.sleep(2)
-            media_fwd_ok = False
-            try:
-                media_fwd_ok = await forward_cloud_media_to_recipient(
-                    media_info, chat_id, caption=_ct_media_caption,
+                _uploaded_id = await _upload_media(
+                    _dl_bytes, _dl_mime or "application/octet-stream",
+                    media_info.get("filename", "file"),
                 )
-            except Exception as mf_exc:
-                logger.error(f"[PARENT→TEACHER] Media forward error: {mf_exc}")
-            if media_fwd_ok:
-                logger.info(f"[PARENT→TEACHER] Media sent to {teacher_name}")
+                if _uploaded_id:
+                    _hdr_img_id = _uploaded_id if _is_image else None
+                    _hdr_doc_id = None if _is_image else _uploaded_id
+                    _hdr_doc_fname = None if _is_image else media_info.get("filename", "file")
+
+                    wa_success = await _send_tmpl(
+                        teacher_recipient, _tmpl_name,
+                        body_params=[parent_label, message_text[:400]],
+                        header_image_id=_hdr_img_id,
+                        header_document_id=_hdr_doc_id,
+                        header_document_filename=_hdr_doc_fname,
+                    )
+                    if wa_success:
+                        logger.info(f"[PARENT→TEACHER] Template {_tmpl_name} with media sent to {teacher_name}")
+                    else:
+                        logger.error(f"[PARENT→TEACHER] Template send FAILED for {teacher_name}")
+                else:
+                    logger.error(f"[PARENT→TEACHER] Media re-upload failed for {teacher_name}")
             else:
-                logger.error(f"[PARENT→TEACHER] FAILED media to {teacher_name}")
+                logger.error(f"[PARENT→TEACHER] Media download failed for {teacher_name}")
+        else:
+            # No media — send freeform text (best effort)
+            wa_success = await send_whatsapp_message(chat_id, notification)
+            if wa_success:
+                logger.info(f"[PARENT→TEACHER] Text query sent to {teacher_name}")
+            else:
+                logger.warning(f"[PARENT→TEACHER] Text msg failed for {teacher_name} (24hr window likely closed)")
 
         if wa_success:
             # Save conversation for reply relay
@@ -2353,16 +2389,12 @@ async def detect_and_handle_teacher_homework_broadcast(
     for phone in parent_phones:
         recipient = f"91{phone}" if len(phone) == 10 else phone
         if get_whatsapp_provider() == "cloud":
-            # Use approved template — try ppis_homework_update first,
-            # fall back to ppis_class_assignment to open window
+            # Use approved ppis_homework_update template
             success = await send_cloud_template_message(
                 recipient,
                 "ppis_homework_update",
                 body_params=[matched_grade, hw_content, teacher_name],
             )
-            if not success:
-                # Fallback: open window with ppis_class_assignment
-                success = await _ensure_conversation_window(recipient)
             # Also send the media file if the teacher attached one
             # NOTE: add a delay so the template message opens the 24-hour
             # conversation window before we send a regular media message.
