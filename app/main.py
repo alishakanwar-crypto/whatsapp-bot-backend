@@ -593,8 +593,109 @@ async def api_send_whatsapp(request: Request):
         template_name in ("ppis_attendance_alert", "ppis_teacher_present")
         or "marked present" in message.lower()
     )
+    is_student_attendance = (
+        template_name == "ppis_attendance_alert"
+        or ("marked present" in message.lower() and template_name != "ppis_teacher_present")
+    )
+    is_meal_notification = template_name == "ppis_meal_update"
     # Extract student name from template params for audit logging
     _student_name = template_params[0] if template_params else ""
+
+    # --- Filter: only allow attendance for eligible students ---
+    # During summer: only summer camp students + Grade 9-12 get notifications.
+    # Teacher attendance (ppis_teacher_present) is always allowed.
+    if is_student_attendance and phone:
+        _phone_digits = "".join(c for c in phone.split(",")[0] if c.isdigit())
+        if len(_phone_digits) == 10:
+            _phone_digits = "91" + _phone_digits
+        try:
+            _adb = await get_db()
+            try:
+                # Check if phone belongs to a Grade 9-12 student (PI Sheet)
+                _grade_cur = await _adb.execute(
+                    "SELECT grade FROM pi_sheet_students "
+                    "WHERE (father_mobile LIKE ? OR mother_mobile LIKE ?) "
+                    "LIMIT 1",
+                    (f"%{_phone_digits[-10:]}%", f"%{_phone_digits[-10:]}%"),
+                )
+                _grade_row = await _grade_cur.fetchone()
+                _is_eligible = False
+                if _grade_row:
+                    import re as _re
+                    _g = _grade_row[0] or ""
+                    if _re.match(r"Grade\s*(9|10|11|12)", _g, _re.IGNORECASE):
+                        _is_eligible = True
+
+                if not _is_eligible:
+                    # Check if phone belongs to a summer camp student
+                    _camp_cur = await _adb.execute(
+                        "SELECT id FROM summer_camp_students "
+                        "WHERE contact_no LIKE ? LIMIT 1",
+                        (f"%{_phone_digits[-10:]}%",),
+                    )
+                    _camp_row = await _camp_cur.fetchone()
+                    if _camp_row:
+                        _is_eligible = True
+
+                if not _is_eligible:
+                    await _log_attendance_audit(
+                        phone, _student_name, "blocked",
+                        "Not in eligible list (summer camp or Grade 9-12)"
+                    )
+                    return {
+                        "status": "blocked",
+                        "reason": "Student not in eligible attendance list",
+                    }
+            finally:
+                await _adb.close()
+        except Exception as _filter_err:
+            logger.warning(f"Attendance filter check failed: {_filter_err}")
+            # Allow through if DB check fails to avoid blocking legitimate notifs
+
+    # --- Filter: block meal notifications for non-eligible students ---
+    # Meal snapshots are only for Grade 9-12 students verified present today.
+    # Summer camp meal snapshots are completely disabled.
+    if is_meal_notification and phone:
+        _phone_digits_meal = "".join(c for c in phone.split(",")[0] if c.isdigit())
+        if len(_phone_digits_meal) == 10:
+            _phone_digits_meal = "91" + _phone_digits_meal
+        try:
+            _mdb = await get_db()
+            try:
+                # Check if phone belongs to a Grade 9-12 student
+                _meal_cur = await _mdb.execute(
+                    "SELECT grade, student_name FROM pi_sheet_students "
+                    "WHERE (father_mobile LIKE ? OR mother_mobile LIKE ?) "
+                    "LIMIT 1",
+                    (f"%{_phone_digits_meal[-10:]}%",
+                     f"%{_phone_digits_meal[-10:]}%"),
+                )
+                _meal_row = await _meal_cur.fetchone()
+                _meal_eligible = False
+                if _meal_row:
+                    import re as _re2
+                    _mg = _meal_row[0] or ""
+                    _ms_name = _meal_row[1] or ""
+                    if _re2.match(r"Grade\s*(9|10|11|12)", _mg, _re2.IGNORECASE):
+                        # Verify student is marked present today
+                        _att_cur = await _mdb.execute(
+                            "SELECT id FROM attendance_records "
+                            "WHERE student_name = ? AND status = 'present' "
+                            "AND date(logged_at) = date('now') LIMIT 1",
+                            (_ms_name,),
+                        )
+                        if await _att_cur.fetchone():
+                            _meal_eligible = True
+
+                if not _meal_eligible:
+                    return {
+                        "status": "blocked",
+                        "reason": "Meal snapshot blocked — student not verified present or not Grade 9-12",
+                    }
+            finally:
+                await _mdb.close()
+        except Exception as _meal_err:
+            logger.warning(f"Meal filter check failed: {_meal_err}")
 
     if is_attendance_msg:
         # Block on Sundays always; block on 2nd Saturday only
