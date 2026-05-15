@@ -776,6 +776,153 @@ async def get_registered_docs() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Daily auto-clear — wipe all Google Docs at end of school day
+# ---------------------------------------------------------------------------
+
+TEMPLATE_HEADER = """PPIS Classwork & Homework - {class_name}
+
+Just mention the subject and homework/classwork.
+Day, date, class and period are added automatically.
+
+Example:
+English - Read chapter 5, answer Q1-Q5
+Maths - Complete worksheet page 32
+Science - No homework
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+START YOUR ENTRIES BELOW THIS LINE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+"""
+
+
+async def _clear_google_doc(doc_id: str, class_name: str) -> bool:
+    """Clear a Google Doc and restore the template header.
+
+    Uses the Google Docs API to delete all content and re-insert
+    the template instructions.
+    """
+    token = await _get_google_access_token()
+    if not token:
+        logger.error(f"No Google token for clearing doc {doc_id}")
+        return False
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    api_url = f"https://docs.googleapis.com/v1/documents/{doc_id}"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Get current doc to find content length
+            resp = await client.get(api_url, headers=headers, timeout=15.0)
+            if resp.status_code != 200:
+                logger.error(f"Failed to read doc {doc_id}: HTTP {resp.status_code}")
+                return False
+
+            doc = resp.json()
+            body = doc.get("body", {})
+            content = body.get("content", [])
+
+            # Find the end index of the document body
+            end_index = 1
+            for element in content:
+                ei = element.get("endIndex", 0)
+                if ei > end_index:
+                    end_index = ei
+
+            # Build batch update requests
+            requests_list = []
+
+            # Delete all content (except the very first newline at index 1)
+            if end_index > 2:
+                requests_list.append({
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": 1,
+                            "endIndex": end_index - 1,
+                        }
+                    }
+                })
+
+            # Insert the template header
+            template_text = TEMPLATE_HEADER.format(class_name=class_name)
+            requests_list.append({
+                "insertText": {
+                    "location": {"index": 1},
+                    "text": template_text,
+                }
+            })
+
+            # Execute batch update
+            batch_url = f"{api_url}:batchUpdate"
+            resp = await client.post(
+                batch_url,
+                headers=headers,
+                json={"requests": requests_list},
+                timeout=15.0,
+            )
+            if resp.status_code == 200:
+                return True
+            logger.error(
+                f"Failed to clear doc {doc_id}: HTTP {resp.status_code} - "
+                f"{resp.text[:200]}"
+            )
+            return False
+    except Exception as e:
+        logger.error(f"Error clearing doc {doc_id}: {e}")
+        return False
+
+
+async def daily_clear_all_docs() -> dict:
+    """Clear all 34 homework Google Docs and reset content hashes.
+
+    Scheduled to run at 3:00 PM IST (9:30 UTC) every school day.
+    Restores each doc to the clean template and resets stored hashes
+    so the next day's entries are treated as new content.
+    """
+    logger.info("=== DAILY DOC CLEAR: Starting end-of-day cleanup ===")
+
+    docs = await _get_homework_docs()
+    if not docs:
+        logger.warning("No homework docs registered. Skipping daily clear.")
+        return {"status": "no_docs", "cleared": 0, "failed": 0}
+
+    cleared = 0
+    failed = 0
+
+    for doc_info in docs:
+        grade = doc_info["grade"]
+        doc_id = doc_info["doc_id"]
+
+        ok = await _clear_google_doc(doc_id, grade)
+        if ok:
+            cleared += 1
+            logger.info(f"Cleared doc for {grade}")
+        else:
+            failed += 1
+            logger.error(f"Failed to clear doc for {grade}")
+
+        await asyncio.sleep(0.5)
+
+    # Reset all content hashes so tomorrow's entries are treated as new
+    from app.database import get_db
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM homework_doc_state")
+        await db.commit()
+        logger.info("Reset all homework content hashes")
+    finally:
+        await db.close()
+
+    logger.info(
+        f"=== DAILY DOC CLEAR COMPLETE: {cleared} cleared, {failed} failed ==="
+    )
+    return {"status": "done", "cleared": cleared, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
 # Sync wrappers for APScheduler
 # ---------------------------------------------------------------------------
 
@@ -789,3 +936,15 @@ def run_homework_delivery_sync(period: int) -> None:
             asyncio.run(run_homework_delivery(period))
     except RuntimeError:
         asyncio.run(run_homework_delivery(period))
+
+
+def run_daily_clear_sync() -> None:
+    """Synchronous wrapper for daily doc clear (APScheduler)."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(daily_clear_all_docs())
+        else:
+            asyncio.run(daily_clear_all_docs())
+    except RuntimeError:
+        asyncio.run(daily_clear_all_docs())

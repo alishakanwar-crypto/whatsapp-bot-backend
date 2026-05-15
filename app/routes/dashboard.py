@@ -1988,3 +1988,11 @@ async def trigger_homework_delivery(period: int):
         raise HTTPException(status_code=400, detail="Period must be 0-6")
     result = await run_homework_delivery(period)
     return result
+
+
+@router.post("/homework/clear-docs", dependencies=[Depends(verify_dashboard_secret)])
+async def trigger_daily_clear():
+    """Manually trigger daily doc clear (for testing)."""
+    from app.services.homework_delivery_service import daily_clear_all_docs
+    result = await daily_clear_all_docs()
+    return result
