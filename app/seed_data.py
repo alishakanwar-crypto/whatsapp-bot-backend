@@ -997,3 +997,44 @@ SEED_CAMERA_MAPPING = {
         "cam_type": ""
     },
 }
+
+# ---------------------------------------------------------------------------
+# Homework Google Doc mapping — one doc per class/section
+# Created in BOT-HOMEWORK@ppischool.in Drive folder "PPIS CW_HW_ 2026-27"
+# ---------------------------------------------------------------------------
+SEED_HOMEWORK_DOCS = {
+    "Nursery 1": {"doc_id": "1SapBzenY8dAFuiOsF8lj7IqGy0dzJCpNCmquLpIBc4s", "url": "https://docs.google.com/document/d/1SapBzenY8dAFuiOsF8lj7IqGy0dzJCpNCmquLpIBc4s/edit"},
+    "Nursery 2": {"doc_id": "168NN7DsWpDTNOHhqdxMuMGdGpTZ6WSRuzuWHZvWk6oc", "url": "https://docs.google.com/document/d/168NN7DsWpDTNOHhqdxMuMGdGpTZ6WSRuzuWHZvWk6oc/edit"},
+    "Nursery 3": {"doc_id": "15WtnUVVyIFkT2IhW0uCt2eRoSZUBCrQLYQGX_34HTEI", "url": "https://docs.google.com/document/d/15WtnUVVyIFkT2IhW0uCt2eRoSZUBCrQLYQGX_34HTEI/edit"},
+    "Prep 1": {"doc_id": "17q38v-pE3svoplheNkUi7a8uv5Wip5Ikzjr5Nl_dajk", "url": "https://docs.google.com/document/d/17q38v-pE3svoplheNkUi7a8uv5Wip5Ikzjr5Nl_dajk/edit"},
+    "Prep 2": {"doc_id": "1xoqWy3rj6EuxI9iZnkY8aFzy-Iw6DLb219KJHyTtRqI", "url": "https://docs.google.com/document/d/1xoqWy3rj6EuxI9iZnkY8aFzy-Iw6DLb219KJHyTtRqI/edit"},
+    "Prep 3": {"doc_id": "1UViVxFGua1iEosmKLq27Q9CR3FbavM_hPDQZdDPK5lw", "url": "https://docs.google.com/document/d/1UViVxFGua1iEosmKLq27Q9CR3FbavM_hPDQZdDPK5lw/edit"},
+    "Popsicles": {"doc_id": "1AT9D2MVHMGbj0QSHp0VPPjAJigu4PsC-O_jtePxyLPQ", "url": "https://docs.google.com/document/d/1AT9D2MVHMGbj0QSHp0VPPjAJigu4PsC-O_jtePxyLPQ/edit"},
+    "Grade 1A": {"doc_id": "1v_VriuJ8FcfrxZXUCFsWBeuoxf1o0MwPq10JqOgLctE", "url": "https://docs.google.com/document/d/1v_VriuJ8FcfrxZXUCFsWBeuoxf1o0MwPq10JqOgLctE/edit"},
+    "Grade 1B": {"doc_id": "1fdmctA43YP3v8b-xrbAtsCqRmTgr8ICiopDOJnQWpK8", "url": "https://docs.google.com/document/d/1fdmctA43YP3v8b-xrbAtsCqRmTgr8ICiopDOJnQWpK8/edit"},
+    "Grade 2A": {"doc_id": "1oOIB4Q6H1fzuf3lrcmT8Cu7ZbG8v4SzsHLPjDO8zV9c", "url": "https://docs.google.com/document/d/1oOIB4Q6H1fzuf3lrcmT8Cu7ZbG8v4SzsHLPjDO8zV9c/edit"},
+    "Grade 2B": {"doc_id": "1mvZXtLuvT495Y8XNeZLUevHRMxHCjI-swFcft4FI1bA", "url": "https://docs.google.com/document/d/1mvZXtLuvT495Y8XNeZLUevHRMxHCjI-swFcft4FI1bA/edit"},
+    "Grade 3A": {"doc_id": "10dcbzfKI4PVxeGkXFDkQ8XErlCeTYTdFLKf-xF3XsAI", "url": "https://docs.google.com/document/d/10dcbzfKI4PVxeGkXFDkQ8XErlCeTYTdFLKf-xF3XsAI/edit"},
+    "Grade 3B": {"doc_id": "1St3fxGSfSu7zZbt1BIPKREXOELBtoPxpKI9jicRWdQI", "url": "https://docs.google.com/document/d/1St3fxGSfSu7zZbt1BIPKREXOELBtoPxpKI9jicRWdQI/edit"},
+    "Grade 3C": {"doc_id": "1ptkk8UqNNncAq0LGbrbPhhWXugCO0KL0wlPAbP7OO7w", "url": "https://docs.google.com/document/d/1ptkk8UqNNncAq0LGbrbPhhWXugCO0KL0wlPAbP7OO7w/edit"},
+    "Grade 4A": {"doc_id": "12ZIg20mqT8Hb29bVItG0wN27wFt9-u5IXhy2tfBkCOc", "url": "https://docs.google.com/document/d/12ZIg20mqT8Hb29bVItG0wN27wFt9-u5IXhy2tfBkCOc/edit"},
+    "Grade 4B": {"doc_id": "1B2Zlu16LzXqD96iuNdLm4M6cKu0X_r_thn2k5aASVPo", "url": "https://docs.google.com/document/d/1B2Zlu16LzXqD96iuNdLm4M6cKu0X_r_thn2k5aASVPo/edit"},
+    "Grade 5A": {"doc_id": "1pzKM5-ZrzZUeSPOsobZql47VFcpj3i6sf6azRQ-0cjg", "url": "https://docs.google.com/document/d/1pzKM5-ZrzZUeSPOsobZql47VFcpj3i6sf6azRQ-0cjg/edit"},
+    "Grade 5B": {"doc_id": "1ejoIXGOwGuPdbEnxQaMFvVXXviqPAL1IvVLqx5B0bfo", "url": "https://docs.google.com/document/d/1ejoIXGOwGuPdbEnxQaMFvVXXviqPAL1IvVLqx5B0bfo/edit"},
+    "Grade 6A": {"doc_id": "1ig8vHSSOfBXaLGTm5Crl4h6D-GrwnIvRO1PvSwjBp2E", "url": "https://docs.google.com/document/d/1ig8vHSSOfBXaLGTm5Crl4h6D-GrwnIvRO1PvSwjBp2E/edit"},
+    "Grade 6B": {"doc_id": "1D9UdbcP89ZOA7F4YdKkBizM3Lj6ATXLW-4nPJ6FhR8A", "url": "https://docs.google.com/document/d/1D9UdbcP89ZOA7F4YdKkBizM3Lj6ATXLW-4nPJ6FhR8A/edit"},
+    "Grade 7A": {"doc_id": "1xffzcg3pbS_wPm6vdSF0IPgxIoAl8He0oS0cL0sA4f8", "url": "https://docs.google.com/document/d/1xffzcg3pbS_wPm6vdSF0IPgxIoAl8He0oS0cL0sA4f8/edit"},
+    "Grade 7B": {"doc_id": "1qSF2-h2vn_CLwc4pTy0LQHkLPOsXyph7p5y_SwwO5xQ", "url": "https://docs.google.com/document/d/1qSF2-h2vn_CLwc4pTy0LQHkLPOsXyph7p5y_SwwO5xQ/edit"},
+    "Grade 8A": {"doc_id": "1HAUK6dgxhQJG342JvzxkW6srzXSTB5m35-lx1ID_H_I", "url": "https://docs.google.com/document/d/1HAUK6dgxhQJG342JvzxkW6srzXSTB5m35-lx1ID_H_I/edit"},
+    "Grade 8B": {"doc_id": "1qMZDYmiSSdhNH5J6GkZY0SM_Cgi4FIrnjoD0no8ayiM", "url": "https://docs.google.com/document/d/1qMZDYmiSSdhNH5J6GkZY0SM_Cgi4FIrnjoD0no8ayiM/edit"},
+    "Grade 8C": {"doc_id": "1VNlVzIZ-SMMQpEIFsXBj2SfcsUN11UNMT7zEiQDJh0w", "url": "https://docs.google.com/document/d/1VNlVzIZ-SMMQpEIFsXBj2SfcsUN11UNMT7zEiQDJh0w/edit"},
+    "Grade 9A": {"doc_id": "1KfEJv9kINll_yQMHPLtUIz4O7qiyrYUsPhPx1n9ubIg", "url": "https://docs.google.com/document/d/1KfEJv9kINll_yQMHPLtUIz4O7qiyrYUsPhPx1n9ubIg/edit"},
+    "Grade 9B": {"doc_id": "1MC16RcYGVhcS8v6ZbqHaKUP8u68kSbGoVQx9YQlImLA", "url": "https://docs.google.com/document/d/1MC16RcYGVhcS8v6ZbqHaKUP8u68kSbGoVQx9YQlImLA/edit"},
+    "Grade 9C": {"doc_id": "1edJE_KodRNSODJT1Bhbpl3M_YjTKdqPNgpxwnExOJk8", "url": "https://docs.google.com/document/d/1edJE_KodRNSODJT1Bhbpl3M_YjTKdqPNgpxwnExOJk8/edit"},
+    "Grade 10A": {"doc_id": "1UbGVV-9l9LKqx71GxKpvtfJVf6ncdmVjPOzb2SbwJPg", "url": "https://docs.google.com/document/d/1UbGVV-9l9LKqx71GxKpvtfJVf6ncdmVjPOzb2SbwJPg/edit"},
+    "Grade 10B": {"doc_id": "1Vp7LgkUGnMUO-rRxLhe4eEo-USZvpxGesv_fKpBp4Os", "url": "https://docs.google.com/document/d/1Vp7LgkUGnMUO-rRxLhe4eEo-USZvpxGesv_fKpBp4Os/edit"},
+    "Grade 11A": {"doc_id": "1KuiVvOS8v9o8Bu4vrXSLuIrIkUZX56B-FdmsmMkVJuo", "url": "https://docs.google.com/document/d/1KuiVvOS8v9o8Bu4vrXSLuIrIkUZX56B-FdmsmMkVJuo/edit"},
+    "Grade 11B": {"doc_id": "1i2epU_zJk0dbCT4x7vFFpGdv3LF1xFD6SosxEpjqYwc", "url": "https://docs.google.com/document/d/1i2epU_zJk0dbCT4x7vFFpGdv3LF1xFD6SosxEpjqYwc/edit"},
+    "Grade 12A": {"doc_id": "1FwUe8EIfrhfDpKugImOzHLlCe0tCguTxPF29vRWBZhs", "url": "https://docs.google.com/document/d/1FwUe8EIfrhfDpKugImOzHLlCe0tCguTxPF29vRWBZhs/edit"},
+    "Grade 12B": {"doc_id": "1_vu9gKBxQnoUtkZOmF7UMSLwWGL4ltaryM-Z79JnPro", "url": "https://docs.google.com/document/d/1_vu9gKBxQnoUtkZOmF7UMSLwWGL4ltaryM-Z79JnPro/edit"},
+}

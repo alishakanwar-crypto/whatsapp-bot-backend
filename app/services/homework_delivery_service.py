@@ -3,25 +3,34 @@ Homework Delivery Service — automated homework broadcast via Google Docs.
 
 Each class has a dedicated Google Doc where the teacher types homework.
 After each period ends, the system:
-  1. Fetches the doc's text content via the published URL
+  1. Fetches the doc's text content via Google Docs API (authenticated)
   2. Detects NEW homework entries (compares with last known content)
-  3. Sends the homework to all parents of that class via WhatsApp template
+  3. Renders the content as a clean image (screenshot)
+  4. Sends BOTH the image + text to parents via WhatsApp template
+  5. If no new content → sends "NO HOMEWORK ASSIGNED" text
 
-Bell Timings (Summer):
-  Period 1: 08:10 – 08:50  → check at 08:53
-  Period 2: 09:00 – 09:35  → check at 09:38
-  Period 3: 09:35 – 10:10  → check at 10:13
-  Period 4: 10:10 – 10:45  → check at 10:48
-  Period 5: 10:45 – 11:20  → check at 11:23
-  Period 6: 11:45 – 12:20  → check at 12:23
-  Period 7: 12:20 – 12:55  → check at 12:58
-  Period 8: 12:55 – 01:30  → check at 01:33
+Bell Timings (current timetable):
+  Period 0: 08:00 – 08:10  → Assembly (10 min)
+  Period 1: 08:10 – 08:45  → check at 08:48
+  SHORT BREAK: 08:45 – 09:00
+  Period 2: 09:00 – 09:30  → check at 09:33
+  Period 3: 09:30 – 10:00  → check at 10:03
+  Period 4: 10:00 – 10:30  → check at 10:33
+  Period 5: 10:30 – 11:00  → check at 11:03
+  Period 6: 11:00 – 11:30  → check at 11:33
+  Lunch & Dispersal: 11:30 – 12:00
+
+Google API auth uses a refresh token stored in GOOGLE_DOCS_REFRESH_TOKEN env var
+along with GOOGLE_DOCS_CLIENT_ID and GOOGLE_DOCS_CLIENT_SECRET.
 """
 
 import asyncio
 import hashlib
+import io
 import logging
+import os
 import re
+import textwrap
 from datetime import datetime, timezone, timedelta
 
 import httpx
@@ -30,17 +39,73 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Period labels for messages
+# Period labels for parent messages
 PERIOD_LABELS = {
-    1: "Period 1 (08:10–08:50)",
-    2: "Period 2 (09:00–09:35)",
-    3: "Period 3 (09:35–10:10)",
-    4: "Period 4 (10:10–10:45)",
-    5: "Period 5 (10:45–11:20)",
-    6: "Period 6 (11:45–12:20)",
-    7: "Period 7 (12:20–12:55)",
-    8: "Period 8 (12:55–01:30)",
+    0: "Assembly (08:00–08:10)",
+    1: "Period 1 (08:10–08:45)",
+    2: "Period 2 (09:00–09:30)",
+    3: "Period 3 (09:30–10:00)",
+    4: "Period 4 (10:00–10:30)",
+    5: "Period 5 (10:30–11:00)",
+    6: "Period 6 (11:00–11:30)",
 }
+
+# Cached Google access token
+_google_access_token: str = ""
+_google_token_expiry: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth token management
+# ---------------------------------------------------------------------------
+
+async def _get_google_access_token() -> str:
+    """Get a valid Google access token, refreshing if needed."""
+    global _google_access_token, _google_token_expiry
+
+    # Return cached token if still valid (with 60s buffer)
+    if (_google_access_token and _google_token_expiry
+            and datetime.now(timezone.utc) < _google_token_expiry - timedelta(seconds=60)):
+        return _google_access_token
+
+    refresh_token = os.getenv("GOOGLE_DOCS_REFRESH_TOKEN", "")
+    client_id = os.getenv("GOOGLE_DOCS_CLIENT_ID", "")
+    client_secret = os.getenv("GOOGLE_DOCS_CLIENT_SECRET", "")
+
+    if not refresh_token or not client_id or not client_secret:
+        logger.error(
+            "Google Docs API credentials not configured. "
+            "Set GOOGLE_DOCS_REFRESH_TOKEN, GOOGLE_DOCS_CLIENT_ID, "
+            "GOOGLE_DOCS_CLIENT_SECRET env vars."
+        )
+        return ""
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+                timeout=15.0,
+            )
+            data = resp.json()
+            if "access_token" in data:
+                _google_access_token = data["access_token"]
+                expires_in = data.get("expires_in", 3600)
+                _google_token_expiry = (
+                    datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                )
+                logger.info("Google access token refreshed successfully")
+                return _google_access_token
+            logger.error(f"Failed to refresh Google token: {data}")
+            return ""
+    except Exception as e:
+        logger.error(f"Error refreshing Google token: {e}")
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -149,19 +214,25 @@ def _get_teacher_for_grade(grade: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Google Doc fetching
+# Google Doc fetching (authenticated)
 # ---------------------------------------------------------------------------
 
 async def fetch_doc_content(doc_id: str) -> str | None:
-    """Fetch the text content of a published Google Doc.
+    """Fetch the text content of a Google Doc via export API (authenticated).
 
-    Uses the export URL: https://docs.google.com/document/d/{doc_id}/export?format=txt
-    The doc must be published to web OR shared with 'Anyone with link'.
+    Uses the OAuth access token to access private docs owned by the bot account.
+    Falls back to unauthenticated public URL if no token is available.
     """
+    token = await _get_google_access_token()
     url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            resp = await client.get(url, timeout=15.0)
+            resp = await client.get(url, headers=headers, timeout=15.0)
             if resp.status_code == 200:
                 return resp.text.strip()
             logger.warning(f"Failed to fetch doc {doc_id}: HTTP {resp.status_code}")
@@ -180,7 +251,7 @@ def _extract_todays_homework(full_text: str) -> str:
     the next date heading or end of document.
 
     If no date heading found, return the entire document text (teacher may
-    have just typed homework without a date header).
+    have just typed homework without a date header — fallback mode).
     """
     today = datetime.now(IST)
     date_patterns = [
@@ -202,12 +273,9 @@ def _extract_todays_homework(full_text: str) -> str:
     for dp in date_patterns:
         pos = text_lower.find(dp.lower())
         if pos >= 0:
-            # Found today's date — extract from after the date line
             after_date = full_text[pos:]
             lines = after_date.split("\n")
-            # Skip the date line itself
             content_lines = lines[1:]
-            # Collect lines until we hit another date-like heading or end
             result = []
             date_re = re.compile(
                 r"^\s*\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}\s*$|"
@@ -223,15 +291,177 @@ def _extract_todays_homework(full_text: str) -> str:
                 return homework
 
     # No date heading found — return entire text if it's short enough
+    # (teacher wrote content without a date, our fallback handles it)
     if len(full_text) < 2000:
         return full_text
 
     return ""
 
 
+def _strip_template_boilerplate(text: str) -> str:
+    """Remove the initial template instructions from the doc content.
+
+    The docs were created with template text (instructions, example format).
+    Strip everything before 'START YOUR ENTRIES BELOW THIS LINE' marker.
+    Also skip blank lines at the start.
+    """
+    marker = "START YOUR ENTRIES BELOW THIS LINE"
+    pos = text.find(marker)
+    if pos >= 0:
+        # Skip the marker line itself
+        after = text[pos + len(marker):]
+        # Also skip any separator lines (━━━ or ---)
+        lines = after.split("\n")
+        result_lines = []
+        started = False
+        for line in lines:
+            stripped = line.strip()
+            if not started:
+                if stripped and not all(c in "━─-= " for c in stripped):
+                    started = True
+                    result_lines.append(line)
+            else:
+                result_lines.append(line)
+        return "\n".join(result_lines).strip()
+    return text.strip()
+
+
 def _content_hash(text: str) -> str:
     """SHA-256 hash of text content."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Image rendering — create a clean homework screenshot using PIL
+# ---------------------------------------------------------------------------
+
+def _render_homework_image(grade: str, period_label: str, date_str: str,
+                           homework_text: str) -> bytes:
+    """Render homework text as a clean PNG image with school header.
+
+    Returns PNG bytes. Uses PIL (Pillow) — no external dependencies needed.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    # Try to load a decent font, fall back to default
+    font_size_title = 28
+    font_size_body = 20
+    font_size_meta = 18
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size_title)
+        body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size_body)
+        meta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size_meta)
+    except OSError:
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+        meta_font = ImageFont.load_default()
+
+    # Layout constants
+    padding = 30
+    max_width = 700
+    img_width = max_width + 2 * padding
+
+    # Wrap text to fit width
+    wrapped_lines = []
+    for line in homework_text.split("\n"):
+        if line.strip():
+            wrapped = textwrap.wrap(line, width=55)
+            wrapped_lines.extend(wrapped)
+        else:
+            wrapped_lines.append("")
+
+    # Calculate height
+    line_height_body = font_size_body + 8
+    line_height_meta = font_size_meta + 6
+    header_height = 120  # school name + separator
+    meta_height = 3 * line_height_meta + 20  # date, class, period
+    body_height = len(wrapped_lines) * line_height_body + 20
+    footer_height = 40
+    img_height = header_height + meta_height + body_height + footer_height + 2 * padding
+
+    # Clamp minimum height
+    img_height = max(img_height, 400)
+
+    # Create image
+    img = Image.new("RGB", (img_width, img_height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    y = padding
+
+    # School header
+    draw.text((padding, y), "PP International School", fill=(0, 51, 102), font=title_font)
+    y += font_size_title + 8
+    draw.text((padding, y), "Classwork & Homework Update", fill=(0, 102, 153), font=meta_font)
+    y += font_size_meta + 15
+
+    # Separator line
+    draw.line([(padding, y), (img_width - padding, y)], fill=(0, 102, 153), width=2)
+    y += 15
+
+    # Meta info (always auto-filled)
+    meta_color = (80, 80, 80)
+    draw.text((padding, y), f"Date: {date_str}", fill=meta_color, font=meta_font)
+    y += line_height_meta
+    draw.text((padding, y), f"Class: {grade}", fill=meta_color, font=meta_font)
+    y += line_height_meta
+    draw.text((padding, y), f"Period: {period_label}", fill=meta_color, font=meta_font)
+    y += line_height_meta + 15
+
+    # Separator
+    draw.line([(padding, y), (img_width - padding, y)], fill=(200, 200, 200), width=1)
+    y += 15
+
+    # Homework content
+    body_color = (30, 30, 30)
+    for line in wrapped_lines:
+        if line.strip():
+            draw.text((padding, y), line, fill=body_color, font=body_font)
+        y += line_height_body
+
+    # Footer separator
+    y = max(y + 10, img_height - footer_height - padding)
+    draw.line([(padding, y), (img_width - padding, y)], fill=(200, 200, 200), width=1)
+    y += 10
+    footer_font = meta_font
+    draw.text((padding, y), "PP International School — Automated Update",
+              fill=(150, 150, 150), font=footer_font)
+
+    # Save to bytes
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _render_no_homework_image(grade: str, period_label: str,
+                               date_str: str) -> bytes:
+    """Render a 'No Homework Assigned' image."""
+    return _render_homework_image(
+        grade, period_label, date_str,
+        "No Homework Assigned"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Format the fallback text message (always includes date, class, period)
+# ---------------------------------------------------------------------------
+
+def _format_homework_message(grade: str, period_label: str, date_str: str,
+                              homework_text: str) -> str:
+    """Build the parent-facing text message with auto-filled metadata."""
+    return (
+        f"Homework & Classwork Update\n\n"
+        f"Date: {date_str}\n"
+        f"Class: {grade}\n"
+        f"Period: {period_label}\n\n"
+        f"{homework_text}"
+    )
+
+
+def _format_no_homework_message(grade: str, period_label: str,
+                                 date_str: str) -> str:
+    """Build the 'no homework' text message."""
+    return _format_homework_message(grade, period_label, date_str,
+                                     "No Homework Assigned")
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +472,7 @@ async def run_homework_delivery(period: int) -> dict:
     """Check all homework docs for new content and deliver to parents.
 
     Args:
-        period: The period number (1-8) that just ended.
+        period: The period number (0-6) that just ended.
 
     Returns:
         Summary dict with results.
@@ -264,6 +494,7 @@ async def run_homework_delivery(period: int) -> dict:
         "date": date_str,
         "grades_checked": 0,
         "grades_with_homework": 0,
+        "grades_no_homework": 0,
         "total_parents_sent": 0,
         "total_parents_failed": 0,
         "details": [],
@@ -274,7 +505,7 @@ async def run_homework_delivery(period: int) -> dict:
         doc_id = doc_info["doc_id"]
         results["grades_checked"] += 1
 
-        # Fetch doc content
+        # Fetch doc content (authenticated)
         content = await fetch_doc_content(doc_id)
         if content is None:
             logger.warning(f"Could not fetch doc for {grade} (doc_id={doc_id})")
@@ -282,11 +513,27 @@ async def run_homework_delivery(period: int) -> dict:
             results["details"].append({"grade": grade, "status": "fetch_failed"})
             continue
 
+        # Strip template boilerplate (initial instructions)
+        content = _strip_template_boilerplate(content)
+
         # Extract today's homework
         homework = _extract_todays_homework(content)
+
         if not homework:
-            logger.info(f"No homework found for {grade} today")
-            results["details"].append({"grade": grade, "status": "empty"})
+            # No content written → send "NO HOMEWORK ASSIGNED"
+            logger.info(f"No homework found for {grade} today → sending no-homework notice")
+            results["grades_no_homework"] += 1
+            sent, failed = await _send_no_homework_to_parents(
+                grade, period_label, date_str,
+            )
+            await _log_homework_delivery(grade, period, "NO HOMEWORK ASSIGNED",
+                                          sent, failed, "no_homework")
+            results["total_parents_sent"] += sent
+            results["total_parents_failed"] += failed
+            results["details"].append({
+                "grade": grade, "status": "no_homework",
+                "sent": sent, "failed": failed,
+            })
             continue
 
         # Check if content has changed since last check
@@ -297,13 +544,12 @@ async def run_homework_delivery(period: int) -> dict:
             results["details"].append({"grade": grade, "status": "unchanged"})
             continue
 
-        # New homework detected — deliver to parents
+        # New homework detected — deliver to parents (image + text)
         logger.info(f"New homework for {grade}: {homework[:100]}...")
         results["grades_with_homework"] += 1
 
-        teacher_name = _get_teacher_for_grade(grade)
         sent, failed = await _send_homework_to_parents(
-            grade, homework, teacher_name, period_label, date_str,
+            grade, homework, period_label, date_str,
         )
 
         # Update stored hash
@@ -326,19 +572,26 @@ async def run_homework_delivery(period: int) -> dict:
     logger.info(
         f"=== HOMEWORK DELIVERY COMPLETE: {results['grades_with_homework']}/"
         f"{results['grades_checked']} grades had new homework, "
+        f"{results['grades_no_homework']} had no homework, "
         f"{results['total_parents_sent']} parents notified ==="
     )
     return results
 
 
 async def _send_homework_to_parents(grade: str, homework: str,
-                                     teacher_name: str, period_label: str,
+                                     period_label: str,
                                      date_str: str) -> tuple[int, int]:
-    """Send homework text to all parents of a grade via WhatsApp template.
+    """Send homework image + text to all parents of a grade.
+
+    Sends ppis_homework_update template with IMAGE header + text body.
+    Falls back to text-only if image upload fails.
 
     Returns (sent_count, failed_count).
     """
-    from app.services.whatsapp_service import send_cloud_template_message
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        upload_media_bytes_cloud,
+    )
 
     parents = await _get_parents_for_grade(grade)
     if not parents:
@@ -346,40 +599,51 @@ async def _send_homework_to_parents(grade: str, homework: str,
         return 0, 0
 
     # Deduplicate phone numbers
-    seen_phones: set[str] = set()
-    phones_to_send: list[str] = []
-    for p in parents:
-        for ph in [p["father_phone"], p["mother_phone"]]:
-            digits = re.sub(r"\D", "", ph)
-            if len(digits) >= 10:
-                digits = digits[-10:]
-                if digits not in seen_phones:
-                    seen_phones.add(digits)
-                    phones_to_send.append(digits)
+    phones_to_send = _deduplicate_phones(parents)
+
+    # Render homework as image
+    image_bytes = _render_homework_image(grade, period_label, date_str, homework)
+
+    # Upload image to WhatsApp Cloud API once (reuse media_id for all recipients)
+    media_id = await upload_media_bytes_cloud(
+        image_bytes, "image/png", f"homework_{grade}.png"
+    )
+    del image_bytes  # free memory
+
+    # Format the text message (always includes date/class/period as fallback)
+    text_body = _format_homework_message(grade, period_label, date_str, homework)
+    # Truncate for template parameter limit (~1024 chars)
+    text_body = text_body[:900] if len(text_body) > 900 else text_body
 
     sent = 0
     failed = 0
 
-    # Truncate homework if too long for template parameter (max ~1024 chars)
-    hw_text = homework[:900] if len(homework) > 900 else homework
-
     for phone in phones_to_send:
         try:
-            # Use ppis_homework_update template (already approved)
-            # Template params: {{1}} = grade, {{2}} = homework text
-            ok = await send_cloud_template_message(
-                phone,
-                "ppis_homework_update",
-                body_params=[grade, hw_text],
-            )
+            if media_id:
+                # Send template with image header + text body
+                ok = await send_cloud_template_message(
+                    phone,
+                    "ppis_homework_update",
+                    body_params=[text_body],
+                    header_image_id=media_id,
+                )
+            else:
+                # Fallback: text-only template
+                ok = await send_cloud_template_message(
+                    phone,
+                    "ppis_homework_update",
+                    body_params=[text_body],
+                )
+
             if not ok:
-                # Fallback to ppis_class_assignment template
+                # Second fallback: ppis_class_assignment template
                 ok = await send_cloud_template_message(
                     phone,
                     "ppis_class_assignment",
                     body_params=[
                         f"Homework for {grade}",
-                        hw_text,
+                        text_body,
                     ],
                 )
 
@@ -388,7 +652,6 @@ async def _send_homework_to_parents(grade: str, homework: str,
             else:
                 failed += 1
 
-            # Rate limiting — small delay between sends
             await asyncio.sleep(0.3)
 
         except Exception as e:
@@ -397,6 +660,80 @@ async def _send_homework_to_parents(grade: str, homework: str,
 
     logger.info(f"Homework delivery for {grade}: {sent} sent, {failed} failed")
     return sent, failed
+
+
+async def _send_no_homework_to_parents(grade: str, period_label: str,
+                                        date_str: str) -> tuple[int, int]:
+    """Send 'No Homework Assigned' notice to all parents of a grade.
+
+    Returns (sent_count, failed_count).
+    """
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        upload_media_bytes_cloud,
+    )
+
+    parents = await _get_parents_for_grade(grade)
+    if not parents:
+        return 0, 0
+
+    phones_to_send = _deduplicate_phones(parents)
+
+    # Render no-homework image
+    image_bytes = _render_no_homework_image(grade, period_label, date_str)
+    media_id = await upload_media_bytes_cloud(
+        image_bytes, "image/png", f"no_homework_{grade}.png"
+    )
+    del image_bytes
+
+    text_body = _format_no_homework_message(grade, period_label, date_str)
+
+    sent = 0
+    failed = 0
+
+    for phone in phones_to_send:
+        try:
+            if media_id:
+                ok = await send_cloud_template_message(
+                    phone,
+                    "ppis_homework_update",
+                    body_params=[text_body],
+                    header_image_id=media_id,
+                )
+            else:
+                ok = await send_cloud_template_message(
+                    phone,
+                    "ppis_homework_update",
+                    body_params=[text_body],
+                )
+
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+
+            await asyncio.sleep(0.3)
+
+        except Exception as e:
+            logger.error(f"Error sending no-homework to {phone}: {e}")
+            failed += 1
+
+    return sent, failed
+
+
+def _deduplicate_phones(parents: list[dict]) -> list[str]:
+    """Extract and deduplicate phone numbers from parent records."""
+    seen: set[str] = set()
+    phones: list[str] = []
+    for p in parents:
+        for ph in [p["father_phone"], p["mother_phone"]]:
+            digits = re.sub(r"\D", "", ph)
+            if len(digits) >= 10:
+                digits = digits[-10:]
+                if digits not in seen:
+                    seen.add(digits)
+                    phones.append(digits)
+    return phones
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +788,11 @@ async def get_homework_logs(limit: int = 50) -> list[dict]:
         ]
     finally:
         await db.close()
+
+
+async def get_registered_docs() -> list[dict]:
+    """Return all registered homework docs for admin dashboard."""
+    return await _get_homework_docs()
 
 
 # ---------------------------------------------------------------------------

@@ -1937,3 +1937,54 @@ def _generate_monitoring_alerts(
     if not alerts:
         alerts.append({"level": "ok", "message": "All systems operating normally."})
     return alerts
+
+
+# ── Homework Docs Management ─────────────────────────────────────────────────
+
+@router.get("/homework/docs")
+async def list_homework_docs():
+    """List all registered homework Google Docs."""
+    from app.services.homework_delivery_service import get_registered_docs
+    docs = await get_registered_docs()
+    return {"docs": docs, "total": len(docs)}
+
+
+@router.post("/homework/docs", dependencies=[Depends(verify_dashboard_secret)])
+async def register_homework_docs(payload: dict):
+    """Register homework docs in bulk.
+
+    Expects: {"docs": [{"grade": "Grade 1A", "doc_id": "...", "doc_url": "..."}]}
+    """
+    from app.services.homework_delivery_service import register_homework_doc
+    docs = payload.get("docs", [])
+    registered = 0
+    failed = 0
+    for doc in docs:
+        grade = doc.get("grade", "")
+        doc_id = doc.get("doc_id", "")
+        doc_url = doc.get("doc_url", "")
+        if grade and doc_id:
+            ok = await register_homework_doc(grade, doc_id, doc_url)
+            if ok:
+                registered += 1
+            else:
+                failed += 1
+    return {"registered": registered, "failed": failed, "total": len(docs)}
+
+
+@router.get("/homework/logs")
+async def list_homework_logs(limit: int = Query(50, le=200)):
+    """Get recent homework delivery logs."""
+    from app.services.homework_delivery_service import get_homework_logs
+    logs = await get_homework_logs(limit)
+    return {"logs": logs, "total": len(logs)}
+
+
+@router.post("/homework/trigger/{period}", dependencies=[Depends(verify_dashboard_secret)])
+async def trigger_homework_delivery(period: int):
+    """Manually trigger homework delivery for a specific period (for testing)."""
+    from app.services.homework_delivery_service import run_homework_delivery
+    if period < 0 or period > 6:
+        raise HTTPException(status_code=400, detail="Period must be 0-6")
+    result = await run_homework_delivery(period)
+    return result

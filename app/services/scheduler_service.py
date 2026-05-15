@@ -683,18 +683,27 @@ def start_scheduler() -> None:
     # Check homework docs after each period ends.
     # Times are offset by +3 minutes to give teachers time to update.
     # IST → UTC: subtract 5h30m
+    #
+    # Current timetable:
+    #   Period 0: 08:00-08:10  (Assembly, 10 min) — skip, too short
+    #   Period 1: 08:10-08:45  (35 min) → check 08:48 IST = 03:18 UTC
+    #   SHORT BREAK: 08:45-09:00
+    #   Period 2: 09:00-09:30  (30 min) → check 09:33 IST = 04:03 UTC
+    #   Period 3: 09:30-10:00  (30 min) → check 10:03 IST = 04:33 UTC
+    #   Period 4: 10:00-10:30  (30 min) → check 10:33 IST = 05:03 UTC
+    #   Period 5: 10:30-11:00  (30 min) → check 11:03 IST = 05:33 UTC
+    #   Period 6: 11:00-11:30  (30 min) → check 11:33 IST = 06:03 UTC
+    #   Lunch & Dispersal: 11:30-12:00
     from app.services.homework_delivery_service import run_homework_delivery_sync
 
     _hw_schedule = [
         # (period, hour_utc, minute_utc, description)
-        (1, 3, 23, "Period 1 ends 08:50 IST → check 08:53 IST = 03:23 UTC"),
-        (2, 4, 8,  "Period 2 ends 09:35 IST → check 09:38 IST = 04:08 UTC"),
-        (3, 4, 43, "Period 3 ends 10:10 IST → check 10:13 IST = 04:43 UTC"),
-        (4, 5, 18, "Period 4 ends 10:45 IST → check 10:48 IST = 05:18 UTC"),
-        (5, 5, 53, "Period 5 ends 11:20 IST → check 11:23 IST = 05:53 UTC"),
-        (6, 6, 53, "Period 6 ends 12:20 IST → check 12:23 IST = 06:53 UTC"),
-        (7, 7, 28, "Period 7 ends 12:55 IST → check 12:58 IST = 07:28 UTC"),
-        (8, 8, 3,  "Period 8 ends 01:30 IST → check 01:33 IST = 08:03 UTC"),
+        (1, 3, 18, "Period 1 ends 08:45 IST → check 08:48 IST = 03:18 UTC"),
+        (2, 4, 3,  "Period 2 ends 09:30 IST → check 09:33 IST = 04:03 UTC"),
+        (3, 4, 33, "Period 3 ends 10:00 IST → check 10:03 IST = 04:33 UTC"),
+        (4, 5, 3,  "Period 4 ends 10:30 IST → check 10:33 IST = 05:03 UTC"),
+        (5, 5, 33, "Period 5 ends 11:00 IST → check 11:03 IST = 05:33 UTC"),
+        (6, 6, 3,  "Period 6 ends 11:30 IST → check 11:33 IST = 06:03 UTC"),
     ]
     for period, h_utc, m_utc, desc in _hw_schedule:
         scheduler.add_job(

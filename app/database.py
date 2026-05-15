@@ -468,5 +468,35 @@ async def init_db():
                     f"Auto-seed camera mappings failed: {e}", exc_info=True
                 )
 
+        # --- Auto-seed homework docs ---
+        try:
+            from app.seed_data import SEED_HOMEWORK_DOCS
+        except ImportError:
+            SEED_HOMEWORK_DOCS = {}
+
+        cursor = await db.execute("SELECT COUNT(*) FROM homework_docs")
+        row = await cursor.fetchone()
+        hw_count = row[0] if row else 0
+        logger.info(f"homework_docs count on startup: {hw_count}")
+
+        if hw_count == 0 and SEED_HOMEWORK_DOCS:
+            logger.info(
+                f"homework_docs table is empty — auto-seeding "
+                f"{len(SEED_HOMEWORK_DOCS)} homework docs"
+            )
+            try:
+                seeded = 0
+                for grade, doc_info in SEED_HOMEWORK_DOCS.items():
+                    await db.execute(
+                        "INSERT OR REPLACE INTO homework_docs "
+                        "(grade, doc_id, doc_url) VALUES (?, ?, ?)",
+                        (grade, doc_info["doc_id"], doc_info.get("url", "")),
+                    )
+                    seeded += 1
+                await db.commit()
+                logger.info(f"Auto-seeded {seeded} homework docs")
+            except Exception as e:
+                logger.error(f"Auto-seed homework docs failed: {e}", exc_info=True)
+
     finally:
         await db.close()
