@@ -794,6 +794,7 @@ async def dashboard_delete_face(person_id: str):
             ("delete", "agent_registered_faces", original_pid,
              f"Deleted {deleted} face(s)"),
         )
+        await db.commit()
         logger.info(f"Dashboard: deleted {deleted} face(s) for {original_pid}")
         return {"status": "ok", "deleted": deleted, "person_id": original_pid}
     finally:
