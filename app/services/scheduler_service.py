@@ -694,7 +694,10 @@ def start_scheduler() -> None:
     #   Period 5: 10:30-11:00  (30 min) → check 11:03 IST = 05:33 UTC
     #   Period 6: 11:00-11:30  (30 min) → check 11:33 IST = 06:03 UTC
     #   Lunch & Dispersal: 11:30-12:00
-    from app.services.homework_delivery_service import run_homework_delivery_sync
+    from app.services.homework_delivery_service import (
+        run_homework_delivery_sync,
+        run_daily_clear_sync,
+    )
 
     _hw_schedule = [
         # (period, hour_utc, minute_utc, description)
@@ -714,6 +717,17 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         logger.info(f"Scheduled homework delivery: {desc}")
+
+    # --- Daily Doc Clear (3:00 PM IST = 9:30 UTC) ---
+    # Clears all 34 homework Google Docs at end of school day,
+    # restores template instructions, and resets content hashes.
+    scheduler.add_job(
+        run_daily_clear_sync,
+        trigger=CronTrigger(hour=9, minute=30, second=0),
+        id="homework_daily_clear",
+        replace_existing=True,
+    )
+    logger.info("Scheduled daily homework doc clear at 3:00 PM IST (9:30 UTC)")
 
     scheduler.start()
     logger.info("Scheduler started successfully")
