@@ -7,7 +7,7 @@ After each period ends, the system:
   2. Detects NEW homework entries (compares with last known content)
   3. Renders the content as a clean image (screenshot)
   4. Sends BOTH the image + text to parents via WhatsApp template
-  5. If no new content → sends "NO HOMEWORK ASSIGNED" text
+  5. If no new content → silently skips (no message sent)
 
 Bell Timings (current timetable):
   Period 0: 08:00 – 08:10  → Assembly (10 min)
@@ -520,20 +520,10 @@ async def run_homework_delivery(period: int) -> dict:
         homework = _extract_todays_homework(content)
 
         if not homework:
-            # No content written → send "NO HOMEWORK ASSIGNED"
-            logger.info(f"No homework found for {grade} today → sending no-homework notice")
+            # No content written → skip silently (no message to parents)
+            logger.info(f"No homework found for {grade} today → skipping (no message sent)")
             results["grades_no_homework"] += 1
-            sent, failed = await _send_no_homework_to_parents(
-                grade, period_label, date_str,
-            )
-            await _log_homework_delivery(grade, period, "NO HOMEWORK ASSIGNED",
-                                          sent, failed, "no_homework")
-            results["total_parents_sent"] += sent
-            results["total_parents_failed"] += failed
-            results["details"].append({
-                "grade": grade, "status": "no_homework",
-                "sent": sent, "failed": failed,
-            })
+            results["details"].append({"grade": grade, "status": "no_homework"})
             continue
 
         # Check if content has changed since last check
