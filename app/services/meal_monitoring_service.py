@@ -95,8 +95,18 @@ async def _get_parents_for_grade(grade: str) -> list[dict]:
         await db.close()
 
 
+# Grades eligible for meal monitoring snapshots.
+# Summer camp (younger) students are excluded — only senior grades get snapshots.
+_MEAL_ELIGIBLE_GRADES = re.compile(r"Grade\s*(9|10|11|12)", re.IGNORECASE)
+
+
 async def _get_all_classroom_grades() -> list[str]:
-    """Return all distinct grades that have a mapped camera."""
+    """Return distinct grades eligible for meal monitoring that have a mapped camera.
+
+    Only Grade 9 through Grade 12 are included; younger classes
+    (summer camp students, Nursery, Prep, Popsicles, Grade 1-8)
+    are excluded from meal snapshots.
+    """
     from app.database import get_db
     db = await get_db()
     try:
@@ -104,7 +114,11 @@ async def _get_all_classroom_grades() -> list[str]:
             "SELECT DISTINCT grade FROM pi_sheet_students ORDER BY grade"
         )
         rows = await cursor.fetchall()
-        return [r[0] for r in rows if _pi_grade_to_camera_key(r[0]) is not None]
+        return [
+            r[0] for r in rows
+            if _pi_grade_to_camera_key(r[0]) is not None
+            and _MEAL_ELIGIBLE_GRADES.match(r[0])
+        ]
     finally:
         await db.close()
 
