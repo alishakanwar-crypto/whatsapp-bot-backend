@@ -985,6 +985,48 @@ async def move_doc_to_folder(doc_id: str, folder_id: str) -> bool:
         return False
 
 
+async def share_google_doc(doc_id: str, email: str, role: str = "writer") -> bool:
+    """Share a Google Doc with a user via the Google Drive API.
+
+    Creates a permission for the given email with the specified role.
+    """
+    token = await _get_google_access_token()
+    if not token:
+        logger.error("No Google token for sharing doc")
+        return False
+
+    url = f"https://www.googleapis.com/drive/v3/files/{doc_id}/permissions"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "type": "user",
+        "role": role,
+        "emailAddress": email,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                headers=headers,
+                json=body,
+                params={"sendNotificationEmail": "true"},
+                timeout=15.0,
+            )
+            if resp.status_code in (200, 201):
+                logger.info(f"Shared doc {doc_id} with {email} as {role}")
+                return True
+            logger.error(
+                f"Failed to share doc {doc_id} with {email}: "
+                f"HTTP {resp.status_code} - {resp.text[:200]}"
+            )
+            return False
+    except Exception as e:
+        logger.error(f"Error sharing doc {doc_id} with {email}: {e}")
+        return False
+
+
 async def daily_clear_all_docs() -> dict:
     """Clear all 34 homework Google Docs and reset content hashes.
 
