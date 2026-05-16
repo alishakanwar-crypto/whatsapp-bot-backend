@@ -1033,8 +1033,10 @@ SEED_HOMEWORK_DOCS = {
     "Grade 9C": {"doc_id": "1edJE_KodRNSODJT1Bhbpl3M_YjTKdqPNgpxwnExOJk8", "url": "https://docs.google.com/document/d/1edJE_KodRNSODJT1Bhbpl3M_YjTKdqPNgpxwnExOJk8/edit"},
     "Grade 10A": {"doc_id": "1UbGVV-9l9LKqx71GxKpvtfJVf6ncdmVjPOzb2SbwJPg", "url": "https://docs.google.com/document/d/1UbGVV-9l9LKqx71GxKpvtfJVf6ncdmVjPOzb2SbwJPg/edit"},
     "Grade 10B": {"doc_id": "1Vp7LgkUGnMUO-rRxLhe4eEo-USZvpxGesv_fKpBp4Os", "url": "https://docs.google.com/document/d/1Vp7LgkUGnMUO-rRxLhe4eEo-USZvpxGesv_fKpBp4Os/edit"},
-    "Grade 11A": {"doc_id": "1KuiVvOS8v9o8Bu4vrXSLuIrIkUZX56B-FdmsmMkVJuo", "url": "https://docs.google.com/document/d/1KuiVvOS8v9o8Bu4vrXSLuIrIkUZX56B-FdmsmMkVJuo/edit"},
-    "Grade 11B": {"doc_id": "1i2epU_zJk0dbCT4x7vFFpGdv3LF1xFD6SosxEpjqYwc", "url": "https://docs.google.com/document/d/1i2epU_zJk0dbCT4x7vFFpGdv3LF1xFD6SosxEpjqYwc/edit"},
-    "Grade 12A": {"doc_id": "1FwUe8EIfrhfDpKugImOzHLlCe0tCguTxPF29vRWBZhs", "url": "https://docs.google.com/document/d/1FwUe8EIfrhfDpKugImOzHLlCe0tCguTxPF29vRWBZhs/edit"},
-    "Grade 12B": {"doc_id": "1_vu9gKBxQnoUtkZOmF7UMSLwWGL4ltaryM-Z79JnPro", "url": "https://docs.google.com/document/d/1_vu9gKBxQnoUtkZOmF7UMSLwWGL4ltaryM-Z79JnPro/edit"},
+    "Grade 11A-SCIENCE": {"doc_id": "1KuiVvOS8v9o8Bu4vrXSLuIrIkUZX56B-FdmsmMkVJuo", "url": "https://docs.google.com/document/d/1KuiVvOS8v9o8Bu4vrXSLuIrIkUZX56B-FdmsmMkVJuo/edit"},
+    "Grade 11B-COMMERCE": {"doc_id": "1i2epU_zJk0dbCT4x7vFFpGdv3LF1xFD6SosxEpjqYwc", "url": "https://docs.google.com/document/d/1i2epU_zJk0dbCT4x7vFFpGdv3LF1xFD6SosxEpjqYwc/edit"},
+    "Grade 11C-HUMANITIES": {"doc_id": "", "url": ""},  # Will be created and filled via API
+    "Grade 12A-SCIENCE": {"doc_id": "1FwUe8EIfrhfDpKugImOzHLlCe0tCguTxPF29vRWBZhs", "url": "https://docs.google.com/document/d/1FwUe8EIfrhfDpKugImOzHLlCe0tCguTxPF29vRWBZhs/edit"},
+    "Grade 12B-COMMERCE": {"doc_id": "1_vu9gKBxQnoUtkZOmF7UMSLwWGL4ltaryM-Z79JnPro", "url": "https://docs.google.com/document/d/1_vu9gKBxQnoUtkZOmF7UMSLwWGL4ltaryM-Z79JnPro/edit"},
+    "Grade 12C-HUMANITIES": {"doc_id": "", "url": ""},  # Will be created and filled via API
 }
