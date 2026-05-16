@@ -54,6 +54,14 @@ PI_SHEET_GRADE_GIDS = [
     "523098156", "255213929",
 ]
 
+# Summer Camp Sheet CSV URL
+# The user's sheet: https://docs.google.com/spreadsheets/d/1rwbMy_xqWOf8uBBnKYZ30wknJBvQylFvKvImqtBT1sA/edit?gid=58921817
+# Must be published to web first (File → Share → Publish to web → CSV)
+SUMMER_CAMP_SHEET_CSV_URL = os.getenv(
+    "SUMMER_CAMP_SHEET_CSV_URL",
+    "",  # Set after user publishes the sheet
+)
+
 # Known male teachers (for honorific)
 MALE_TEACHERS = {"shyam manohar", "tarun dhall", "christy joseph", "deepak"}
 
@@ -1007,3 +1015,102 @@ def populate_parent_phones_sync() -> None:
         logger.error(f"PARENT PHONES: Sync error: {e}")
     finally:
         loop.close()
+
+
+async def sync_summer_camp_sheet() -> int:
+    """Fetch summer camp students from the published Google Sheet CSV
+    and upsert into summer_camp_students table.
+
+    Returns the number of students synced, or -1 on failure.
+    """
+    if not SUMMER_CAMP_SHEET_CSV_URL:
+        logger.info("SUMMER CAMP SHEET: No CSV URL configured, skipping sync")
+        return 0
+
+    from app.database import get_db
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(SUMMER_CAMP_SHEET_CSV_URL)
+            resp.raise_for_status()
+            csv_text = resp.text
+    except Exception as e:
+        logger.error(f"SUMMER CAMP SHEET: Failed to fetch CSV: {e}")
+        return -1
+
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = list(reader)
+    if len(rows) < 2:
+        logger.warning("SUMMER CAMP SHEET: CSV has no data rows")
+        return 0
+
+    # Find header row — look for columns like "Student Name", "Grade", "Contact"
+    header = [c.strip().lower() for c in rows[0]]
+    header_idx = 0
+
+    # Try to find a better header row if first row doesn't look right
+    for i, row in enumerate(rows[:5]):
+        cells = [c.strip().lower() for c in row]
+        if any("name" in c for c in cells) and any("contact" in c or "phone" in c or "mobile" in c for c in cells):
+            header = cells
+            header_idx = i
+            break
+
+    # Map columns
+    def _find_col(keywords: list[str]) -> int:
+        for kw in keywords:
+            for j, h in enumerate(header):
+                if kw in h:
+                    return j
+        return -1
+
+    name_col = _find_col(["student name", "name"])
+    grade_col = _find_col(["grade", "class"])
+    contact_col = _find_col(["contact", "phone", "mobile", "whatsapp"])
+    parent_col = _find_col(["parent", "father", "guardian"])
+    school_col = _find_col(["school"])
+    email_col = _find_col(["email"])
+    address_col = _find_col(["address"])
+
+    if name_col < 0:
+        logger.error(f"SUMMER CAMP SHEET: Could not find 'name' column in header: {header}")
+        return -1
+
+    db = await get_db()
+    try:
+        # Clear and re-insert
+        await db.execute("DELETE FROM summer_camp_students")
+        inserted = 0
+        for row in rows[header_idx + 1:]:
+            if len(row) <= name_col:
+                continue
+            student_name = row[name_col].strip()
+            if not student_name:
+                continue
+
+            grade = row[grade_col].strip() if grade_col >= 0 and len(row) > grade_col else ""
+            contact = row[contact_col].strip() if contact_col >= 0 and len(row) > contact_col else ""
+            parent_name = row[parent_col].strip() if parent_col >= 0 and len(row) > parent_col else ""
+            school_name = row[school_col].strip() if school_col >= 0 and len(row) > school_col else ""
+            email = row[email_col].strip() if email_col >= 0 and len(row) > email_col else ""
+            address = row[address_col].strip() if address_col >= 0 and len(row) > address_col else ""
+
+            # Detect outsider students (different school)
+            is_outsider = 1 if school_name and "ppis" not in school_name.lower() and "pp international" not in school_name.lower() else 0
+
+            await db.execute(
+                "INSERT INTO summer_camp_students "
+                "(student_name, grade, school_name, parent_name, contact_no, email, address, is_outsider) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (student_name, grade, school_name, parent_name, contact, email, address, is_outsider),
+            )
+            inserted += 1
+
+        await db.commit()
+        logger.info(f"SUMMER CAMP SHEET: Synced {inserted} students from Google Sheet")
+        return inserted
+    except Exception as e:
+        logger.error(f"SUMMER CAMP SHEET: DB insert failed: {e}")
+        return -1
+    finally:
+        await db.close()
