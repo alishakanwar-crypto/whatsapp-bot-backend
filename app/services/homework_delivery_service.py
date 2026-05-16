@@ -188,15 +188,30 @@ async def _log_homework_delivery(grade: str, period: int, content: str,
         await db.close()
 
 
+def _normalize_grade_for_lookup(grade: str) -> str:
+    """Strip stream suffix (SCIENCE/COMMERCE/HUMANITIES) for PI sheet lookup.
+
+    E.g. "Grade 11A-SCIENCE" → "Grade 11A" to match PI sheet data.
+    """
+    # Remove stream suffix like -SCIENCE, -COMMERCE, -HUMANITIES
+    return re.sub(r"\s*-\s*(SCIENCE|COMMERCE|HUMANITIES)$", "", grade,
+                  flags=re.IGNORECASE)
+
+
 async def _get_parents_for_grade(grade: str) -> list[dict]:
-    """Return list of {student_name, father_phone, mother_phone} for a grade."""
+    """Return list of {student_name, father_phone, mother_phone} for a grade.
+
+    Handles stream-suffixed grade names (e.g. 'Grade 11A-SCIENCE')
+    by stripping the suffix to match PI sheet data ('Grade 11A').
+    """
     from app.database import get_db
+    lookup_grade = _normalize_grade_for_lookup(grade)
     db = await get_db()
     try:
         cursor = await db.execute(
             "SELECT student_name, father_mobile, mother_mobile "
             "FROM pi_sheet_students WHERE grade = ?",
-            (grade,),
+            (lookup_grade,),
         )
         rows = await cursor.fetchall()
         return [
@@ -211,8 +226,9 @@ async def _get_parents_for_grade(grade: str) -> list[dict]:
 def _get_teacher_for_grade(grade: str) -> str:
     """Return teacher name for the given grade."""
     from app.services.openai_service import TEACHER_DATA
+    lookup = _normalize_grade_for_lookup(grade).lower()
     for t in TEACHER_DATA:
-        if t["grade"].lower() == grade.lower():
+        if t["grade"].lower() == lookup:
             return t["teacher"]
     return ""
 
@@ -860,6 +876,112 @@ async def _clear_google_doc(doc_id: str, class_name: str) -> bool:
             return False
     except Exception as e:
         logger.error(f"Error clearing doc {doc_id}: {e}")
+        return False
+
+
+async def rename_google_doc(doc_id: str, new_title: str) -> bool:
+    """Rename a Google Doc via the Google Drive API.
+
+    The document title is a Drive file property, so we use the
+    Drive v3 files.update endpoint with the new name.
+    """
+    token = await _get_google_access_token()
+    if not token:
+        logger.error("No Google token for renaming doc")
+        return False
+
+    url = f"https://www.googleapis.com/drive/v3/files/{doc_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.patch(
+                url,
+                headers=headers,
+                json={"name": new_title},
+                timeout=15.0,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Renamed doc {doc_id} to '{new_title}'")
+                return True
+            logger.error(
+                f"Failed to rename doc {doc_id}: HTTP {resp.status_code} - "
+                f"{resp.text[:200]}"
+            )
+            return False
+    except Exception as e:
+        logger.error(f"Error renaming doc {doc_id}: {e}")
+        return False
+
+
+async def create_google_doc(title: str) -> dict | None:
+    """Create a new Google Doc via the Google Docs API.
+
+    Returns {"doc_id": ..., "doc_url": ...} or None on failure.
+    The doc is created in the default Drive location of the authenticated user.
+    """
+    token = await _get_google_access_token()
+    if not token:
+        logger.error("No Google token for creating doc")
+        return None
+
+    url = "https://docs.googleapis.com/v1/documents"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                headers=headers,
+                json={"title": title},
+                timeout=15.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                doc_id = data.get("documentId", "")
+                doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+                logger.info(f"Created new doc '{title}': {doc_id}")
+
+                # Initialize with template header
+                class_name = title.replace("PPIS Classwork & Homework - ", "")
+                await _clear_google_doc(doc_id, class_name)
+
+                return {"doc_id": doc_id, "doc_url": doc_url}
+            logger.error(
+                f"Failed to create doc '{title}': HTTP {resp.status_code} - "
+                f"{resp.text[:200]}"
+            )
+            return None
+    except Exception as e:
+        logger.error(f"Error creating doc '{title}': {e}")
+        return None
+
+
+async def move_doc_to_folder(doc_id: str, folder_id: str) -> bool:
+    """Move a Google Doc to a specific Drive folder.
+
+    Uses the Drive v3 files.update endpoint to change the parent folder.
+    """
+    token = await _get_google_access_token()
+    if not token:
+        return False
+
+    url = f"https://www.googleapis.com/drive/v3/files/{doc_id}?addParents={folder_id}&fields=id,parents"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.patch(url, headers=headers, timeout=15.0)
+            if resp.status_code == 200:
+                logger.info(f"Moved doc {doc_id} to folder {folder_id}")
+                return True
+            logger.warning(f"Move doc failed: HTTP {resp.status_code}")
+            return False
+    except Exception as e:
+        logger.warning(f"Move doc failed: {e}")
         return False
 
 
