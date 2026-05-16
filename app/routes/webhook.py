@@ -233,6 +233,13 @@ _recent_images: dict[str, dict] = {}
 _RECENT_IMAGE_TTL = 30  # seconds — link image + name within 30s
 _RECENT_IMAGE_MAX_SIZE = 200  # max entries to prevent memory leak
 
+# ---------------------------------------------------------------------------
+# Homework relay dedup: prevent duplicate forwarding of the same file
+# Key = f"{sender}:{cloud_media_id}", Value = timestamp
+# ---------------------------------------------------------------------------
+_homework_relay_dedup: dict[str, float] = {}
+_HOMEWORK_RELAY_DEDUP_TTL = 300  # 5 minutes
+
 
 def _evict_stale_images():
     """Remove expired entries from _recent_images to prevent memory leak."""
@@ -2007,10 +2014,12 @@ async def _forward_query_to_class_teacher(
     child: dict,
     teacher_entry: dict,
     media_info: dict | None = None,
+    custom_confirm: str | None = None,
 ) -> bool:
     """Forward a parent's query to the class teacher with full context.
 
     Sends via WhatsApp and email. Saves conversation for reply relay.
+    If custom_confirm is provided, use it instead of the default confirmation.
     Returns True on success.
     """
     teacher_name = teacher_entry["teacher"].split("/")[0].strip()
@@ -2149,14 +2158,17 @@ async def _forward_query_to_class_teacher(
         methods.append("email")
     method_str = " and ".join(methods) if methods else "the school"
 
-    confirm_msg = (
-        f"{_greeting(sender)},\n\n"
-        f"Your query has been forwarded to *{teacher_name}* "
-        f"(Class Teacher, {teacher_grade}) via {method_str}.\n\n"
-        f"You will receive the response as soon as the teacher replies.\n\n"
-        f"Thank you for your cooperation.\n"
-        f"Warm regards,\nPP International School"
-    )
+    if custom_confirm:
+        confirm_msg = custom_confirm
+    else:
+        confirm_msg = (
+            f"{_greeting(sender)},\n\n"
+            f"Your query has been forwarded to *{teacher_name}* "
+            f"(Class Teacher, {teacher_grade}) via {method_str}.\n\n"
+            f"You will receive the response as soon as the teacher replies.\n\n"
+            f"Thank you for your cooperation.\n"
+            f"Warm regards,\nPP International School"
+        )
     await send_whatsapp_message(reply_to, confirm_msg)
 
     logger.info(
@@ -3560,28 +3572,9 @@ async def receive_whatsapp_message(request: Request):
             except Exception as img_exc:
                 logger.error(f"[GREEN IMAGE HANDLER] Exception: {img_exc}", exc_info=True)
 
-            # Homework review: auto-analyze notebook/homework photos from parents
-            try:
-                import httpx as _httpx
-                direct_url = media_info.get("url", "")
-                if direct_url:
-                    async with _httpx.AsyncClient(timeout=30) as _client:
-                        _resp = await _client.get(direct_url)
-                        if _resp.status_code == 200:
-                            from app.services.openai_service import generate_homework_review
-                            caption = media_info.get("caption", "")
-                            children_green = await _lookup_parent_child_class(sender)
-                            child_name = children_green[0]["student_name"] if children_green else ""
-                            child_grade = children_green[0]["grade"] if children_green else ""
-                            ai_response = await generate_homework_review(
-                                _resp.content, _resp.headers.get("content-type", "image/jpeg"),
-                                caption, student_name=child_name, grade=child_grade,
-                            )
-                            await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, ai_response)
-                            return {"status": "ok"}
-            except Exception as vis_exc:
-                logger.error(f"[GREEN IMAGE HANDLER] Homework review error: {vis_exc}", exc_info=True)
+            # AI homework review DISABLED — system acts as relay only.
+            # Images from parents are acknowledged; "check" keyword triggers
+            # forwarding to class teacher (handled in Cloud API path).
 
             # If all image processing fails, acknowledge receipt
             err_msg = "Your image has been received. Please try sending it again if needed."
@@ -4971,37 +4964,54 @@ async def receive_cloud_api_message(request: Request):
                 caption = (media_info.get("caption", "") or "").strip()
                 forward_text = caption if caption else "Shared a file/image"
 
-                # --- Automatic Homework Review (for images only) ---
-                # Skip homework review if caption has forwarding intent —
-                # the parent just wants the image relayed, not analyzed.
-                _is_forward_request = _is_forwarding_or_query(caption)
-                is_image_msg = media_info.get("type") == "imageMessage"
-                cloud_mid = media_info.get("cloud_media_id", "")
-                if is_image_msg and cloud_mid and not _is_forward_request:
-                    logger.info(f"[HOMEWORK REVIEW] Auto-reviewing image from parent {sender}")
-                    try:
-                        from app.services.whatsapp_service import download_cloud_media
-                        from app.services.openai_service import generate_homework_review
+                # --- Homework "check" relay (NO AI review) ---
+                # When caption contains "check", forward to class teacher
+                # instead of AI analysis.  System acts as smart relay only.
+                _check_re = re.compile(
+                    r"\bcheck\b", re.IGNORECASE,
+                )
+                if _check_re.search(caption):
+                    # Dedup: prevent duplicate forwarding within 5 minutes
+                    _dedup_key = f"{sender}:{media_info.get('cloud_media_id', '')}"
+                    _now = _time_mod.time()
+                    # Evict stale entries
+                    _stale_keys = [k for k, v in _homework_relay_dedup.items() if _now - v > _HOMEWORK_RELAY_DEDUP_TTL]
+                    for _sk in _stale_keys:
+                        del _homework_relay_dedup[_sk]
+                    if _dedup_key in _homework_relay_dedup:
+                        logger.info(f"[HOMEWORK RELAY] Duplicate detected for {sender}, skipping")
+                        _dup_msg = "This file has already been forwarded to the teacher."
+                        await save_message(bot_phone, sender, _dup_msg, "whatsapp", "outgoing")
+                        await send_whatsapp_message(reply_to, _dup_msg)
+                        return {"status": "ok"}
 
-                        img_bytes, img_mime = await download_cloud_media(cloud_mid)
-                        if img_bytes:
-                            children_hw = await _lookup_parent_child_class(sender)
-                            child_name = children_hw[0]["student_name"] if children_hw else ""
-                            child_grade = children_hw[0]["grade"] if children_hw else ""
-
-                            review = await generate_homework_review(
-                                img_bytes, img_mime, caption,
-                                student_name=child_name, grade=child_grade,
+                    logger.info(f"[HOMEWORK RELAY] 'check' keyword detected from {sender} — forwarding to teacher")
+                    children_hw = await _lookup_parent_child_class(sender)
+                    if children_hw:
+                        child = children_hw[0]
+                        parent_label_hw = f"Parent of {child['student_name']} ({child['grade']})"
+                        grade_teacher_hw = find_teacher_by_grade(child["grade"])
+                        if grade_teacher_hw:
+                            _relay_text = (
+                                f"{parent_label_hw} has shared the attached work "
+                                f"for checking. Kindly ensure it is checked by you."
                             )
-                            del img_bytes
-                            await save_message(bot_phone, sender, review, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, review)
-                            logger.info(f"[HOMEWORK REVIEW] Sent review to {sender}")
-                            # Do NOT return here — continue to forward image to teacher
+                            _confirm_hw = (
+                                "The work has been shared for checking with the "
+                                "teacher both on WhatsApp and email."
+                            )
+                            await _forward_query_to_class_teacher(
+                                sender, _relay_text, reply_to, child,
+                                grade_teacher_hw, media_info,
+                                custom_confirm=_confirm_hw,
+                            )
+                            # Mark as forwarded for dedup
+                            _homework_relay_dedup[_dedup_key] = _now
+                            return {"status": "ok"}
                         else:
-                            logger.warning(f"[HOMEWORK REVIEW] Could not download image for {sender}")
-                    except Exception as hw_exc:
-                        logger.error(f"[HOMEWORK REVIEW] Error: {hw_exc}", exc_info=True)
+                            logger.warning(f"[HOMEWORK RELAY] No teacher found for {child['grade']}")
+                    else:
+                        logger.warning(f"[HOMEWORK RELAY] No child found for sender {sender}")
 
                 # Forward attachment + text to teacher
                 # FIRST: if caption mentions a specific teacher by name,
@@ -5046,67 +5056,17 @@ async def receive_cloud_api_message(request: Request):
                     if grade_teacher:
                         child_for_label = children[0]
                         if len(children) > 1:
-                            # Try to match the specific child
                             for c in children:
                                 if c["grade"].lower().replace(" ", "") == grade_teacher["grade"].lower().replace(" ", ""):
                                     child_for_label = c
                                     break
 
-                        teacher_name = grade_teacher["teacher"].split("/")[0].strip()
-                        teacher_phone = grade_teacher.get("whatsapp", "")
-                        teacher_email = grade_teacher.get("email", "")
-                        parent_label = f"Parent of {child_for_label['student_name']} ({child_for_label['grade']})"
-
-                        if teacher_phone:
-                            import asyncio as _asyncio_fwd
-                            from app.services.whatsapp_service import forward_cloud_media_to_recipient
-
-                            chat_id = _teacher_chat_id(teacher_phone)
-                            _trec = teacher_phone
-                            if len(_trec) == 10:
-                                _trec = "91" + _trec
-
-                            fwd_msg = (
-                                f"Dear {teacher_name},\n\n"
-                                f"{parent_label} has shared a file via the PPIS Bot:\n\n"
-                                f"\"{forward_text[:500]}\"\n\n"
-                                f"Kindly reply to this message and your response "
-                                f"will be forwarded back to the parent.\n\n"
-                                f"Warm regards,\nPP International School"
-                            )
-
-                            # Force-send to teacher (opens 24h window automatically)
-                            _fwd_ok = await send_whatsapp_force(chat_id, fwd_msg)
-                            if _fwd_ok:
-                                logger.info(f"[CLOUD FILE FWD] Notification sent to {teacher_name}")
-                                # Send media separately
-                                await _asyncio_fwd.sleep(2)
-                                _mok3 = False
-                                try:
-                                    _mok3 = await forward_cloud_media_to_recipient(media_info, chat_id, caption=caption)
-                                except Exception as _me3:
-                                    logger.error(f"[CLOUD FILE FWD] Media forward error: {_me3}")
-                                if _mok3:
-                                    logger.info(f"[CLOUD FILE FWD] Media sent to {teacher_name}")
-                                else:
-                                    logger.error(f"[CLOUD FILE FWD] FAILED media to {teacher_name}")
-                            # Save conversation for 2-way relay
-                            await save_forwarded_conversation(
-                                teacher_phone=teacher_phone,
-                                teacher_name=teacher_name,
-                                teacher_grade=grade_teacher["grade"],
-                                original_chat_id=reply_to,
-                                sender_phone=sender,
-                                original_message=forward_text[:500],
-                            )
-                            confirm = (
-                                f"Your file has been forwarded to *{teacher_name}* "
-                                f"({grade_teacher['grade']}). "
-                                f"You will receive a reply when the teacher responds."
-                            )
-                            await save_message(bot_phone, sender, confirm, "whatsapp", "outgoing")
-                            await send_whatsapp_message(reply_to, confirm)
-                            return {"status": "ok"}
+                        # Use template-based forwarding (works outside 24hr window)
+                        await _forward_query_to_class_teacher(
+                            sender, forward_text, reply_to,
+                            child_for_label, grade_teacher, media_info,
+                        )
+                        return {"status": "ok"}
 
                     elif len(children) > 1:
                         # Multiple children, can't determine which teacher

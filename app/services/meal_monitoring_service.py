@@ -108,7 +108,7 @@ async def _get_verified_present_students(grade: str) -> set[str]:
         cursor = await db.execute(
             "SELECT DISTINCT student_name FROM attendance_records "
             "WHERE grade LIKE ? AND status = 'present' "
-            "AND date(logged_at) = date('now')",
+            "AND date(logged_at) = date('now', '+5 hours', '+30 minutes')",
             (f"{grade}%",),
         )
         rows = await cursor.fetchall()
