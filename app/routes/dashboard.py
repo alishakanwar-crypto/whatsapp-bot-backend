@@ -265,7 +265,7 @@ async def report_attendance(request: Request):
                                 logger.warning(
                                     f"Backend notification failed for {name} to {digits}"
                                 )
-                    if phone_list:
+                    if backend_notified > 0:
                         notified = 1
 
             # Check if already reported today for this person
@@ -786,7 +786,6 @@ async def dashboard_delete_face(person_id: str):
             "DELETE FROM agent_registered_faces WHERE person_id = ? COLLATE NOCASE",
             (person_id,),
         )
-        await db.commit()
         deleted = cursor.rowcount
         await db.execute(
             "INSERT INTO audit_log (action, table_name, record_id, details) "
@@ -794,6 +793,7 @@ async def dashboard_delete_face(person_id: str):
             ("delete", "agent_registered_faces", original_pid,
              f"Deleted {deleted} face(s)"),
         )
+        await db.commit()
         logger.info(f"Dashboard: deleted {deleted} face(s) for {original_pid}")
         return {"status": "ok", "deleted": deleted, "person_id": original_pid}
     finally:

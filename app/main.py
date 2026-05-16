@@ -681,7 +681,7 @@ async def api_send_whatsapp(request: Request):
                         _att_cur = await _mdb.execute(
                             "SELECT id FROM attendance_records "
                             "WHERE student_name = ? AND status = 'present' "
-                            "AND date(logged_at) = date('now') LIMIT 1",
+                            "AND date(logged_at) = date('now', '+5 hours', '+30 minutes') LIMIT 1",
                             (_ms_name,),
                         )
                         if await _att_cur.fetchone():
