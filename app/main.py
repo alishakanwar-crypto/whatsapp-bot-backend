@@ -1514,6 +1514,27 @@ async def update_homework_grade_name(request: Request):
     return {"status": "ok" if ok else "error", "old_grade": old_grade, "new_grade": new_grade}
 
 
+@app.post("/api/homework/share-doc")
+async def share_homework_doc(request: Request):
+    """Share a Google Doc with a user via Drive permissions.
+
+    Body JSON:
+      - doc_id: Google Doc ID
+      - email: email address to share with
+      - role: permission role (default: "writer")
+    """
+    body = await request.json()
+    doc_id = body.get("doc_id", "")
+    email = body.get("email", "")
+    role = body.get("role", "writer")
+    if not doc_id or not email:
+        return {"status": "error", "error": "doc_id and email required"}
+
+    from app.services.homework_delivery_service import share_google_doc
+    ok = await share_google_doc(doc_id, email, role)
+    return {"status": "ok" if ok else "error", "doc_id": doc_id, "email": email, "role": role}
+
+
 @app.get("/privacy-policy")
 async def privacy_policy():
     from fastapi.responses import HTMLResponse
