@@ -24,6 +24,13 @@ from app.services.openai_service import (
     TEACHER_DATA,
     find_teacher_by_grade,
     transcribe_audio,
+    detect_homework_subject,
+)
+from app.services.subject_teacher_service import (
+    find_subject_teacher,
+    get_subjects_for_grade,
+    load_embedded_data as _load_subject_data,
+    refresh_subject_teacher_data,
 )
 
 # School images stored as local files for direct upload
@@ -239,6 +246,20 @@ _RECENT_IMAGE_MAX_SIZE = 200  # max entries to prevent memory leak
 # ---------------------------------------------------------------------------
 _homework_relay_dedup: dict[str, float] = {}
 _HOMEWORK_RELAY_DEDUP_TTL = 300  # 5 minutes
+
+# ---------------------------------------------------------------------------
+# Pending homework subject confirmation: when AI can't identify subject,
+# we ask the parent "which subject?" and wait for their reply.
+# Key = sender phone, Value = dict with child, media_info, timestamp, etc.
+# ---------------------------------------------------------------------------
+_pending_homework_subject: dict[str, dict] = {}
+_PENDING_SUBJECT_TTL = 600  # 10 minutes
+
+# Load subject-teacher mapping data on module import
+try:
+    _load_subject_data()
+except Exception:
+    pass
 
 
 def _evict_stale_images():
@@ -2193,6 +2214,181 @@ async def _forward_query_to_class_teacher(
         f"{teacher_name} ({teacher_grade}) via {method_str}"
     )
     return True
+
+
+# ---------------------------------------------------------------------------
+# Forward homework to SUBJECT teacher (not class teacher)
+# ---------------------------------------------------------------------------
+async def _forward_homework_to_subject_teacher(
+    sender: str,
+    reply_to: str,
+    child: dict,
+    subject_teacher: dict,
+    subject_name: str,
+    media_info: dict | None = None,
+) -> bool:
+    """Forward homework attachment to the specific subject teacher.
+
+    subject_teacher has: {"name", "email", "phone", "subject", "class"}
+    """
+    teacher_name = subject_teacher["name"]
+    teacher_email = subject_teacher.get("email", "")
+    teacher_phone = subject_teacher.get("phone", "")
+    student_name = child.get("student_name", "Student")
+    grade = child.get("grade", "")
+
+    parent_label = f"Parent of {student_name} from Class {grade}"
+
+    if not teacher_email and not teacher_phone:
+        logger.warning(f"[HOMEWORK RELAY] No contact for subject teacher {teacher_name}")
+        msg = (
+            f"We identified the subject as *{subject_name}* but couldn't find "
+            f"contact details for the teacher (*{teacher_name}*). "
+            f"Please contact the school office for assistance.\n\n"
+            f"Phone: 011-45161066 / 64 / 63\nEmail: info@ppischool.in"
+        )
+        await send_whatsapp_message(reply_to, msg)
+        return False
+
+    relay_text = (
+        f"{parent_label} has shared the attached {subject_name} work "
+        f"for checking. Kindly review and check the notebook work."
+    )
+
+    wa_success = False
+    email_success = False
+
+    # Download media once — reuse for both WhatsApp and email
+    _dl_bytes: bytes | None = None
+    _dl_mime: str | None = None
+    _media_filename = "file"
+    if media_info and media_info.get("cloud_media_id"):
+        from app.services.whatsapp_service import download_cloud_media as _download_media
+        _dl_bytes, _dl_mime = await _download_media(media_info["cloud_media_id"])
+        _media_filename = media_info.get("filename", "file")
+        if _dl_bytes:
+            logger.info(f"[HOMEWORK RELAY] Downloaded {len(_dl_bytes)} bytes for {teacher_name}")
+        else:
+            logger.error(f"[HOMEWORK RELAY] Media download failed for {teacher_name}")
+
+    # Forward via WhatsApp — ALWAYS use templates
+    if teacher_phone:
+        from app.services.whatsapp_service import (
+            send_cloud_template_message as _send_tmpl,
+            upload_media_bytes_cloud as _upload_media,
+        )
+
+        teacher_recipient = teacher_phone if not teacher_phone.startswith("91") else teacher_phone
+        if len(teacher_recipient) == 10:
+            teacher_recipient = "91" + teacher_recipient
+
+        if _dl_bytes:
+            _media_type = media_info.get("type", "") if media_info else ""
+            _is_image = _media_type in ("imageMessage", "image")
+            _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
+
+            _uploaded_id = await _upload_media(
+                _dl_bytes, _dl_mime or "application/octet-stream", _media_filename,
+            )
+            if _uploaded_id:
+                _hdr_img_id = _uploaded_id if _is_image else None
+                _hdr_doc_id = None if _is_image else _uploaded_id
+                _hdr_doc_fname = None if _is_image else _media_filename
+
+                wa_success = await _send_tmpl(
+                    teacher_recipient, _tmpl_name,
+                    body_params=[parent_label, relay_text[:400]],
+                    header_image_id=_hdr_img_id,
+                    header_document_id=_hdr_doc_id,
+                    header_document_filename=_hdr_doc_fname,
+                )
+                if wa_success:
+                    logger.info(f"[HOMEWORK RELAY] Template {_tmpl_name} sent to {teacher_name}")
+                else:
+                    logger.error(f"[HOMEWORK RELAY] Template send FAILED for {teacher_name}")
+            else:
+                logger.error(f"[HOMEWORK RELAY] Media re-upload failed for {teacher_name}")
+
+        if wa_success:
+            await save_forwarded_conversation(
+                teacher_phone=teacher_phone,
+                teacher_name=teacher_name,
+                teacher_grade=grade,
+                original_chat_id=reply_to,
+                sender_phone=sender,
+                original_message=relay_text[:500],
+            )
+
+    # Forward via email — include attachment
+    if teacher_email:
+        email_body = (
+            f"Dear {teacher_name},\n\n"
+            f"{parent_label} has shared the attached {subject_name} work "
+            f"for checking via the PPIS Bot.\n\n"
+            f"Kindly review and check the notebook work.\n\n"
+            f"Regards,\nPPIS Bot"
+        )
+        _email_attachments = None
+        if _dl_bytes:
+            _ext_map = {
+                "image/jpeg": ".jpg", "image/png": ".png",
+                "image/webp": ".webp", "application/pdf": ".pdf",
+                "application/msword": ".doc",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            }
+            _ext = _ext_map.get(_dl_mime, ".bin") if _dl_mime else ".bin"
+            _att_name = _media_filename if "." in _media_filename else f"attachment{_ext}"
+            _email_attachments = [(_att_name, _dl_bytes)]
+            logger.info(f"[HOMEWORK RELAY] Email attachment: {_att_name} ({len(_dl_bytes)} bytes)")
+
+        email_success = await send_email_async(
+            teacher_email,
+            f"PPIS Bot: {subject_name} homework from {parent_label}",
+            email_body,
+            "PP International School",
+            attachments=_email_attachments,
+        )
+        if email_success:
+            logger.info(f"[HOMEWORK RELAY] Email sent to {teacher_name} ({teacher_email})")
+
+    # Retry once if both failed
+    if not wa_success and not email_success:
+        logger.warning(f"[HOMEWORK RELAY] Both WA and email failed for {teacher_name}, retrying...")
+        if teacher_email:
+            email_success = await send_email_async(
+                teacher_email,
+                f"PPIS Bot: {subject_name} homework from {parent_label}",
+                f"Dear {teacher_name},\n\n{relay_text}\n\nRegards,\nPPIS Bot",
+                "PP International School",
+                attachments=_email_attachments if _dl_bytes else None,
+            )
+
+    # Confirm to parent
+    methods = []
+    if wa_success:
+        methods.append("WhatsApp")
+    if email_success:
+        methods.append("email")
+
+    if methods:
+        confirm_msg = (
+            "The work has been shared with the concerned subject teacher "
+            "on WhatsApp and email for checking."
+        )
+    else:
+        confirm_msg = (
+            "We were unable to deliver your homework to the teacher at this time. "
+            "Please try again or contact the school office.\n\n"
+            "Phone: 011-45161066 / 64 / 63\nEmail: info@ppischool.in"
+        )
+    await send_whatsapp_message(reply_to, confirm_msg)
+
+    method_str = " and ".join(methods) if methods else "FAILED"
+    logger.info(
+        f"[HOMEWORK RELAY] {subject_name} homework from {sender} ({parent_label}) → "
+        f"{teacher_name} via {method_str}"
+    )
+    return bool(methods)
 
 
 # ---------------------------------------------------------------------------
@@ -4754,6 +4950,54 @@ async def receive_cloud_api_message(request: Request):
         bot_phone = "bot"
         await save_message(sender, bot_phone, message_text, "whatsapp", "incoming", wa_message_id=msg_id)
 
+        # --- Pending homework subject reply ---
+        # If parent was asked "which subject?" for homework check, handle their reply
+        if sender in _pending_homework_subject and not media_info and message_text.strip():
+            _pending = _pending_homework_subject.get(sender)
+            if _pending and (_time_mod.time() - _pending.get("timestamp", 0)) < _PENDING_SUBJECT_TTL:
+                _reply_subject = message_text.strip()
+                _p_child = _pending["child"]
+                _p_media = _pending["media_info"]
+                _p_reply_to = _pending["reply_to"]
+                _p_grade = _p_child.get("grade", "")
+
+                # Try to find subject teacher for the replied subject
+                _subj_teacher = find_subject_teacher(_p_grade, _reply_subject)
+                if _subj_teacher:
+                    del _pending_homework_subject[sender]
+                    logger.info(
+                        f"[HOMEWORK RELAY] Parent replied subject '{_reply_subject}' → "
+                        f"{_subj_teacher['name']} for {_p_grade}"
+                    )
+                    await _forward_homework_to_subject_teacher(
+                        sender, _p_reply_to, _p_child,
+                        _subj_teacher, _reply_subject, _p_media,
+                    )
+                    _dedup_key = _pending.get("dedup_key", "")
+                    if _dedup_key:
+                        _homework_relay_dedup[_dedup_key] = _time_mod.time()
+                    return {"status": "ok"}
+                else:
+                    # Subject not found in mapping — let them know
+                    _available = get_subjects_for_grade(_p_grade)
+                    if _available:
+                        _avail_str = ", ".join(_available)
+                        _retry_msg = (
+                            f"Subject '{_reply_subject}' not found for your child's class. "
+                            f"Please choose from: {_avail_str}"
+                        )
+                    else:
+                        _retry_msg = (
+                            f"Subject '{_reply_subject}' not found. "
+                            f"Please try again with the correct subject name."
+                        )
+                    await send_whatsapp_message(_p_reply_to, _retry_msg)
+                    await save_message(bot_phone, sender, _retry_msg, "whatsapp", "outgoing")
+                    return {"status": "ok"}
+            else:
+                # Expired — remove stale entry
+                _pending_homework_subject.pop(sender, None)
+
         # --- Check for buffered image + name text combo (face registration) ---
         # When someone sends a photo without caption, then sends their name as
         # a separate text message, link them together for face registration.
@@ -5005,9 +5249,9 @@ async def receive_cloud_api_message(request: Request):
                 caption = (media_info.get("caption", "") or "").strip()
                 forward_text = caption if caption else "Shared a file/image"
 
-                # --- Homework "check" relay (NO AI review) ---
-                # When caption contains "check", forward to class teacher
-                # instead of AI analysis.  System acts as smart relay only.
+                # --- Homework "check" relay — SUBJECT-WISE ROUTING ---
+                # When caption contains "check", use AI to identify subject,
+                # then forward to the correct subject teacher (not class teacher).
                 _check_re = re.compile(
                     r"\bcheck\b", re.IGNORECASE,
                 )
@@ -5026,33 +5270,99 @@ async def receive_cloud_api_message(request: Request):
                         await send_whatsapp_message(reply_to, _dup_msg)
                         return {"status": "ok"}
 
-                    logger.info(f"[HOMEWORK RELAY] 'check' keyword detected from {sender} — forwarding to teacher")
+                    logger.info(f"[HOMEWORK RELAY] 'check' keyword — starting subject-wise routing for {sender}")
                     children_hw = await _lookup_parent_child_class(sender)
                     if children_hw:
                         child = children_hw[0]
-                        parent_label_hw = f"Parent of {child['student_name']} ({child['grade']})"
-                        grade_teacher_hw = find_teacher_by_grade(child["grade"])
-                        if grade_teacher_hw:
-                            _relay_text = (
-                                f"{parent_label_hw} has shared the attached work "
-                                f"for checking. Kindly ensure it is checked by you."
+                        _grade = child.get("grade", "")
+
+                        # Step 1: Download media for AI subject detection
+                        _subj_bytes: bytes | None = None
+                        _subj_mime: str | None = None
+                        if media_info and media_info.get("cloud_media_id"):
+                            from app.services.whatsapp_service import download_cloud_media as _dl_subj
+                            _subj_bytes, _subj_mime = await _dl_subj(media_info["cloud_media_id"])
+
+                        # Step 2: AI subject identification (ONLY identifies subject, no grading)
+                        _detected = {"subject": "", "confidence": "low"}
+                        if _subj_bytes:
+                            try:
+                                _detected = await detect_homework_subject(
+                                    _subj_bytes, _subj_mime or "image/jpeg",
+                                )
+                                logger.info(f"[HOMEWORK RELAY] AI detected: {_detected}")
+                            except Exception as _ai_err:
+                                logger.error(f"[HOMEWORK RELAY] AI subject detection error: {_ai_err}")
+
+                        _subj_name = _detected.get("subject", "").strip()
+                        _confidence = _detected.get("confidence", "low")
+
+                        # Step 3: Look up subject teacher if confident
+                        _subject_teacher = None
+                        if _subj_name and _confidence in ("high", "medium"):
+                            _subject_teacher = find_subject_teacher(_grade, _subj_name)
+                            if _subject_teacher:
+                                logger.info(
+                                    f"[HOMEWORK RELAY] Subject '{_subj_name}' → teacher "
+                                    f"{_subject_teacher['name']} for {_grade}"
+                                )
+
+                        if _subject_teacher:
+                            # Route to subject teacher
+                            await _forward_homework_to_subject_teacher(
+                                sender, reply_to, child,
+                                _subject_teacher, _subj_name, media_info,
                             )
-                            _confirm_hw = (
-                                "The work has been shared for checking with the "
-                                "teacher both on WhatsApp and email."
-                            )
-                            await _forward_query_to_class_teacher(
-                                sender, _relay_text, reply_to, child,
-                                grade_teacher_hw, media_info,
-                                custom_confirm=_confirm_hw,
-                            )
-                            # Mark as forwarded for dedup
                             _homework_relay_dedup[_dedup_key] = _now
                             return {"status": "ok"}
                         else:
-                            logger.warning(f"[HOMEWORK RELAY] No teacher found for {child['grade']}")
+                            # Can't determine subject or no teacher found
+                            # Ask parent "which subject?"
+                            _available_subjects = get_subjects_for_grade(_grade)
+                            if _available_subjects:
+                                _subj_list = ", ".join(_available_subjects)
+                                _ask_msg = (
+                                    "Which subject does this work belong to? "
+                                    f"Please reply with the subject name.\n\n"
+                                    f"Available subjects for your child's class: {_subj_list}"
+                                )
+                            else:
+                                _ask_msg = (
+                                    "Which subject does this work belong to? "
+                                    "Please reply with the subject name "
+                                    "(e.g. Maths, Hindi, English, Science, etc.)"
+                                )
+                            # Store pending state so we can process the reply
+                            _pending_homework_subject[sender] = {
+                                "child": child,
+                                "media_info": media_info,
+                                "reply_to": reply_to,
+                                "timestamp": _now,
+                                "dedup_key": _dedup_key,
+                                "detected": _detected,
+                            }
+                            logger.info(
+                                f"[HOMEWORK RELAY] Subject uncertain ('{_subj_name}', "
+                                f"confidence={_confidence}) — asking parent for subject"
+                            )
+                            await send_whatsapp_message(reply_to, _ask_msg)
+                            await save_message(bot_phone, sender, _ask_msg, "whatsapp", "outgoing")
+                            return {"status": "ok"}
                     else:
+                        # No child found — fall back to class teacher
                         logger.warning(f"[HOMEWORK RELAY] No child found for sender {sender}")
+                        grade_teacher_hw = find_teacher_by_grade("")
+                        if grade_teacher_hw:
+                            _relay_text = "A parent has shared homework for checking."
+                            _confirm_hw = "The work has been shared for checking with the teacher."
+                            await _forward_query_to_class_teacher(
+                                sender, _relay_text, reply_to,
+                                {"student_name": "Unknown", "grade": "Unknown"},
+                                grade_teacher_hw, media_info,
+                                custom_confirm=_confirm_hw,
+                            )
+                            _homework_relay_dedup[_dedup_key] = _now
+                            return {"status": "ok"}
 
                 # Forward attachment + text to teacher
                 # FIRST: if caption mentions a specific teacher by name,
