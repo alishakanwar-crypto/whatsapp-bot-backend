@@ -4278,6 +4278,22 @@ async def _try_register_child_face(
         logger.error(f"Face registration: failed to download image from {sender}")
         return False
 
+    # --- Face detection validation: reject screenshots, documents, non-face images ---
+    from app.routes.face import validate_face_in_image
+    face_check = await validate_face_in_image(img_bytes)
+    if not face_check.get("ok"):
+        reject_reason = face_check.get("reason", "Image rejected — no valid face detected.")
+        logger.warning(f"Face registration REJECTED for {sender}: {reject_reason}")
+        reject_msg = (
+            f"⚠️ *Image rejected for face registration*\n\n"
+            f"{reject_reason}\n\n"
+            f"Please send a clear, front-facing *photo* of your ward's face "
+            f"(not a screenshot or document)."
+        )
+        await save_message(bot_phone, sender, reject_msg, "whatsapp", "outgoing")
+        await send_whatsapp_message(reply_to, reject_msg)
+        return True
+
     student_name = target_child["student_name"]
     grade = target_child["grade"]
     person_id = re.sub(r"[^a-zA-Z0-9]", "_", student_name.upper()) + "_" + re.sub(r"[^a-zA-Z0-9]", "", grade.upper())
@@ -4408,6 +4424,22 @@ async def _try_register_teacher_face(
     if not img_bytes:
         logger.error(f"Teacher face registration: failed to download image from {sender}")
         return False
+
+    # --- Face detection validation: reject screenshots, documents, non-face images ---
+    from app.routes.face import validate_face_in_image
+    face_check = await validate_face_in_image(img_bytes)
+    if not face_check.get("ok"):
+        reject_reason = face_check.get("reason", "Image rejected — no valid face detected.")
+        logger.warning(f"Teacher face registration REJECTED for {sender}: {reject_reason}")
+        reject_msg = (
+            f"⚠️ *Image rejected for face registration*\n\n"
+            f"{reject_reason}\n\n"
+            f"Please send a clear, front-facing *selfie* for attendance registration "
+            f"(not a screenshot or document)."
+        )
+        await save_message(bot_phone, sender, reject_msg, "whatsapp", "outgoing")
+        await send_whatsapp_message(reply_to, reject_msg)
+        return True
 
     # Store the face image in the cloud DB
     db = await get_db()

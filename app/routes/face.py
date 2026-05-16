@@ -49,6 +49,144 @@ def _validate_image_quality(image_data: bytes) -> dict:
     return {"ok": True, "width": w, "height": h, "size_bytes": size}
 
 
+async def validate_face_in_image(image_data: bytes) -> dict:
+    """Validate that an image contains a real human face suitable for recognition.
+
+    Uses OpenAI vision (gpt-4o-mini) to classify the image.
+    Returns {"ok": True} if a real face is detected, or
+    {"ok": False, "reason": "..."} if rejected.
+    """
+    import base64 as b64
+    from app.services.openai_service import get_client
+
+    ai = get_client()
+    if not ai:
+        # No OpenAI key — fall back to basic PIL-based heuristic
+        return _heuristic_face_check(image_data)
+
+    # Resize image to save tokens (max 512px on longest side)
+    try:
+        from PIL import Image as PILImage
+        import io
+        img = PILImage.open(io.BytesIO(image_data))
+        max_dim = max(img.size)
+        if max_dim > 512:
+            ratio = 512 / max_dim
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, PILImage.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=70)
+        small_bytes = buf.getvalue()
+    except Exception:
+        small_bytes = image_data
+
+    encoded = b64.b64encode(small_bytes).decode("ascii")
+
+    try:
+        resp = await ai.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=80,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Is this a photo of a real human face suitable for "
+                            "face recognition attendance registration? "
+                            "Reply ONLY with one of:\n"
+                            "FACE_OK - if there is a clear real human face\n"
+                            "REJECT_SCREENSHOT - if this is a screenshot of a phone/computer screen\n"
+                            "REJECT_DOCUMENT - if this is a document, certificate, or printed paper\n"
+                            "REJECT_NO_FACE - if there is no human face visible\n"
+                            "REJECT_MULTIPLE - if there are multiple faces (need single person)\n"
+                            "REJECT_PHOTO_OF_PHOTO - if this is a photo of a printed photo or screen display\n"
+                            "REJECT_OTHER - if it's not suitable for any other reason\n"
+                            "Reply with ONLY the code, nothing else."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{encoded}",
+                            "detail": "low",
+                        },
+                    },
+                ],
+            }],
+        )
+        answer = (resp.choices[0].message.content or "").strip().upper()
+        logger.info(f"Face validation AI response: {answer}")
+
+        if "FACE_OK" in answer:
+            return {"ok": True}
+
+        reason_map = {
+            "REJECT_SCREENSHOT": "This looks like a screenshot, not a real photo. Please send an actual photo of the person's face.",
+            "REJECT_DOCUMENT": "This looks like a document or printed paper, not a face photo. Please send a clear photo of the person's face.",
+            "REJECT_NO_FACE": "No human face detected in this image. Please send a clear front-facing photo.",
+            "REJECT_MULTIPLE": "Multiple faces detected. Please send a photo with only one person's face.",
+            "REJECT_PHOTO_OF_PHOTO": "This appears to be a photo of a photo or screen. Please send an original photo taken directly.",
+            "REJECT_OTHER": "This image is not suitable for face registration. Please send a clear, front-facing photo of the person.",
+        }
+        for code, msg in reason_map.items():
+            if code in answer:
+                return {"ok": False, "reason": msg}
+
+        # Unknown response — accept to avoid blocking legitimate registrations
+        return {"ok": True}
+
+    except Exception as e:
+        logger.warning(f"Face validation AI error: {e} — falling back to heuristic")
+        return _heuristic_face_check(image_data)
+
+
+def _heuristic_face_check(image_data: bytes) -> dict:
+    """Basic heuristic check when OpenAI is unavailable.
+
+    Checks image properties that suggest a screenshot vs a real photo:
+    - Screenshots tend to have very specific aspect ratios (9:16, 9:19.5, etc.)
+    - Screenshots tend to be PNG format
+    - Photos from cameras are typically JPEG
+    """
+    try:
+        from PIL import Image as PILImage
+        import io
+        img = PILImage.open(io.BytesIO(image_data))
+        w, h = img.size
+        fmt = (img.format or "").upper()
+
+        # PNG images sent via WhatsApp camera roll are likely screenshots
+        if fmt == "PNG" and min(w, h) >= 300:
+            aspect = max(w, h) / min(w, h)
+            # Common phone screenshot ratios
+            if 1.7 < aspect < 2.3:
+                return {
+                    "ok": False,
+                    "reason": "This looks like a screenshot. Please send an actual photo of the person's face.",
+                }
+
+        # Check if image is too "flat" in color (solid colors = screenshot/document)
+        if img.mode in ("RGB", "RGBA"):
+            # Sample center region
+            cx, cy = w // 2, h // 2
+            crop_size = min(w, h) // 4
+            if crop_size > 20:
+                center = img.crop((cx - crop_size, cy - crop_size,
+                                   cx + crop_size, cy + crop_size))
+                colors = center.getcolors(maxcolors=100)
+                if colors and len(colors) < 5:
+                    return {
+                        "ok": False,
+                        "reason": "This image doesn't appear to contain a face. Please send a clear photo of the person.",
+                    }
+    except Exception:
+        pass
+
+    # When in doubt, accept (fail-open for heuristic only)
+    return {"ok": True}
+
+
 @router.post("/register", dependencies=[Depends(verify_agent_secret)])
 async def register_face(
     person_id: str = Form(...),
