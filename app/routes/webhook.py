@@ -384,17 +384,132 @@ async def is_allowlisted(phone_number: str) -> bool:
         await db.close()
 
 
+# ---------------------------------------------------------------------------
+# School knowledge base scraped from www.ppi.school — used to enrich GPT
+# ---------------------------------------------------------------------------
+SCHOOL_KNOWLEDGE = """
+== PP INTERNATIONAL SCHOOL — KNOWLEDGE BASE ==
+(Source: www.ppi.school — Official School Website)
+
+ABOUT THE SCHOOL:
+- PP International School is a CBSE-affiliated Senior Secondary School recognized by the Directorate of Education since 2011.
+- Run by PP Charitable Trust (non-profit organization).
+- The school is centrally air-conditioned with smart Digiboard classrooms.
+- Location: LD Block, Pitampura, Near Kohat Enclave Metro Station Pillar No. 333, New Delhi-110034.
+- Phone: 011-45161066 / 64 / 63
+- Email: info@ppischool.in
+- Website: www.ppi.school
+- Total campus area: 2 Acres (own building).
+- CBSE Affiliation No: 2730720 | School Code: 85225
+- Medium of instruction: English
+- Curriculum: CBSE (NCERT syllabus)
+
+LEADERSHIP:
+- Chairman: Mr. Rahul Gupta
+- Principal: Ms. Deepi Bector (MCA, PhD, B.Ed)
+- Grievance/Complaint Redressal Officer: Harpreet Kaur (9599488106)
+- Administration Incharge: Ms. Harpreet Kaur (9599488106)
+
+SCHOOL TIMINGS:
+- Summer: Pre-primary 7:30 AM to 11:30 AM | Primary and above (Grade I onwards) 7:30 AM to 1:30 PM
+- Winter: Pre-primary 8:00 AM to 12:00 PM | Primary and above (Grade I onwards) 8:00 AM to 2:00 PM
+- Students should report by 7:30 AM in summers and 8:00 AM in winters.
+
+ADMISSIONS (Academic Session 2026-27):
+- Admissions are open for 2026-27. Contact: 011-45161066
+- Nursery age eligibility: 3 years and above as on 31st March
+- Preparatory age eligibility: 4 years and above as on 31st March
+- Online registration available at www.ppi.school/online-registration/
+- School visiting hours for queries: 8:00 AM to 2:00 PM
+
+ACADEMICS & CURRICULUM:
+- Board: CBSE (Central Board of Secondary Education)
+- Languages offered: English, Hindi, French, German
+- Curriculum framework focuses on: 21st Century Skills, Experiential Learning, Digital Literacy, Project-Based Learning, Interdisciplinary Learning, Art Integration, Sports Integration, Holistic Development, Life Skills
+- Assessment: Term-1 (Periodic Assessment + Half Yearly Exam) and Term-2 (Periodic Assessment + Yearly Exam) as per CBSE remodeled assessment structure.
+- Teacher-student ratio: 1:25
+
+SCHOOL LEVELS:
+- Pre-Primary: Focus on reading/writing readiness, pre-number concepts, language development, physical/creative development
+- Primary School: Foundation building with experiential learning
+- Middle School: Expanded curriculum with analytical thinking
+- High School: Dialogic/participatory pedagogy, abstract assignments, situation-based tasks
+
+STAFF & TEACHERS:
+- Total teachers: 44 (PGT: 6, TGT: 6, PRT: 29)
+- Teachers selected through educational qualifications, relevant experience, demonstration lessons, and rigorous interviews.
+
+FACILITIES:
+- Centrally air-conditioned campus
+- Smart Digiboard classrooms with dedicated server engine
+- Computer studios with high-end computers and monitored internet
+- Microsoft Surface-based learning (first Microsoft Surface school)
+- Google Apps for Education integration
+- Laboratories: General Science Lab, Computer Lab, Chemistry Lab, Biology Lab, Physics Lab, Math Lab, Robotics Lab
+- Medical room in partnership with Max Healthcare Shalimar Bagh (trained nurse on duty)
+- Nutritious vegetarian meals provided
+- Indoor gym with climbing wall and balancing beam
+- Special outdoor play equipment with cushioned surface
+- Round-the-clock security with CCTV cameras in all classes and corridors
+- Floor-wise Emergency Response Team (ERT)
+- Smart RFID system for student safety
+
+SPORTS:
+- Skating, Basketball, Soccer, Lawn Tennis, Table Tennis, Taekwondo, Badminton, Golf
+- Every student encouraged to participate in at least one sport
+
+EXTRA-CURRICULAR:
+- Music and dance lessons daily
+- Theatre and Speech classes
+- Steady Steps Themes Gabriel International performing art classes
+- Art and craft activities
+
+TRANSPORT:
+- Fully air-conditioned buses with GPRS tracking and CCTV cameras
+- Each bus has a trained driver and a caretaker to escort children
+- Bus routes cover: Moti Nagar, Kirti Nagar, Mansarovar Garden, Rajouri Garden, Ramesh Nagar, Bali Nagar, Paschim Vihar, Punjabi Bagh, Nirankari Colony, Mukherjee Nagar, Model Town, Pratap Nagar, Sarai Rohilla, Tri Nagar, Keshav Puram, Lawrence Road, Patel Nagar, Rajender Nagar, Karol Bagh, Kanhaiya Nagar, Rohini (Sectors 5,8,9,11,13,14,15,16), Burari, Adarsh Nagar, Azadpur, Majlis Park, Shalimar Bagh, Pitampura, Raj Nagar, Shakurpur, Naraina Vihar, Haiderpur, Roshnara Road, Malka Ganj, Kamla Nagar, Shakti Nagar, Rana Pratap Bagh, Ashok Vihar, Bharat Nagar
+- Routes re-planned each academic session
+
+SAFETY & SECURITY:
+- Trained security personnel over entire campus
+- CCTV cameras in all classes, corridors, and buses
+- GPRS tracking on all school buses
+- Smart RFID cards for students
+- Emergency Response Team on each floor
+
+PAYMENT:
+- Online payment available at www.ppi.school/payment
+- Can pay via Paytm, PhonePe, or Google Pay using QR code
+- After payment, share screenshot on WhatsApp support: 911145161066
+
+CODE OF CONDUCT:
+- Students must wear school uniform and identity card at all times
+- School almanac must be brought daily
+- Unexplained absence for 5+ consecutive days may result in name being struck off
+- No self-driven vehicles allowed for students
+- No mobile phones allowed in school
+
+HOLIDAY LIST:
+- Available at www.ppi.school/holiday-list/ for Academic Session 2026-27
+
+IMPORTANT INSTRUCTIONS:
+- If a parent asks about something not covered here, say you will forward the query to the Class Teacher.
+- Always be polite, concise, and helpful.
+- For fee-related queries, direct parents to the school office: 011-45161066
+- For medical emergencies, the school has a medical room with Max Healthcare partnership.
+"""
+
+
 async def get_system_prompt() -> str:
-    """Get the system prompt from settings."""
+    """Get the system prompt from settings, enriched with school knowledge."""
     db = await get_db()
     try:
         cursor = await db.execute(
             "SELECT value FROM settings WHERE key = 'system_prompt'"
         )
         row = await cursor.fetchone()
-        if row:
-            return row[0]
-        return "You are a helpful AI assistant."
+        base_prompt = row[0] if row else "You are a helpful AI assistant."
+        return base_prompt + "\n\n" + SCHOOL_KNOWLEDGE
     finally:
         await db.close()
 
