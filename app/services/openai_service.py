@@ -844,6 +844,62 @@ async def generate_vision_response(
         return "I received your image but encountered an error processing it. Please try again."
 
 
+async def classify_image_for_face_registration(
+    image_bytes: bytes,
+    mime_type: str,
+) -> str:
+    """Classify whether an image is a face/person photo or a document/screenshot.
+
+    Returns:
+        "face"     — image contains a clear human face suitable for registration
+        "document" — image is a document, book page, screenshot, PDF, or text-heavy
+    """
+    api_client = get_client()
+    if not api_client:
+        logger.warning("[IMAGE CLASSIFY] OpenAI client not available — defaulting to 'face'")
+        return "face"
+
+    import base64 as _b64
+    b64 = _b64.b64encode(image_bytes).decode()
+    data_uri = f"data:{mime_type};base64,{b64}"
+
+    prompt = (
+        "Classify this image into exactly ONE of these categories:\n\n"
+        "1. FACE — The image contains a clear human face (selfie, portrait, "
+        "person photo, group photo with visible faces). The face should be "
+        "prominent and recognizable.\n\n"
+        "2. DOCUMENT — The image is a document, book page, notebook page, "
+        "screenshot, PDF, form, certificate, printed text, handwritten text, "
+        "worksheet, test paper, or any image where text/content is the primary "
+        "subject rather than a person's face.\n\n"
+        "Respond with ONLY one word: FACE or DOCUMENT\n"
+        "Nothing else."
+    )
+
+    try:
+        response = await api_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
+                ],
+            }],
+            max_tokens=10,
+            temperature=0.0,
+        )
+        reply = (response.choices[0].message.content or "").strip().upper()
+        if "FACE" in reply:
+            logger.info("[IMAGE CLASSIFY] Result: face")
+            return "face"
+        logger.info("[IMAGE CLASSIFY] Result: document")
+        return "document"
+    except Exception as e:
+        logger.error(f"[IMAGE CLASSIFY] Vision API error: {e}")
+        return "face"
+
+
 async def detect_homework_subject(
     image_bytes: bytes,
     mime_type: str,

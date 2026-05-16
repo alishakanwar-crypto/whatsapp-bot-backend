@@ -5049,6 +5049,58 @@ async def receive_cloud_api_message(request: Request):
         is_non_image_media = media_info and media_info.get("type") in ("documentMessage", "videoMessage")
         logger.info(f"[IMAGE CHECK] sender={sender} has_media={has_media} has_image={has_image} is_teacher={is_teacher} is_non_image={is_non_image_media}")
 
+        # ── Vision-based face vs document classification ──────────
+        # Download image once and classify using GPT-4o-mini Vision.
+        # This prevents document/book/screenshot images from being
+        # registered as faces.
+        _img_content_class: str | None = None  # "face" or "document"
+        _img_bytes_cache: bytes | None = None
+        _img_mime_cache: str = "image/jpeg"
+        if has_image:
+            _cloud_mid = media_info.get("cloud_media_id", "")
+            if _cloud_mid:
+                try:
+                    from app.services.whatsapp_service import download_cloud_media as _dl_cloud
+                    _img_bytes_cache, _img_mime_cache = await _dl_cloud(_cloud_mid)
+                except Exception as _dl_err:
+                    logger.error(f"[IMAGE CLASSIFY] Download failed: {_dl_err}")
+            if _img_bytes_cache:
+                try:
+                    from app.services.openai_service import classify_image_for_face_registration
+                    _img_content_class = await classify_image_for_face_registration(
+                        _img_bytes_cache, _img_mime_cache or "image/jpeg",
+                    )
+                    logger.info(f"[IMAGE CLASSIFY] sender={sender} result={_img_content_class}")
+                except Exception as _cls_err:
+                    logger.error(f"[IMAGE CLASSIFY] Classification error: {_cls_err}")
+
+        # If image is classified as document/screenshot, ask what they want
+        if has_image and _img_content_class == "document":
+            caption_raw = (media_info.get("caption", "") or "").strip()
+            # Only intercept if the caption looks like a name (potential face
+            # registration attempt) or is empty. If caption already contains
+            # forwarding/query keywords, let it fall through to normal handlers.
+            _cap_lower = caption_raw.lower()
+            _has_fwd_intent = _is_forwarding_or_query(caption_raw) if caption_raw else False
+            _has_check_kw = bool(re.search(r"\bcheck\b", _cap_lower)) if caption_raw else False
+            if not _has_fwd_intent and not _has_check_kw:
+                logger.info(
+                    f"[IMAGE CLASSIFY] Document image from {sender} with "
+                    f"caption='{caption_raw[:60]}' — asking user intent"
+                )
+                doc_ask_msg = (
+                    "This looks like a document or book page, not a photo for "
+                    "face registration.\n\n"
+                    "What would you like me to do with this?\n"
+                    "1. *Share with a teacher* — reply with the teacher's name\n"
+                    "2. *Check homework* — reply 'check'\n"
+                    "3. *Face registration* — please send a clear selfie/photo "
+                    "of the person's face instead"
+                )
+                await save_message(bot_phone, sender, doc_ask_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, doc_ask_msg)
+                return {"status": "ok"}
+
         # ── Teacher face registration ─────────────────────────────
         # Only register when caption is empty (selfie) or has explicit
         # registration keywords. NEVER register if caption is a
