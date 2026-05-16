@@ -2224,12 +2224,9 @@ async def _forward_query_to_class_teacher(
         confirm_msg = custom_confirm
     else:
         confirm_msg = (
-            f"{_greeting(sender)},\n\n"
-            f"Your query has been forwarded to *{teacher_name}* "
-            f"(Class Teacher, {teacher_grade}) via {method_str}.\n\n"
-            f"You will receive the response as soon as the teacher replies.\n\n"
-            f"Thank you for your cooperation.\n"
-            f"Warm regards,\nPP International School"
+            "I will forward your query to the Class Teacher, "
+            "once she replies, I'll share her response with you.\n\n"
+            "Thanks and regards,\nPP International School"
         )
     await send_whatsapp_message(reply_to, confirm_msg)
 
@@ -5741,6 +5738,34 @@ async def receive_cloud_api_message(request: Request):
                     )
                     await save_message(bot_phone, sender, ask_grade, "whatsapp", "outgoing")
                     await send_whatsapp_message(reply_to, ask_grade)
+                    return {"status": "ok"}
+
+        # --- Known parent: skip GPT, forward to class teacher directly ---
+        _parent_children = await _lookup_parent_child_class(sender)
+        if _parent_children:
+            # For known parents, forward query to class teacher instead of GPT
+            child = _parent_children[0]
+            teacher_entry = find_teacher_by_grade(child["grade"])
+            if not teacher_entry:
+                for entry in TEACHER_DATA:
+                    entry_grade_low = entry["grade"].lower().replace(" ", "")
+                    child_grade_low = child["grade"].lower().replace(" ", "")
+                    if child_grade_low == entry_grade_low or child_grade_low in entry_grade_low:
+                        teacher_entry = entry
+                        break
+
+            if teacher_entry:
+                _custom_confirm = (
+                    "I will forward your query to the Class Teacher, "
+                    "once she replies, I'll share her response with you.\n\n"
+                    "Thanks and regards,\nPP International School"
+                )
+                routed = await _forward_query_to_class_teacher(
+                    sender, message_text, reply_to, child,
+                    teacher_entry, media_info,
+                    custom_confirm=_custom_confirm,
+                )
+                if routed:
                     return {"status": "ok"}
 
         # --- GPT fallback (for admins, teachers, or unknown senders) ---
