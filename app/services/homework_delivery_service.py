@@ -771,12 +771,11 @@ async def get_registered_docs() -> list[dict]:
 TEMPLATE_HEADER = """PPIS Classwork & Homework - {class_name}
 
 Just mention the subject and homework/classwork.
-Day, date, class and period are added automatically.
+Class and period are added automatically.
 
 Example:
 English - Read chapter 5, answer Q1-Q5
 Maths - Complete worksheet page 32
-Science - No homework
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 START YOUR ENTRIES BELOW THIS LINE
