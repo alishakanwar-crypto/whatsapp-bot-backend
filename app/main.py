@@ -145,7 +145,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Populate parent phone numbers in pi_sheet_students on startup
     logger = logging.getLogger(__name__)
     logger.info("STARTUP: About to populate parent phone numbers...")
-    from app.services.sheet_refresh_service import populate_parent_phones, sync_pi_sheet_phones_to_face_db
+    from app.services.sheet_refresh_service import (
+        populate_parent_phones, sync_pi_sheet_phones_to_face_db,
+        sync_summer_camp_sheet,
+    )
     try:
         result = await populate_parent_phones()
         logger.info(f"STARTUP: populate_parent_phones returned {result}")
@@ -156,6 +159,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info(f"STARTUP: synced {synced} teacher phone numbers from PI Sheet to face DB")
     except Exception as e:
         logger.error(f"STARTUP: face-phone sync failed: {e}", exc_info=True)
+    try:
+        camp_synced = await sync_summer_camp_sheet()
+        logger.info(f"STARTUP: synced {camp_synced} summer camp students from Google Sheet")
+    except Exception as e:
+        logger.error(f"STARTUP: summer camp sheet sync failed: {e}", exc_info=True)
     start_scheduler()
 
     # Ensure Law Minister phone number is registered for webhooks
