@@ -204,7 +204,7 @@ async def report_attendance(request: Request):
             logged_at = rec.get("logged_at", datetime.now().isoformat())
 
             # Skip student records on ALL Saturdays (teachers still allowed)
-            if _block_students_today and not person_id.startswith("TEACHER_"):
+            if _block_students_today and not person_id.startswith(("TEACHER_", "PRINCIPAL_")):
                 rejected += 1
                 logger.info(f"Student attendance skipped on Saturday: {name} ({person_id})")
                 continue
