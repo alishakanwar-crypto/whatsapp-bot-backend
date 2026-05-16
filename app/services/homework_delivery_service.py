@@ -130,17 +130,17 @@ async def _get_homework_docs() -> list[dict]:
         await db.close()
 
 
-async def _get_last_content_hash(grade: str) -> str:
-    """Return the last known content hash for a grade's homework doc."""
+async def _get_last_content_hash(grade: str) -> tuple[str, str]:
+    """Return (content_hash, last_content) for a grade's homework doc."""
     from app.database import get_db
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT content_hash FROM homework_doc_state WHERE grade = ?",
+            "SELECT content_hash, last_content FROM homework_doc_state WHERE grade = ?",
             (grade,),
         )
         row = await cursor.fetchone()
-        return row[0] if row else ""
+        return (row[0], row[1] or "") if row else ("", "")
     finally:
         await db.close()
 
@@ -302,6 +302,25 @@ def _extract_todays_homework(full_text: str) -> str:
     return ""
 
 
+def _extract_new_content(full_homework: str, old_content: str) -> str:
+    """Extract only the NEW lines from homework that weren't in old_content.
+
+    Compares line by line and returns only lines added since the last delivery.
+    This prevents resending previous periods' homework.
+    """
+    if not old_content:
+        return full_homework
+
+    old_lines = set(line.strip() for line in old_content.split("\n") if line.strip())
+    new_lines = []
+    for line in full_homework.split("\n"):
+        stripped = line.strip()
+        if stripped and stripped not in old_lines:
+            new_lines.append(line)
+
+    return "\n".join(new_lines).strip()
+
+
 def _strip_template_boilerplate(text: str) -> str:
     """Remove the initial template instructions from the doc content.
 
@@ -449,22 +468,21 @@ def _render_no_homework_image(grade: str, period_label: str,
 # Format the fallback text message (always includes date, class, period)
 # ---------------------------------------------------------------------------
 
-def _format_homework_message(grade: str, period_label: str, date_str: str,
+def _format_homework_message(grade: str, period_label: str,
                               homework_text: str) -> str:
     """Build the parent-facing text message with auto-filled metadata."""
     return (
-        f"Homework & Classwork Update\n\n"
-        f"Date: {date_str}\n"
-        f"Class: {grade}\n"
-        f"Period: {period_label}\n\n"
-        f"{homework_text}"
+        f"\U0001f4da Classwork & Homework Update\n\n"
+        f"\U0001f3eb {grade}\n"
+        f"\u23f0 {period_label}\n\n"
+        f"{homework_text}\n\n"
+        f"\u2014 PP International School"
     )
 
 
-def _format_no_homework_message(grade: str, period_label: str,
-                                 date_str: str) -> str:
+def _format_no_homework_message(grade: str, period_label: str) -> str:
     """Build the 'no homework' text message."""
-    return _format_homework_message(grade, period_label, date_str,
+    return _format_homework_message(grade, period_label,
                                      "No Homework Assigned")
 
 
@@ -537,18 +555,27 @@ async def run_homework_delivery(period: int) -> dict:
 
         # Check if content has changed since last check
         new_hash = _content_hash(homework)
-        old_hash = await _get_last_content_hash(grade)
+        old_hash, old_content = await _get_last_content_hash(grade)
         if new_hash == old_hash:
             logger.info(f"No new homework for {grade} (content unchanged)")
             results["details"].append({"grade": grade, "status": "unchanged"})
             continue
 
-        # New homework detected — deliver to parents (image + text)
-        logger.info(f"New homework for {grade}: {homework[:100]}...")
+        # Extract only the NEW content (delta) — don't resend previous periods
+        new_portion = _extract_new_content(homework, old_content)
+        if not new_portion:
+            # Hash changed but no meaningful new text (whitespace edits etc.)
+            logger.info(f"Content changed for {grade} but no new lines — skipping")
+            await _update_content_hash(grade, new_hash, homework)
+            results["details"].append({"grade": grade, "status": "minor_edit"})
+            continue
+
+        # New homework detected — deliver only the new portion to parents
+        logger.info(f"New homework for {grade}: {new_portion[:100]}...")
         results["grades_with_homework"] += 1
 
         sent, failed = await _send_homework_to_parents(
-            grade, homework, period_label, date_str,
+            grade, new_portion, period_label,
         )
 
         # Update stored hash
@@ -578,40 +605,24 @@ async def run_homework_delivery(period: int) -> dict:
 
 
 async def _send_homework_to_parents(grade: str, homework: str,
-                                     period_label: str,
-                                     date_str: str) -> tuple[int, int]:
-    """Send homework image + text to all parents of a grade.
+                                     period_label: str) -> tuple[int, int]:
+    """Send homework to all parents of a grade via template message.
 
-    Sends ppis_homework_update template with IMAGE header + text body.
-    Falls back to text-only if image upload fails.
+    Uses ppis_classwork_homework template with 3 body params:
+      {{1}} = Class, {{2}} = Period, {{3}} = Content
+    No image header.
 
     Returns (sent_count, failed_count).
     """
-    from app.services.whatsapp_service import (
-        send_cloud_template_message,
-        upload_media_bytes_cloud,
-    )
+    from app.services.whatsapp_service import send_cloud_template_message
 
     parents = await _get_parents_for_grade(grade)
     if not parents:
         logger.warning(f"No parents found for {grade}")
         return 0, 0
 
-    # Deduplicate phone numbers
     phones_to_send = _deduplicate_phones(parents)
 
-    # Render homework as image
-    image_bytes = _render_homework_image(grade, period_label, date_str, homework)
-
-    # Upload image to WhatsApp Cloud API once (reuse media_id for all recipients)
-    media_id = await upload_media_bytes_cloud(
-        image_bytes, "image/png", f"homework_{grade}.png"
-    )
-    del image_bytes  # free memory
-
-    # Build the 5 template variables
-    now_ist = datetime.now(IST)
-    day_name = now_ist.strftime("%A")  # e.g. "Friday"
     # Truncate content for template parameter limit (~1024 chars)
     hw_content = homework[:900] if len(homework) > 900 else homework
 
@@ -620,21 +631,11 @@ async def _send_homework_to_parents(grade: str, homework: str,
 
     for phone in phones_to_send:
         try:
-            if media_id:
-                # Send ppis_classwork_homework template with IMAGE header + 5 body params
-                ok = await send_cloud_template_message(
-                    phone,
-                    "ppis_classwork_homework",
-                    body_params=[day_name, date_str, grade, period_label, hw_content],
-                    header_image_id=media_id,
-                )
-            else:
-                # Fallback: text-only (no image)
-                ok = await send_cloud_template_message(
-                    phone,
-                    "ppis_classwork_homework",
-                    body_params=[day_name, date_str, grade, period_label, hw_content],
-                )
+            ok = await send_cloud_template_message(
+                phone,
+                "ppis_classwork_homework",
+                body_params=[grade, period_label, hw_content],
+            )
 
             if ok:
                 sent += 1
@@ -651,16 +652,12 @@ async def _send_homework_to_parents(grade: str, homework: str,
     return sent, failed
 
 
-async def _send_no_homework_to_parents(grade: str, period_label: str,
-                                        date_str: str) -> tuple[int, int]:
+async def _send_no_homework_to_parents(grade: str, period_label: str) -> tuple[int, int]:
     """Send 'No Homework Assigned' notice to all parents of a grade.
 
     Returns (sent_count, failed_count).
     """
-    from app.services.whatsapp_service import (
-        send_cloud_template_message,
-        upload_media_bytes_cloud,
-    )
+    from app.services.whatsapp_service import send_cloud_template_message
 
     parents = await _get_parents_for_grade(grade)
     if not parents:
@@ -668,33 +665,16 @@ async def _send_no_homework_to_parents(grade: str, period_label: str,
 
     phones_to_send = _deduplicate_phones(parents)
 
-    # Render no-homework image
-    image_bytes = _render_no_homework_image(grade, period_label, date_str)
-    media_id = await upload_media_bytes_cloud(
-        image_bytes, "image/png", f"no_homework_{grade}.png"
-    )
-    del image_bytes
-
-    text_body = _format_no_homework_message(grade, period_label, date_str)
-
     sent = 0
     failed = 0
 
     for phone in phones_to_send:
         try:
-            if media_id:
-                ok = await send_cloud_template_message(
-                    phone,
-                    "ppis_homework_update",
-                    body_params=[text_body],
-                    header_image_id=media_id,
-                )
-            else:
-                ok = await send_cloud_template_message(
-                    phone,
-                    "ppis_homework_update",
-                    body_params=[text_body],
-                )
+            ok = await send_cloud_template_message(
+                phone,
+                "ppis_classwork_homework",
+                body_params=[grade, period_label, "No Homework Assigned"],
+            )
 
             if ok:
                 sent += 1
