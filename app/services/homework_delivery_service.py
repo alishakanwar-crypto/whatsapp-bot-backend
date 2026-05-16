@@ -193,31 +193,41 @@ def _normalize_grade_for_lookup(grade: str) -> str:
 
     E.g. "Grade 11A-SCIENCE" → "Grade 11A" to match PI sheet data.
     """
-    # Remove stream suffix like -SCIENCE, -COMMERCE, -HUMANITIES
     return re.sub(r"\s*-\s*(SCIENCE|COMMERCE|HUMANITIES)$", "", grade,
                   flags=re.IGNORECASE)
+
+
+def _canonicalize_grade(grade: str) -> str:
+    """Canonicalize a grade string for fuzzy matching.
+
+    Normalizes case, removes extra whitespace, strips stream suffix.
+    E.g. "GRADE 11 A" → "grade11a", "Grade 11A-SCIENCE" → "grade11a"
+    """
+    g = _normalize_grade_for_lookup(grade)
+    return re.sub(r"\s+", "", g).lower()
 
 
 async def _get_parents_for_grade(grade: str) -> list[dict]:
     """Return list of {student_name, father_phone, mother_phone} for a grade.
 
-    Handles stream-suffixed grade names (e.g. 'Grade 11A-SCIENCE')
-    by stripping the suffix to match PI sheet data ('Grade 11A').
+    Handles stream-suffixed grade names (e.g. 'Grade 11A-SCIENCE') and
+    PI sheet grade variations (e.g. 'GRADE 11A', 'GRADE 11 A', 'Grade 11A')
+    by canonicalizing both sides before matching.
     """
     from app.database import get_db
-    lookup_grade = _normalize_grade_for_lookup(grade)
+    target = _canonicalize_grade(grade)
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT student_name, father_mobile, mother_mobile "
-            "FROM pi_sheet_students WHERE grade = ?",
-            (lookup_grade,),
+            "SELECT student_name, grade, father_mobile, mother_mobile "
+            "FROM pi_sheet_students",
         )
         rows = await cursor.fetchall()
         return [
-            {"student_name": r[0], "father_phone": r[1] or "",
-             "mother_phone": r[2] or ""}
+            {"student_name": r[0], "father_phone": r[2] or "",
+             "mother_phone": r[3] or ""}
             for r in rows
+            if _canonicalize_grade(r[1]) == target
         ]
     finally:
         await db.close()
