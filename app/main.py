@@ -278,14 +278,11 @@ def _check_debug_auth(request: Request) -> None:
 async def debug_version(request: Request):
     """Check deployed code version."""
     _check_debug_auth(request)
-    from app.services.whatsapp_service import get_whatsapp_provider, get_id_instance, get_api_url
+    from app.services.whatsapp_service import get_whatsapp_provider
     return {
-        "version": "2026-04-28-v6-caption-identity-fix",
+        "version": "2026-05-08-v7-cloud-api-only",
         "image_handler_cloud": True,
-        "image_handler_green": True,
         "whatsapp_provider": get_whatsapp_provider(),
-        "green_api_instance": get_id_instance()[:10] + "..." if get_id_instance() else "not_set",
-        "green_api_url": get_api_url(),
     }
 
 

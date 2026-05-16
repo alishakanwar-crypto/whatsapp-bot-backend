@@ -25,8 +25,7 @@ def _load_db_creds():
         conn = sqlite3.connect(db_path)
         cur = conn.execute(
             "SELECT key, value FROM settings WHERE key IN "
-            "('GREEN_API_ID_INSTANCE','GREEN_API_TOKEN','GREEN_API_URL',"
-            "'WHATSAPP_CLOUD_TOKEN','WHATSAPP_PHONE_ID')"
+            "('WHATSAPP_CLOUD_TOKEN','WHATSAPP_PHONE_ID')"
         )
         for row in cur.fetchall():
             _db_creds_cache[row[0]] = row[1]
@@ -53,26 +52,12 @@ def refresh_creds_cache():
 
 
 # ---------------------------------------------------------------------------
-# Provider detection: "cloud" uses Meta Cloud API, "green" uses Green API
+# Meta Cloud API credentials
 # ---------------------------------------------------------------------------
 
 def get_whatsapp_provider() -> str:
-    """Return 'cloud' if Cloud API credentials are set, else 'green'."""
-    if _get_cred("WHATSAPP_CLOUD_TOKEN") and _get_cred("WHATSAPP_PHONE_ID"):
-        return "cloud"
-    return "green"
-
-
-def get_id_instance() -> str:
-    return _get_cred("GREEN_API_ID_INSTANCE")
-
-
-def get_api_token() -> str:
-    return _get_cred("GREEN_API_TOKEN")
-
-
-def get_api_url() -> str:
-    return _get_cred("GREEN_API_URL", "https://api.green-api.com")
+    """Return the active WhatsApp provider. Always 'cloud' (Meta Cloud API)."""
+    return "cloud"
 
 
 def get_cloud_token() -> str:
@@ -84,73 +69,27 @@ def get_cloud_phone_id() -> str:
 
 
 async def send_whatsapp_image(to: str, image_url: str, caption: str = "") -> bool:
-    """Send an image via WhatsApp using Green API's sendFileByUrl."""
-    id_instance = get_id_instance()
-    api_token = get_api_token()
-    api_url = get_api_url()
-
-    if not id_instance or not api_token:
-        logger.error("Green API credentials not configured")
-        return False
-
-    chat_id = to if "@" in to else f"{to}@c.us"
-    url = f"{api_url}/waInstance{id_instance}/sendFileByUrl/{api_token}"
-    payload = {
-        "chatId": chat_id,
-        "urlFile": image_url,
-        "fileName": "image.jpg",
-        "caption": caption,
-    }
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=30.0)
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"WhatsApp image sent to {to}, id: {data.get('idMessage', 'unknown')}")
-                return True
-            else:
-                logger.error(f"Failed to send WhatsApp image: {response.status_code} - {response.text}")
-                return False
-    except Exception as e:
-        logger.error(f"Error sending WhatsApp image: {e}")
-        return False
+    """Send an image via WhatsApp using Meta Cloud API."""
+    return await send_cloud_media(to, "image", media_url=image_url, caption=caption)
 
 
 async def send_whatsapp_image_file(to: str, file_path: str, caption: str = "") -> bool:
-    """Send an image via WhatsApp using Green API's sendFileByUpload (multipart upload)."""
-    id_instance = get_id_instance()
-    api_token = get_api_token()
-    api_url = get_api_url()
-
-    if not id_instance or not api_token:
-        logger.error("Green API credentials not configured")
-        return False
-
+    """Send an image via WhatsApp using Meta Cloud API (upload then send)."""
+    import mimetypes
     if not os.path.isfile(file_path):
         logger.error(f"Image file not found: {file_path}")
         return False
 
-    chat_id = to if "@" in to else f"{to}@c.us"
-    url = f"{api_url}/waInstance{id_instance}/sendFileByUpload/{api_token}"
-
-    try:
-        filename = os.path.basename(file_path)
-        async with httpx.AsyncClient() as client:
-            with open(file_path, "rb") as f:
-                files = {"file": (filename, f, "image/jpeg")}
-                data = {"chatId": chat_id, "caption": caption}
-                response = await client.post(url, data=data, files=files, timeout=60.0)
-            if response.status_code == 200:
-                resp_data = response.json()
-                logger.info(f"WhatsApp image file sent to {to}, id: {resp_data.get('idMessage', 'unknown')}")
-                return True
-            else:
-                logger.error(f"Failed to send WhatsApp image file: {response.status_code} - {response.text}")
-                return False
-    except Exception as e:
-        logger.error(f"Error sending WhatsApp image file: {e}")
+    filename = os.path.basename(file_path)
+    mime_type = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+    with open(file_path, "rb") as f:
+        file_bytes = f.read()
+    media_id = await upload_media_bytes_cloud(file_bytes, mime_type, filename)
+    del file_bytes
+    if not media_id:
+        logger.error(f"Cloud API: failed to upload image file {file_path}")
         return False
+    return await send_cloud_media(to, "image", media_id=media_id, caption=caption)
 
 
 async def send_cloud_media(to: str, media_type: str, media_url: str = "", media_id: str = "", caption: str = "", filename: str = "") -> bool:
@@ -246,12 +185,8 @@ async def upload_base64_image_cloud(image_base64: str, mime_type: str = "image/j
 
 
 async def send_whatsapp_media(to: str, media_type: str, media_url: str = "", media_id: str = "", caption: str = "", filename: str = "") -> bool:
-    """Send media via the active provider (Cloud API or Green API)."""
-    provider = get_whatsapp_provider()
-    if provider == "cloud":
-        return await send_cloud_media(to, media_type, media_url=media_url, media_id=media_id, caption=caption, filename=filename)
-    # Green API fallback
-    return await forward_file_by_url(to, media_url, filename or f"{media_type}.bin", caption)
+    """Send media via Meta Cloud API."""
+    return await send_cloud_media(to, media_type, media_url=media_url, media_id=media_id, caption=caption, filename=filename)
 
 
 async def send_cloud_template_message(
@@ -361,15 +296,12 @@ async def send_cloud_template_message(
 
 
 async def send_whatsapp_message(to: str, message: str) -> bool:
-    """Send a WhatsApp message via the active provider (Cloud API or Green API).
+    """Send a WhatsApp text message via Meta Cloud API.
 
     Returns True on success. The sent message's WhatsApp ID (if available)
     is stored in send_whatsapp_message.last_wa_id after each call.
     """
-    provider = get_whatsapp_provider()
-    if provider == "cloud":
-        return await _send_cloud_text(to, message)
-    return await _send_green_text(to, message)
+    return await _send_cloud_text(to, message)
 
 
 # Attribute to store the last sent message ID (set by _send_cloud_text)
@@ -415,74 +347,25 @@ async def _send_cloud_text(to: str, message: str) -> bool:
         return False
 
 
-async def _send_green_text(to: str, message: str) -> bool:
-    """Send a WhatsApp message using Green API."""
-    id_instance = get_id_instance()
-    api_token = get_api_token()
-    api_url = get_api_url()
-
-    if not id_instance or not api_token:
-        logger.error("Green API credentials not configured")
-        return False
-
-    # Green API expects chatId in format: 79876543210@c.us
-    chat_id = to if "@" in to else f"{to}@c.us"
-
-    url = f"{api_url}/waInstance{id_instance}/sendMessage/{api_token}"
-    payload = {
-        "chatId": chat_id,
-        "message": message,
-    }
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=30.0)
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"WhatsApp message sent to {to}, id: {data.get('idMessage', 'unknown')}")
-                return True
-            else:
-                logger.error(
-                    f"Failed to send WhatsApp message: {response.status_code} - {response.text}"
-                )
-                return False
-    except Exception as e:
-        logger.error(f"Error sending WhatsApp message: {e}")
-        return False
+def _guess_media_type(file_name: str) -> str:
+    """Guess Cloud API media type from filename extension."""
+    ext = os.path.splitext(file_name)[1].lower()
+    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        return "image"
+    if ext in (".mp4", ".3gp", ".mov", ".avi"):
+        return "video"
+    if ext in (".ogg", ".mp3", ".amr", ".aac", ".opus"):
+        return "audio"
+    return "document"
 
 
 async def forward_file_by_url(to: str, file_url: str, file_name: str, caption: str = "") -> bool:
-    """Forward a file to a WhatsApp chat by URL (works for images, videos, documents, audio)."""
-    id_instance = get_id_instance()
-    api_token = get_api_token()
-    api_url = get_api_url()
-
-    if not id_instance or not api_token:
-        logger.error("Green API credentials not configured")
-        return False
-
-    chat_id = to if "@" in to else f"{to}@c.us"
-    url = f"{api_url}/waInstance{id_instance}/sendFileByUrl/{api_token}"
-    payload = {
-        "chatId": chat_id,
-        "urlFile": file_url,
-        "fileName": file_name,
-        "caption": caption,
-    }
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=60.0)
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"File forwarded to {to}: {file_name}, id: {data.get('idMessage', 'unknown')}")
-                return True
-            else:
-                logger.error(f"Failed to forward file: {response.status_code} - {response.text}")
-                return False
-    except Exception as e:
-        logger.error(f"Error forwarding file: {e}")
-        return False
+    """Forward a file to a WhatsApp chat by URL using Meta Cloud API."""
+    media_type = _guess_media_type(file_name)
+    return await send_cloud_media(
+        to, media_type, media_url=file_url, caption=caption,
+        filename=file_name if media_type == "document" else "",
+    )
 
 
 def _extract_media_info(message_data: dict, type_message: str) -> dict | None:
