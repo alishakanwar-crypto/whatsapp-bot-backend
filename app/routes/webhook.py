@@ -4505,6 +4505,30 @@ async def receive_cloud_api_message(request: Request):
     """Handle incoming WhatsApp messages from Meta Cloud API webhook."""
     _evict_stale_images()  # Prevent memory leak in image buffer
     body = await request.json()
+
+    # ── Law Minister routing ──────────────────────────────────────────
+    # Forward webhooks for the Law Minister phone number to its standalone bot.
+    # This must stay at the TOP of the handler so it can never be bypassed.
+    LAW_MINISTER_PHONE_ID = "1168433719678061"
+    try:
+        for entry in body.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                metadata = value.get("metadata", {})
+                if metadata.get("phone_number_id") == LAW_MINISTER_PHONE_ID:
+                    import httpx as _httpx_lm
+                    async with _httpx_lm.AsyncClient(timeout=15.0) as client:
+                        resp = await client.post(
+                            "https://law-minister-bot.fly.dev/webhook",
+                            json=body,
+                            headers={"Content-Type": "application/json"},
+                        )
+                    logger.info(f"[LAW MINISTER] Forwarded webhook -> {resp.status_code}")
+                    return {"status": "ok", "routed_to": "law-minister-bot"}
+    except Exception as e:
+        logger.error(f"[LAW MINISTER] Forward failed: {e}")
+    # ── End Law Minister routing ──────────────────────────────────────
+
     # Still need to handle webhook verification even when disabled
     if not BOT_ENABLED:
         # But don't skip status updates / verification GETs
