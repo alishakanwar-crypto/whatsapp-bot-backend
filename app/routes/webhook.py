@@ -2057,12 +2057,18 @@ async def _forward_query_to_class_teacher(
     wa_success = False
     email_success = False
 
-    # Contextualized media caption so teacher knows WHO sent it
-    _ct_media_caption = (
-        f"\U0001f4e9 Message from {parent_label}:\n\n"
-        f"\"{message_text[:400]}\"\n\n"
-        f"Please reply — your response will be forwarded to the parent."
-    )
+    # Download media once — reuse for both WhatsApp and email
+    _dl_bytes: bytes | None = None
+    _dl_mime: str | None = None
+    _media_filename = "file"
+    if media_info and media_info.get("cloud_media_id"):
+        from app.services.whatsapp_service import download_cloud_media as _download_media
+        _dl_bytes, _dl_mime = await _download_media(media_info["cloud_media_id"])
+        _media_filename = media_info.get("filename", "file")
+        if _dl_bytes:
+            logger.info(f"[PARENT→TEACHER] Downloaded {len(_dl_bytes)} bytes of media for relay")
+        else:
+            logger.error(f"[PARENT→TEACHER] Media download failed for {teacher_name}")
 
     # Forward via WhatsApp — ALWAYS use templates for media queries
     # (freeform silently fails outside 24-hr window with error 131047)
@@ -2070,7 +2076,6 @@ async def _forward_query_to_class_teacher(
         from app.services.whatsapp_service import (
             send_cloud_template_message as _send_tmpl,
             upload_media_bytes_cloud as _upload_media,
-            download_cloud_media as _download_media,
         )
 
         chat_id = _teacher_chat_id(teacher_phone)
@@ -2078,38 +2083,35 @@ async def _forward_query_to_class_teacher(
         if len(teacher_recipient) == 10:
             teacher_recipient = "91" + teacher_recipient
 
-        if media_info and media_info.get("cloud_media_id"):
-            # Download and re-upload media, then send via template
-            _dl_bytes, _dl_mime = await _download_media(media_info["cloud_media_id"])
-            if _dl_bytes:
-                _media_type = media_info.get("type", "")
-                _is_image = _media_type in ("imageMessage", "image")
-                _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
+        if _dl_bytes:
+            _media_type = media_info.get("type", "")
+            _is_image = _media_type in ("imageMessage", "image")
+            _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
 
-                _uploaded_id = await _upload_media(
-                    _dl_bytes, _dl_mime or "application/octet-stream",
-                    media_info.get("filename", "file"),
+            _uploaded_id = await _upload_media(
+                _dl_bytes, _dl_mime or "application/octet-stream",
+                _media_filename,
+            )
+            if _uploaded_id:
+                _hdr_img_id = _uploaded_id if _is_image else None
+                _hdr_doc_id = None if _is_image else _uploaded_id
+                _hdr_doc_fname = None if _is_image else _media_filename
+
+                wa_success = await _send_tmpl(
+                    teacher_recipient, _tmpl_name,
+                    body_params=[parent_label, message_text[:400]],
+                    header_image_id=_hdr_img_id,
+                    header_document_id=_hdr_doc_id,
+                    header_document_filename=_hdr_doc_fname,
                 )
-                if _uploaded_id:
-                    _hdr_img_id = _uploaded_id if _is_image else None
-                    _hdr_doc_id = None if _is_image else _uploaded_id
-                    _hdr_doc_fname = None if _is_image else media_info.get("filename", "file")
-
-                    wa_success = await _send_tmpl(
-                        teacher_recipient, _tmpl_name,
-                        body_params=[parent_label, message_text[:400]],
-                        header_image_id=_hdr_img_id,
-                        header_document_id=_hdr_doc_id,
-                        header_document_filename=_hdr_doc_fname,
-                    )
-                    if wa_success:
-                        logger.info(f"[PARENT→TEACHER] Template {_tmpl_name} with media sent to {teacher_name}")
-                    else:
-                        logger.error(f"[PARENT→TEACHER] Template send FAILED for {teacher_name}")
+                if wa_success:
+                    logger.info(f"[PARENT→TEACHER] Template {_tmpl_name} with media sent to {teacher_name}")
                 else:
-                    logger.error(f"[PARENT→TEACHER] Media re-upload failed for {teacher_name}")
+                    logger.error(f"[PARENT→TEACHER] Template send FAILED for {teacher_name}")
             else:
-                logger.error(f"[PARENT→TEACHER] Media download failed for {teacher_name}")
+                logger.error(f"[PARENT→TEACHER] Media re-upload failed for {teacher_name}")
+        elif media_info and media_info.get("cloud_media_id"):
+            logger.error(f"[PARENT→TEACHER] Skipping WA — media download had failed for {teacher_name}")
         else:
             # No media — send freeform text (best effort)
             wa_success = await send_whatsapp_message(chat_id, notification)
@@ -2129,7 +2131,7 @@ async def _forward_query_to_class_teacher(
                 original_message=message_text[:500],
             )
 
-    # Forward via email
+    # Forward via email — include attachment if media was downloaded
     if teacher_email:
         email_body = (
             f"Dear {teacher_name},\n\n"
@@ -2139,11 +2141,26 @@ async def _forward_query_to_class_teacher(
             f"forwarded back to the parent.\n\n"
             f"Regards,\nPPIS Bot"
         )
+        _email_attachments = None
+        if _dl_bytes:
+            # Determine file extension from MIME type
+            _ext_map = {
+                "image/jpeg": ".jpg", "image/png": ".png",
+                "image/webp": ".webp", "application/pdf": ".pdf",
+                "application/msword": ".doc",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            }
+            _ext = _ext_map.get(_dl_mime, ".bin") if _dl_mime else ".bin"
+            _att_name = _media_filename if "." in _media_filename else f"attachment{_ext}"
+            _email_attachments = [(_att_name, _dl_bytes)]
+            logger.info(f"[PARENT→TEACHER] Email will include attachment: {_att_name} ({len(_dl_bytes)} bytes)")
+
         email_success = await send_email_async(
             teacher_email,
             f"PPIS Bot: Query from {parent_label}",
             email_body,
             "PP International School",
+            attachments=_email_attachments,
         )
         if email_success:
             logger.info(
