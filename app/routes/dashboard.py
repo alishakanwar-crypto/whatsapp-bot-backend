@@ -254,6 +254,7 @@ async def report_attendance(request: Request):
                     tpl_name, tpl_lang = _attendance_template(person_id)
 
                     phone_list = [p.strip() for p in phones.split(",") if p.strip()]
+                    _record_notified = False
                     for ph in phone_list:
                         digits = "".join(c for c in ph if c.isdigit())
                         if len(digits) == 10:
@@ -270,11 +271,12 @@ async def report_attendance(request: Request):
                                     f"{name} ({person_id}) to {digits}"
                                 )
                                 backend_notified += 1
+                                _record_notified = True
                             else:
                                 logger.warning(
                                     f"Backend notification failed for {name} to {digits}"
                                 )
-                    if backend_notified > 0:
+                    if _record_notified:
                         notified = 1
 
             # Check if already reported today for this person

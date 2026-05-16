@@ -5762,23 +5762,22 @@ async def receive_cloud_api_message(request: Request):
                     await send_whatsapp_message(reply_to, _help_msg)
                     return {"status": "ok"}
 
-        # --- Parent → Class Teacher routing ---
-        # If the sender is a known parent, auto-route their query to the
-        # respective class teacher (based on child's grade in PI sheet).
-        # This ensures controlled parent–teacher communication with strict
-        # class-wise boundaries.
-        # Include quoted message context so teacher sees the full conversation
-        routed_text = message_text
-        if quoted_context_text:
-            routed_text = (
-                f"[Replying to: \"{quoted_context_text[:300]}\"]\n\n"
-                f"{message_text}"
+        # --- Parent → Class Teacher routing (media queries only) ---
+        # Only auto-route when parent sends media (image/doc) — these are
+        # forwarding requests that GPT can't handle. Text-only questions
+        # go to GPT first so the bot can answer from school knowledge.
+        if media_info and media_info.get("cloud_media_id"):
+            routed_text = message_text
+            if quoted_context_text:
+                routed_text = (
+                    f"[Replying to: \"{quoted_context_text[:300]}\"]\n\n"
+                    f"{message_text}"
+                )
+            parent_routed = await try_route_parent_to_class_teacher(
+                sender, routed_text, reply_to, media_info,
             )
-        parent_routed = await try_route_parent_to_class_teacher(
-            sender, routed_text, reply_to, media_info,
-        )
-        if parent_routed:
-            return {"status": "ok"}
+            if parent_routed:
+                return {"status": "ok"}
 
         # --- Admin/teacher → Class Teacher forwarding ---
         # If sender is admin/teacher and message mentions "ct", "class teacher",
@@ -5855,35 +5854,7 @@ async def receive_cloud_api_message(request: Request):
                     await send_whatsapp_message(reply_to, ask_grade)
                     return {"status": "ok"}
 
-        # --- Known parent: skip GPT, forward to class teacher directly ---
-        _parent_children = await _lookup_parent_child_class(sender)
-        if _parent_children:
-            # For known parents, forward query to class teacher instead of GPT
-            child = _parent_children[0]
-            teacher_entry = find_teacher_by_grade(child["grade"])
-            if not teacher_entry:
-                for entry in TEACHER_DATA:
-                    entry_grade_low = entry["grade"].lower().replace(" ", "")
-                    child_grade_low = child["grade"].lower().replace(" ", "")
-                    if child_grade_low == entry_grade_low or child_grade_low in entry_grade_low:
-                        teacher_entry = entry
-                        break
-
-            if teacher_entry:
-                _custom_confirm = (
-                    "I will forward your query to the Class Teacher, "
-                    "once she replies, I'll share her response with you.\n\n"
-                    "Thanks and regards,\nPP International School"
-                )
-                routed = await _forward_query_to_class_teacher(
-                    sender, message_text, reply_to, child,
-                    teacher_entry, media_info,
-                    custom_confirm=_custom_confirm,
-                )
-                if routed:
-                    return {"status": "ok"}
-
-        # --- GPT fallback (for admins, teachers, or unknown senders) ---
+        # --- GPT answers first (with school knowledge), teacher fallback if unknown ---
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
 
@@ -5898,8 +5869,35 @@ async def receive_cloud_api_message(request: Request):
 
         ai_response = await generate_response(gpt_query, system_prompt, history)
 
-        # Check if the bot couldn't answer
+        # If GPT couldn't answer → forward to class teacher for known parents
         if _is_unknown_response(ai_response):
+            _parent_children = await _lookup_parent_child_class(sender)
+            if _parent_children:
+                child = _parent_children[0]
+                teacher_entry = find_teacher_by_grade(child["grade"])
+                if not teacher_entry:
+                    for entry in TEACHER_DATA:
+                        entry_grade_low = entry["grade"].lower().replace(" ", "")
+                        child_grade_low = child["grade"].lower().replace(" ", "")
+                        if child_grade_low == entry_grade_low or child_grade_low in entry_grade_low:
+                            teacher_entry = entry
+                            break
+
+                if teacher_entry:
+                    _custom_confirm = (
+                        "I will forward your query to the Class Teacher, "
+                        "once she replies, I'll share her response with you.\n\n"
+                        "Thanks and regards,\nPP International School"
+                    )
+                    routed = await _forward_query_to_class_teacher(
+                        sender, message_text, reply_to, child,
+                        teacher_entry, media_info,
+                        custom_confirm=_custom_confirm,
+                    )
+                    if routed:
+                        return {"status": "ok"}
+
+            # Non-parent or no teacher found — show escalation contacts
             await save_pending_query(sender, reply_to, message_text)
             from app.services.openai_service import _is_hindi
 
