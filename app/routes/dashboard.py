@@ -144,14 +144,17 @@ async def report_attendance(request: Request):
     now_ist = datetime.now(ist)
     day_name = now_ist.strftime("%A")
 
-    # Block on Sundays
+    # Block entirely on Sundays (no one works)
     if day_name == "Sunday":
         return {"status": "blocked", "reason": "Sunday — school is closed", "inserted": 0}
-    # Block on 2nd Saturday only
-    if day_name == "Saturday":
+    # Block entirely on 2nd Saturday (no one works)
+    is_saturday = day_name == "Saturday"
+    if is_saturday:
         sat_number = (now_ist.day - 1) // 7 + 1
         if sat_number == 2:
             return {"status": "blocked", "reason": "2nd Saturday — school is closed", "inserted": 0}
+    # Flag: students are blocked on ALL Saturdays (teachers may still work)
+    _block_students_today = is_saturday
     # Block on holidays
     today_str = now_ist.strftime("%Y-%m-%d")
     try:
@@ -199,6 +202,12 @@ async def report_attendance(request: Request):
             notified = 1 if rec.get("notification_sent") else 0
             phones = rec.get("parent_phones", "")
             logged_at = rec.get("logged_at", datetime.now().isoformat())
+
+            # Skip student records on ALL Saturdays (teachers/principals still allowed)
+            if _block_students_today and not person_id.startswith(("TEACHER_", "PRINCIPAL_")):
+                rejected += 1
+                logger.info(f"Student attendance skipped on Saturday: {name} ({person_id})")
+                continue
 
             # Confidence floor: reject low-confidence matches at backend level
             if confidence < MINIMUM_CONFIDENCE:
