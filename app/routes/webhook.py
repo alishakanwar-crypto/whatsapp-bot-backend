@@ -795,12 +795,24 @@ async def forward_to_teachers_and_confirm(
             f"Please reply — your response will be forwarded to the parent."
         )
 
+        # Download media once — reuse for both WhatsApp and email
+        _dl_bytes: bytes | None = None
+        _dl_mime: str | None = None
+        _media_filename = "file"
+        if media_info and media_info.get("cloud_media_id"):
+            from app.services.whatsapp_service import download_cloud_media as _download_media
+            _dl_bytes, _dl_mime = await _download_media(media_info["cloud_media_id"])
+            _media_filename = media_info.get("filename", "file")
+            if _dl_bytes:
+                logger.info(f"[FWD] Downloaded {len(_dl_bytes)} bytes of media for relay to {entry['teacher']}")
+            else:
+                logger.error(f"[FWD] Media download failed for {entry['teacher']}")
+
         wa_success = False
         if teacher_phone:
             from app.services.whatsapp_service import (
                 send_cloud_template_message as _send_tmpl,
                 upload_media_bytes_cloud as _upload_media,
-                download_cloud_media as _download_media,
             )
 
             chat_id = _teacher_chat_id(teacher_phone)
@@ -811,38 +823,35 @@ async def forward_to_teachers_and_confirm(
             # ALWAYS use templates for media queries — freeform silently
             # fails outside the 24-hour window (Cloud API returns 200 but
             # delivery fails with error 131047).
-            if media_info and media_info.get("cloud_media_id"):
-                # Download media from Cloud API and re-upload for template
-                _dl_bytes, _dl_mime = await _download_media(media_info["cloud_media_id"])
-                if _dl_bytes:
-                    _media_type = media_info.get("type", "")
-                    _is_image = _media_type in ("imageMessage", "image")
-                    _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
+            if _dl_bytes:
+                _media_type = media_info.get("type", "") if media_info else ""
+                _is_image = _media_type in ("imageMessage", "image")
+                _tmpl_name = "ppis_parent_query_1" if _is_image else "ppis_parent_query_2"
 
-                    _uploaded_id = await _upload_media(
-                        _dl_bytes, _dl_mime or "application/octet-stream",
-                        media_info.get("filename", "file"),
+                _uploaded_id = await _upload_media(
+                    _dl_bytes, _dl_mime or "application/octet-stream",
+                    _media_filename,
+                )
+                if _uploaded_id:
+                    _hdr_img_id = _uploaded_id if _is_image else None
+                    _hdr_doc_id = None if _is_image else _uploaded_id
+                    _hdr_doc_fname = None if _is_image else _media_filename
+
+                    wa_success = await _send_tmpl(
+                        t_recipient, _tmpl_name,
+                        body_params=[parent_label, message_text[:400]],
+                        header_image_id=_hdr_img_id,
+                        header_document_id=_hdr_doc_id,
+                        header_document_filename=_hdr_doc_fname,
                     )
-                    if _uploaded_id:
-                        _hdr_img_id = _uploaded_id if _is_image else None
-                        _hdr_doc_id = None if _is_image else _uploaded_id
-                        _hdr_doc_fname = None if _is_image else media_info.get("filename", "file")
-
-                        wa_success = await _send_tmpl(
-                            t_recipient, _tmpl_name,
-                            body_params=[parent_label, message_text[:400]],
-                            header_image_id=_hdr_img_id,
-                            header_document_id=_hdr_doc_id,
-                            header_document_filename=_hdr_doc_fname,
-                        )
-                        if wa_success:
-                            logger.info(f"[FWD] Template {_tmpl_name} with media sent to {entry['teacher']}")
-                        else:
-                            logger.error(f"[FWD] Template send FAILED for {entry['teacher']}")
+                    if wa_success:
+                        logger.info(f"[FWD] Template {_tmpl_name} with media sent to {entry['teacher']}")
                     else:
-                        logger.error(f"[FWD] Media re-upload failed for {entry['teacher']}")
+                        logger.error(f"[FWD] Template send FAILED for {entry['teacher']}")
                 else:
-                    logger.error(f"[FWD] Media download failed for {entry['teacher']}")
+                    logger.error(f"[FWD] Media re-upload failed for {entry['teacher']}")
+            elif media_info and media_info.get("cloud_media_id"):
+                logger.error(f"[FWD] Skipping WA — media download had failed for {entry['teacher']}")
             else:
                 # No media — send freeform text (best effort)
                 wa_success = await send_whatsapp_message(chat_id, notification)
@@ -861,10 +870,25 @@ async def forward_to_teachers_and_confirm(
                 f"Kindly reply to this email and your response will be forwarded back to the parent.\n\n"
                 f"Regards,\nPPIS Bot"
             )
+            _email_attachments = None
+            if _dl_bytes:
+                _ext_map = {
+                    "image/jpeg": ".jpg", "image/png": ".png",
+                    "image/webp": ".webp", "application/pdf": ".pdf",
+                    "application/msword": ".doc",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                }
+                _ext = _ext_map.get(_dl_mime, ".bin") if _dl_mime else ".bin"
+                _att_name = _media_filename if "." in _media_filename else f"attachment{_ext}"
+                _email_attachments = [(_att_name, _dl_bytes)]
+                logger.info(f"[FWD] Email will include attachment: {_att_name} ({len(_dl_bytes)} bytes)")
+
             email_success = await send_email_async(
                 teacher_email,
                 f"PPIS Bot: Query from {parent_label}",
                 email_body,
+                "PP International School",
+                attachments=_email_attachments,
             )
             if email_success:
                 logger.info(f"Forwarded via email to {entry['teacher']} ({teacher_email})")
@@ -5598,6 +5622,33 @@ async def receive_cloud_api_message(request: Request):
             await save_message(bot_phone, sender, _act_msg, "whatsapp", "outgoing")
             await send_whatsapp_message(reply_to, _act_msg)
             return {"status": "ok"}
+
+        # --- Bare child-name detection ---
+        # When a parent types just their child's name (e.g. "Suhaan Ahuja"),
+        # ask what they want to do instead of routing to GPT or class teacher.
+        _bare_children = await _lookup_parent_child_class(sender)
+        if _bare_children:
+            _msg_stripped = re.sub(r"[^a-zA-Z\s]", "", message_text).strip().lower()
+            for _bc in _bare_children:
+                _child_lower = _bc["student_name"].strip().lower()
+                # Match if message is just the child's name (full or first name)
+                _first_name = _child_lower.split()[0] if _child_lower else ""
+                if _msg_stripped and (
+                    _msg_stripped == _child_lower
+                    or _msg_stripped == _first_name
+                ):
+                    _help_msg = (
+                        f"Dear Parent,\n\n"
+                        f"What would you like to do?\n\n"
+                        f"- To see your child's classroom, type *'Show my child'*\n"
+                        f"- To send a query to the teacher, please type your question\n"
+                        f"- To share homework for checking, send the image with caption *'check'*\n\n"
+                        f"Thank you.\n"
+                        f"Warm regards,\nPP International School"
+                    )
+                    await save_message(bot_phone, sender, _help_msg, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _help_msg)
+                    return {"status": "ok"}
 
         # --- Parent → Class Teacher routing ---
         # If the sender is a known parent, auto-route their query to the
