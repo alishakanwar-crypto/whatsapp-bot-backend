@@ -5567,6 +5567,33 @@ async def receive_cloud_api_message(request: Request):
             await send_whatsapp_message(reply_to, _act_msg)
             return {"status": "ok"}
 
+        # --- Bare child-name detection ---
+        # When a parent types just their child's name (e.g. "Suhaan Ahuja"),
+        # ask what they want to do instead of routing to GPT or class teacher.
+        _bare_children = await _lookup_parent_child_class(sender)
+        if _bare_children:
+            _msg_stripped = re.sub(r"[^a-zA-Z\s]", "", message_text).strip().lower()
+            for _bc in _bare_children:
+                _child_lower = _bc["student_name"].strip().lower()
+                # Match if message is just the child's name (full or first name)
+                _first_name = _child_lower.split()[0] if _child_lower else ""
+                if _msg_stripped and (
+                    _msg_stripped == _child_lower
+                    or _msg_stripped == _first_name
+                ):
+                    _help_msg = (
+                        f"Dear Parent,\n\n"
+                        f"What would you like to do?\n\n"
+                        f"- To see your child's classroom, type *'Show my child'*\n"
+                        f"- To send a query to the teacher, please type your question\n"
+                        f"- To share homework for checking, send the image with caption *'check'*\n\n"
+                        f"Thank you.\n"
+                        f"Warm regards,\nPP International School"
+                    )
+                    await save_message(bot_phone, sender, _help_msg, "whatsapp", "outgoing")
+                    await send_whatsapp_message(reply_to, _help_msg)
+                    return {"status": "ok"}
+
         # --- Parent → Class Teacher routing ---
         # If the sender is a known parent, auto-route their query to the
         # respective class teacher (based on child's grade in PI sheet).
