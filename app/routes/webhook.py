@@ -5089,13 +5089,17 @@ async def receive_cloud_api_message(request: Request):
                     f"caption='{caption_raw[:60]}' — asking user intent"
                 )
                 doc_ask_msg = (
-                    "This looks like a document or book page, not a photo for "
-                    "face registration.\n\n"
-                    "What would you like me to do with this?\n"
-                    "1. *Share with a teacher* — reply with the teacher's name\n"
-                    "2. *Check homework* — reply 'check'\n"
-                    "3. *Face registration* — please send a clear selfie/photo "
-                    "of the person's face instead"
+                    "This does not look like a photo for face registration.\n\n"
+                    "What would you like me to do?\n\n"
+                    "*Share with any teacher?*\n"
+                    "If yes, re-share the file with the caption: "
+                    "_Share this file with <teacher's name>_\n\n"
+                    "*Want it checked by a teacher?*\n"
+                    "Re-share the file with the caption: _Check_\n\n"
+                    "*For face registration:*\n"
+                    "Please send a clear selfie/photo with the name "
+                    "(if you are a staff member) or name and class "
+                    "(if you are a student of PPIS)."
                 )
                 await save_message(bot_phone, sender, doc_ask_msg, "whatsapp", "outgoing")
                 await send_whatsapp_message(reply_to, doc_ask_msg)
