@@ -57,6 +57,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info(f"STARTUP: synced {synced} teacher phone numbers from PI Sheet to face DB")
     except Exception as e:
         logger.error(f"STARTUP: face-phone sync failed: {e}", exc_info=True)
+    # Load subject-teacher mapping for homework routing
+    try:
+        from app.services.subject_teacher_service import refresh_subject_teacher_data, load_embedded_data
+        n = await refresh_subject_teacher_data()
+        if n <= 0:
+            n = load_embedded_data()
+        logger.info(f"STARTUP: Loaded {n} subject-teacher mappings")
+    except Exception as e:
+        logger.error(f"STARTUP: subject-teacher mapping load failed: {e}", exc_info=True)
     start_scheduler()
     yield
     stop_scheduler()

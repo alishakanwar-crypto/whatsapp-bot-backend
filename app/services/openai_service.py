@@ -844,6 +844,79 @@ async def generate_vision_response(
         return "I received your image but encountered an error processing it. Please try again."
 
 
+async def detect_homework_subject(
+    image_bytes: bytes,
+    mime_type: str,
+) -> dict:
+    """Use GPT-4o vision to identify ONLY the school subject of homework.
+
+    Returns {"subject": "Maths", "confidence": "high"/"medium"/"low",
+             "language": "English", "topic": "Algebra"}.
+    The AI does NOT grade, score, evaluate, or correct the work.
+    """
+    api_client = get_client()
+    if not api_client:
+        logger.error("[SUBJECT DETECT] OpenAI client not available")
+        return {"subject": "", "confidence": "low"}
+
+    import base64 as _b64
+    b64 = _b64.b64encode(image_bytes).decode()
+    data_uri = f"data:{mime_type};base64,{b64}"
+
+    prompt = (
+        "You are a school subject classifier. Look at this notebook/homework image "
+        "and identify ONLY the school subject it belongs to.\n\n"
+        "Possible subjects: Hindi, English, Mathematics/Maths, Science, Biology, "
+        "Chemistry, Physics, SST, History, Geography, Political Science, Economics, "
+        "Computer, GK, Sanskrit, French, German, EVS, Drawing/Art/Fine Arts, "
+        "Business Studies, Accounts, Entrepreneurship, Psychology, Physical Education.\n\n"
+        "Respond in this EXACT JSON format (no markdown, no explanation):\n"
+        '{"subject": "Maths", "confidence": "high", "language": "Hindi", "topic": "Fractions"}\n\n'
+        "Rules:\n"
+        "- 'subject' must be one of the subjects listed above\n"
+        "- 'confidence' must be 'high', 'medium', or 'low'\n"
+        "- 'language' is the language the work is written in\n"
+        "- 'topic' is a brief topic description\n"
+        "- If you CANNOT determine the subject, set subject to empty string "
+        'and confidence to "low"\n'
+        "- Do NOT evaluate, grade, score, or correct the work\n"
+        "- Do NOT provide any feedback about the work quality"
+    )
+
+    try:
+        resp = await api_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
+                ],
+            }],
+            max_tokens=200,
+            temperature=0.1,
+        )
+        raw = resp.choices[0].message.content.strip()
+        # Strip markdown code fences if present
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+
+        result = json.loads(raw)
+        logger.info(f"[SUBJECT DETECT] AI result: {result}")
+        return {
+            "subject": result.get("subject", ""),
+            "confidence": result.get("confidence", "low"),
+            "language": result.get("language", ""),
+            "topic": result.get("topic", ""),
+        }
+    except json.JSONDecodeError:
+        logger.error(f"[SUBJECT DETECT] Failed to parse AI response: {raw}")
+        return {"subject": "", "confidence": "low"}
+    except Exception as exc:
+        logger.error(f"[SUBJECT DETECT] OpenAI error: {exc}")
+        return {"subject": "", "confidence": "low"}
+
+
 async def generate_homework_review(
     image_bytes: bytes,
     mime_type: str,
