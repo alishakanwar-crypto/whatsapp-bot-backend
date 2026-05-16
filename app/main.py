@@ -1428,6 +1428,92 @@ async def homework_delivery_status():
     return _homework_delivery_status or {"running": False}
 
 
+@app.post("/api/homework/rename-doc")
+async def rename_homework_doc(request: Request):
+    """Rename a Google Doc title via Drive API.
+
+    Body JSON:
+      - doc_id: Google Doc ID
+      - new_title: new document title
+    """
+    body = await request.json()
+    doc_id = body.get("doc_id", "")
+    new_title = body.get("new_title", "")
+    if not doc_id or not new_title:
+        return {"status": "error", "error": "doc_id and new_title required"}
+
+    from app.services.homework_delivery_service import rename_google_doc
+    ok = await rename_google_doc(doc_id, new_title)
+    return {"status": "ok" if ok else "error", "doc_id": doc_id, "new_title": new_title}
+
+
+@app.post("/api/homework/create-doc")
+async def create_homework_doc_endpoint(request: Request):
+    """Create a new Google Doc and register it for homework delivery.
+
+    Body JSON:
+      - grade: e.g. "Grade 11C"
+      - title: document title (e.g. "PPIS Classwork & Homework - Grade 11C-HUMANITIES")
+    """
+    body = await request.json()
+    grade = body.get("grade", "")
+    title = body.get("title", "")
+    if not grade or not title:
+        return {"status": "error", "error": "grade and title required"}
+
+    from app.services.homework_delivery_service import (
+        create_google_doc, register_homework_doc,
+    )
+    result = await create_google_doc(title)
+    if not result:
+        return {"status": "error", "error": "Failed to create Google Doc"}
+
+    # Auto-register in the homework system
+    await register_homework_doc(grade, result["doc_id"], result["doc_url"])
+
+    return {
+        "status": "ok",
+        "grade": grade,
+        "doc_id": result["doc_id"],
+        "doc_url": result["doc_url"],
+    }
+
+
+@app.post("/api/homework/update-grade-name")
+async def update_homework_grade_name(request: Request):
+    """Update the grade name for an existing homework doc registration.
+
+    Body JSON:
+      - old_grade: current grade name (e.g. "Grade 11A")
+      - new_grade: new grade name (e.g. "Grade 11A-SCIENCE")
+      - doc_id: the doc_id to re-register under the new name
+      - doc_url: the doc URL
+    """
+    body = await request.json()
+    old_grade = body.get("old_grade", "")
+    new_grade = body.get("new_grade", "")
+    doc_id = body.get("doc_id", "")
+    doc_url = body.get("doc_url", "")
+    if not old_grade or not new_grade or not doc_id:
+        return {"status": "error", "error": "old_grade, new_grade, and doc_id required"}
+
+    from app.database import get_db
+    from app.services.homework_delivery_service import register_homework_doc
+    db = await get_db()
+    try:
+        # Delete old registration
+        await db.execute("DELETE FROM homework_docs WHERE grade = ?", (old_grade,))
+        # Also clean old state hash
+        await db.execute("DELETE FROM homework_doc_state WHERE grade = ?", (old_grade,))
+        await db.commit()
+    finally:
+        await db.close()
+
+    # Register under new name
+    ok = await register_homework_doc(new_grade, doc_id, doc_url)
+    return {"status": "ok" if ok else "error", "old_grade": old_grade, "new_grade": new_grade}
+
+
 @app.get("/privacy-policy")
 async def privacy_policy():
     from fastapi.responses import HTMLResponse
