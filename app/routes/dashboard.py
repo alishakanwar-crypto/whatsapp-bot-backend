@@ -1920,8 +1920,8 @@ async def attendance_monitoring():
                 "entry_validation": "required",
                 "anti_spoofing": "enabled",
                 "quality_filtering": "sharpness + brightness",
-                "time_window_student": "7:00-9:30 AM",
-                "time_window_teacher": "7:00-9:30 AM",
+                "time_window_student": "8:00-9:00 AM",
+                "time_window_teacher": "7:00-7:45 AM",
             },
             "alerts": _generate_monitoring_alerts(
                 confidence_stats, camera_stats, duplicates, total_records
