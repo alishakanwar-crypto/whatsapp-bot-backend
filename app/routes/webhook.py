@@ -5375,10 +5375,66 @@ async def receive_cloud_api_message(request: Request):
                         and not has_class_indicator
                     )
 
+                    # Single first-name face reg: if caption is just ONE
+                    # name word AND that name matches an already-registered
+                    # person, treat it as an additional photo for that person.
+                    _single_name_match: dict | None = None
+                    if (
+                        not _is_pure_name
+                        and len(_name_words) == 1
+                        and _caption_word_count == 1
+                        and not has_class_indicator
+                    ):
+                        _single_q = _name_words[0].lower()
+                        try:
+                            _sn_db = await get_db()
+                            _sn_cursor = await _sn_db.execute(
+                                "SELECT DISTINCT person_id, name, role, phone "
+                                "FROM agent_registered_faces "
+                                "WHERE LOWER(name) LIKE ? COLLATE NOCASE",
+                                (f"{_single_q}%",),
+                            )
+                            _sn_rows = await _sn_cursor.fetchall()
+                            await _sn_db.close()
+                            if _sn_rows:
+                                # Pick the best match: prefer exact first-name match
+                                for _sn_row in _sn_rows:
+                                    _sn_first = _sn_row["name"].split()[0].lower()
+                                    if _sn_first == _single_q:
+                                        _single_name_match = {
+                                            "person_id": _sn_row["person_id"],
+                                            "name": _sn_row["name"],
+                                            "role": _sn_row["role"],
+                                            "phone": _sn_row["phone"],
+                                        }
+                                        break
+                                if not _single_name_match and _sn_rows:
+                                    _single_name_match = {
+                                        "person_id": _sn_rows[0]["person_id"],
+                                        "name": _sn_rows[0]["name"],
+                                        "role": _sn_rows[0]["role"],
+                                        "phone": _sn_rows[0]["phone"],
+                                    }
+                                if _single_name_match:
+                                    logger.info(
+                                        f"[IMAGE HANDLER] Single-name '{_single_q}' matched "
+                                        f"existing person: {_single_name_match['name']} "
+                                        f"({_single_name_match['person_id']})"
+                                    )
+                                    _is_pure_name = True
+                        except Exception as _sn_err:
+                            logger.error(f"[IMAGE HANDLER] Single-name DB lookup error: {_sn_err}")
+
                     if _is_pure_name:
-                        _clean_name = _extract_person_name(caption_raw)
-                        if not _clean_name:
-                            _clean_name = f"Staff_{sender[-10:]}"
+                        # Use the matched person's full name when we
+                        # matched via single first-name lookup, so the
+                        # photo is filed under the same person_id.
+                        if _single_name_match:
+                            _clean_name = _single_name_match["name"]
+                        else:
+                            _clean_name = _extract_person_name(caption_raw)
+                            if not _clean_name:
+                                _clean_name = f"Staff_{sender[-10:]}"
 
                         logger.info(
                             f"[IMAGE HANDLER] Face registration from caption name "
