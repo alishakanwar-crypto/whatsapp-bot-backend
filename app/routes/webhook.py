@@ -5459,10 +5459,56 @@ async def receive_cloud_api_message(request: Request):
                             logger.error(f"[IMAGE HANDLER] Single-name DB lookup error: {_sn_err}")
 
                     if _is_pure_name:
-                        # Use the matched person's full name when we
-                        # matched via single first-name lookup, so the
-                        # photo is filed under the same person_id.
+                        # When matched via single first-name lookup,
+                        # verify the new photo is the same person before
+                        # adding it under the existing registration.
                         if _single_name_match:
+                            _identity_ok = True
+                            try:
+                                _fc_db = await get_db()
+                                _fc_cur = await _fc_db.execute(
+                                    "SELECT image_data FROM agent_registered_faces "
+                                    "WHERE person_id = ? AND image_data IS NOT NULL "
+                                    "LIMIT 1",
+                                    (_single_name_match["person_id"],),
+                                )
+                                _fc_row = await _fc_cur.fetchone()
+                                await _fc_db.close()
+
+                                if _fc_row and _fc_row["image_data"]:
+                                    _new_img = _img_bytes_cache
+                                    _new_mime = _img_mime_cache or "image/jpeg"
+                                    if not _new_img:
+                                        _fc_mid = media_info.get("cloud_media_id", "")
+                                        if _fc_mid:
+                                            from app.services.whatsapp_service import download_cloud_media as _dl_fc
+                                            _new_img, _new_mime = await _dl_fc(_fc_mid)
+                                    if _new_img:
+                                        from app.services.openai_service import compare_faces
+                                        _identity_ok = await compare_faces(
+                                            _new_img, _new_mime,
+                                            bytes(_fc_row["image_data"]),
+                                            "image/jpeg",
+                                        )
+                            except Exception as _fc_err:
+                                logger.error(f"[IMAGE HANDLER] Face compare error: {_fc_err}")
+
+                            if not _identity_ok:
+                                _reject_msg = (
+                                    "This doesn't seem like the same person as the "
+                                    f"previously registered *{_single_name_match['name']}*. "
+                                    "It appears to be a different identity altogether.\n\n"
+                                    "Kindly share your own photo from a different angle "
+                                    "with *full name*."
+                                )
+                                logger.info(
+                                    f"[IMAGE HANDLER] Face mismatch — rejecting photo "
+                                    f"for {_single_name_match['name']} from {sender}"
+                                )
+                                await save_message(bot_phone, sender, _reject_msg, "whatsapp", "outgoing")
+                                await send_whatsapp_message(reply_to, _reject_msg)
+                                return {"status": "ok"}
+
                             _clean_name = _single_name_match["name"]
                         else:
                             _clean_name = _extract_person_name(caption_raw)
