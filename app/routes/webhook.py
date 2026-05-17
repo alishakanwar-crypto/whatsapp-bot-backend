@@ -5378,6 +5378,8 @@ async def receive_cloud_api_message(request: Request):
                     # Single first-name face reg: if caption is just ONE
                     # name word AND that name matches an already-registered
                     # person, treat it as an additional photo for that person.
+                    # If multiple distinct people share the same first name,
+                    # ask the sender to resend with the full name.
                     _single_name_match: dict | None = None
                     if (
                         not _is_pure_name
@@ -5397,28 +5399,59 @@ async def receive_cloud_api_message(request: Request):
                             _sn_rows = await _sn_cursor.fetchall()
                             await _sn_db.close()
                             if _sn_rows:
-                                # Pick the best match: prefer exact first-name match
+                                # Collect unique persons whose first name
+                                # matches exactly (not just prefix).
+                                _first_name_matches: list[dict] = []
+                                _seen_pids: set[str] = set()
                                 for _sn_row in _sn_rows:
                                     _sn_first = _sn_row["name"].split()[0].lower()
-                                    if _sn_first == _single_q:
-                                        _single_name_match = {
-                                            "person_id": _sn_row["person_id"],
+                                    _sn_pid = _sn_row["person_id"]
+                                    if _sn_first == _single_q and _sn_pid not in _seen_pids:
+                                        _seen_pids.add(_sn_pid)
+                                        _first_name_matches.append({
+                                            "person_id": _sn_pid,
                                             "name": _sn_row["name"],
                                             "role": _sn_row["role"],
                                             "phone": _sn_row["phone"],
-                                        }
-                                        break
-                                if not _single_name_match and _sn_rows:
+                                        })
+
+                                if len(_first_name_matches) == 1:
+                                    _single_name_match = _first_name_matches[0]
+                                    logger.info(
+                                        f"[IMAGE HANDLER] Single-name '{_single_q}' matched "
+                                        f"exactly one person: {_single_name_match['name']} "
+                                        f"({_single_name_match['person_id']})"
+                                    )
+                                    _is_pure_name = True
+                                elif len(_first_name_matches) > 1:
+                                    _names_list = "\n".join(
+                                        f"- {m['name']}" for m in _first_name_matches
+                                    )
+                                    _ambig_msg = (
+                                        f"Multiple people are registered with the "
+                                        f"first name *{caption_raw}*:\n\n"
+                                        f"{_names_list}\n\n"
+                                        f"Please resend the photo with the *full name* "
+                                        f"so we can register it correctly."
+                                    )
+                                    logger.info(
+                                        f"[IMAGE HANDLER] Single-name '{_single_q}' matched "
+                                        f"{len(_first_name_matches)} people — asking for full name"
+                                    )
+                                    await save_message(bot_phone, sender, _ambig_msg, "whatsapp", "outgoing")
+                                    await send_whatsapp_message(reply_to, _ambig_msg)
+                                    return {"status": "ok"}
+                                elif not _first_name_matches and len(_sn_rows) == 1:
+                                    # Prefix-only match (single result)
                                     _single_name_match = {
                                         "person_id": _sn_rows[0]["person_id"],
                                         "name": _sn_rows[0]["name"],
                                         "role": _sn_rows[0]["role"],
                                         "phone": _sn_rows[0]["phone"],
                                     }
-                                if _single_name_match:
                                     logger.info(
-                                        f"[IMAGE HANDLER] Single-name '{_single_q}' matched "
-                                        f"existing person: {_single_name_match['name']} "
+                                        f"[IMAGE HANDLER] Single-name '{_single_q}' prefix-matched "
+                                        f"person: {_single_name_match['name']} "
                                         f"({_single_name_match['person_id']})"
                                     )
                                     _is_pure_name = True
