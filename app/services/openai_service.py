@@ -900,6 +900,62 @@ async def classify_image_for_face_registration(
         return "face"
 
 
+async def compare_faces(
+    new_image_bytes: bytes,
+    new_mime: str,
+    existing_image_bytes: bytes,
+    existing_mime: str,
+) -> bool:
+    """Compare two face images using GPT-4o-mini Vision.
+
+    Returns True if both images appear to be the same person,
+    False if they look like different people.
+    """
+    api_client = get_client()
+    if not api_client:
+        logger.warning("[FACE COMPARE] OpenAI client not available — defaulting to True")
+        return True
+
+    import base64 as _b64
+    b64_new = _b64.b64encode(new_image_bytes).decode()
+    b64_existing = _b64.b64encode(existing_image_bytes).decode()
+    uri_new = f"data:{new_mime};base64,{b64_new}"
+    uri_existing = f"data:{existing_mime};base64,{b64_existing}"
+
+    prompt = (
+        "You are a face verification system. Compare these two photos.\n\n"
+        "Image 1 is an already-registered photo of a person.\n"
+        "Image 2 is a new photo someone is trying to register under "
+        "the same name.\n\n"
+        "Do both images show the SAME person? Consider face shape, "
+        "features, skin tone, hair, and overall appearance.\n\n"
+        "Respond with ONLY one word: SAME or DIFFERENT\n"
+        "Nothing else."
+    )
+
+    try:
+        response = await api_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": uri_existing, "detail": "low"}},
+                    {"type": "image_url", "image_url": {"url": uri_new, "detail": "low"}},
+                ],
+            }],
+            max_tokens=10,
+            temperature=0.0,
+        )
+        reply = (response.choices[0].message.content or "").strip().upper()
+        is_same = "SAME" in reply
+        logger.info(f"[FACE COMPARE] Result: {'same' if is_same else 'different'} (raw={reply})")
+        return is_same
+    except Exception as e:
+        logger.error(f"[FACE COMPARE] Vision API error: {e}")
+        return True  # default to allowing registration on error
+
+
 async def detect_homework_subject(
     image_bytes: bytes,
     mime_type: str,
