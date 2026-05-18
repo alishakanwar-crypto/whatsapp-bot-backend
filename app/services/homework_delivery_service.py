@@ -631,7 +631,7 @@ async def run_homework_delivery(period: int) -> dict:
 
         # Log delivery
         status_label = "delivered" if sent > 0 else "all_failed"
-        await _log_homework_delivery(grade, period, homework, sent, failed,
+        await _log_homework_delivery(grade, period, new_portion, sent, failed,
                                       status_label)
 
         results["total_parents_sent"] += sent
@@ -641,7 +641,7 @@ async def run_homework_delivery(period: int) -> dict:
             "status": status_label,
             "sent": sent,
             "failed": failed,
-            "content_preview": homework[:100],
+            "content_preview": new_portion[:100],
         })
 
         # Pause between grades to avoid Meta API rate limiting
@@ -697,7 +697,7 @@ async def _send_homework_to_parents(grade: str, homework: str,
     # Meta rejects: newlines, tabs, 4+ consecutive spaces, some Unicode dashes
     hw_content = homework
     hw_content = hw_content.replace("\u2013", "-").replace("\u2014", "-")
-    hw_content = hw_content.replace("\r\n", " | ").replace("\n", " | ").replace("\r", " | ")
+    hw_content = re.sub(r"(\r\n|\n|\r)+", " | ", hw_content)
     hw_content = hw_content.replace("\t", " ")
     hw_content = re.sub(r"[ ]{4,}", "   ", hw_content)
     hw_content = re.sub(r"[ ]+", " ", hw_content)

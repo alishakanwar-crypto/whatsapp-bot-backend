@@ -2066,7 +2066,7 @@ async def send_review_copies(payload: dict):
 
         hw = content
         hw = hw.replace("\u2013", "-").replace("\u2014", "-")
-        hw = hw.replace("\r\n", " | ").replace("\n", " | ").replace("\r", " | ")
+        hw = _re.sub(r"(\r\n|\n|\r)+", " | ", hw)
         hw = hw.replace("\t", " ")
         hw = _re.sub(r"[ ]{4,}", "   ", hw)
         hw = _re.sub(r"[ ]+", " ", hw)
