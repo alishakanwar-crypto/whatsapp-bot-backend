@@ -608,18 +608,23 @@ async def run_homework_delivery(period: int) -> dict:
         await _update_content_hash(grade, new_hash, homework)
 
         # Log delivery
+        status_label = "delivered" if sent > 0 else "all_failed"
         await _log_homework_delivery(grade, period, homework, sent, failed,
-                                      "delivered" if sent > 0 else "no_parents")
+                                      status_label)
 
         results["total_parents_sent"] += sent
         results["total_parents_failed"] += failed
         results["details"].append({
             "grade": grade,
-            "status": "delivered",
+            "status": status_label,
             "sent": sent,
             "failed": failed,
             "content_preview": homework[:100],
         })
+
+        # Pause between grades to avoid Meta API rate limiting
+        if sent > 0 or failed > 0:
+            await asyncio.sleep(5.0)
 
     logger.info(
         f"=== HOMEWORK DELIVERY COMPLETE: {results['grades_with_homework']}/"
@@ -638,6 +643,9 @@ async def _send_homework_to_parents(grade: str, homework: str,
       {{1}} = Class, {{2}} = Period, {{3}} = Content
     No image header.
 
+    Includes retry logic: if a send fails, retries up to 2 more times
+    with exponential backoff (2s, 5s) to handle Meta API rate limiting.
+
     Returns (sent_count, failed_count).
     """
     from app.services.whatsapp_service import send_cloud_template_message
@@ -648,33 +656,69 @@ async def _send_homework_to_parents(grade: str, homework: str,
         return 0, 0
 
     phones_to_send = _deduplicate_phones(parents)
+    logger.info(
+        f"[HW DELIVERY] {grade}: {len(parents)} parent records → "
+        f"{len(phones_to_send)} unique phones to notify"
+    )
 
     # Truncate content for template parameter limit (~1024 chars)
     hw_content = homework[:900] if len(homework) > 900 else homework
 
     sent = 0
     failed = 0
+    consecutive_failures = 0
+    MAX_RETRIES = 2
+    RETRY_DELAYS = [2.0, 5.0]
 
     for phone in phones_to_send:
-        try:
-            ok = await send_cloud_template_message(
-                phone,
-                "ppis_classwork_homework",
-                body_params=[grade, period_label, hw_content],
-            )
+        ok = False
+        for attempt in range(1 + MAX_RETRIES):
+            try:
+                ok = await send_cloud_template_message(
+                    phone,
+                    "ppis_classwork_homework",
+                    body_params=[grade, period_label, hw_content],
+                )
+                if ok:
+                    break
+                # Failed — log and retry
+                if attempt < MAX_RETRIES:
+                    delay = RETRY_DELAYS[attempt]
+                    logger.warning(
+                        f"[HW DELIVERY] Send to {phone} failed (attempt {attempt + 1}), "
+                        f"retrying in {delay}s..."
+                    )
+                    await asyncio.sleep(delay)
+            except Exception as e:
+                logger.error(
+                    f"[HW DELIVERY] Exception sending to {phone} "
+                    f"(attempt {attempt + 1}): {e}"
+                )
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(RETRY_DELAYS[attempt])
 
-            if ok:
-                sent += 1
-            else:
-                failed += 1
-
-            await asyncio.sleep(0.3)
-
-        except Exception as e:
-            logger.error(f"Error sending homework to {phone}: {e}")
+        if ok:
+            sent += 1
+            consecutive_failures = 0
+        else:
             failed += 1
+            consecutive_failures += 1
 
-    logger.info(f"Homework delivery for {grade}: {sent} sent, {failed} failed")
+        # If 10+ consecutive failures, likely rate-limited — pause 30s
+        if consecutive_failures == 10:
+            logger.warning(
+                f"[HW DELIVERY] {grade}: 10 consecutive failures — "
+                f"pausing 30s for rate limit cooldown"
+            )
+            await asyncio.sleep(30.0)
+            consecutive_failures = 0
+
+        await asyncio.sleep(0.5)
+
+    logger.info(
+        f"[HW DELIVERY] {grade}: {sent} sent, {failed} failed "
+        f"out of {len(phones_to_send)} phones"
+    )
     return sent, failed
 
 
@@ -693,25 +737,33 @@ async def _send_no_homework_to_parents(grade: str, period_label: str) -> tuple[i
 
     sent = 0
     failed = 0
+    MAX_RETRIES = 2
+    RETRY_DELAYS = [2.0, 5.0]
 
     for phone in phones_to_send:
-        try:
-            ok = await send_cloud_template_message(
-                phone,
-                "ppis_classwork_homework",
-                body_params=[grade, period_label, "No Homework Assigned"],
-            )
+        ok = False
+        for attempt in range(1 + MAX_RETRIES):
+            try:
+                ok = await send_cloud_template_message(
+                    phone,
+                    "ppis_classwork_homework",
+                    body_params=[grade, period_label, "No Homework Assigned"],
+                )
+                if ok:
+                    break
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(RETRY_DELAYS[attempt])
+            except Exception as e:
+                logger.error(f"Error sending no-homework to {phone}: {e}")
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(RETRY_DELAYS[attempt])
 
-            if ok:
-                sent += 1
-            else:
-                failed += 1
-
-            await asyncio.sleep(0.3)
-
-        except Exception as e:
-            logger.error(f"Error sending no-homework to {phone}: {e}")
+        if ok:
+            sent += 1
+        else:
             failed += 1
+
+        await asyncio.sleep(0.5)
 
     return sent, failed
 
