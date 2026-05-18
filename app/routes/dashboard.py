@@ -2026,3 +2026,62 @@ async def trigger_daily_clear():
     from app.services.homework_delivery_service import daily_clear_all_docs
     result = await daily_clear_all_docs()
     return result
+
+
+@router.post("/homework/send-review-copies", dependencies=[Depends(verify_dashboard_secret)])
+async def send_review_copies(payload: dict):
+    """Send copies of today's delivered homework to a review phone number."""
+    import re as _re
+    import asyncio as _asyncio
+    from app.services.whatsapp_service import send_cloud_template_message
+
+    phone = payload.get("phone", "")
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone required")
+
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT DISTINCT grade, period, content FROM homework_delivery_logs "
+        "WHERE date(created_at) = date('now') AND status = 'delivered' "
+        "ORDER BY period, grade"
+    )
+
+    period_labels = {
+        0: "Assembly (08:00-08:10)", 1: "Period 1 (08:10-08:45)",
+        2: "Period 2 (09:00-09:30)", 3: "Period 3 (09:30-10:00)",
+        4: "Period 4 (10:00-10:30)", 5: "Period 5 (10:30-11:00)",
+        6: "Period 6 (11:00-11:30)",
+    }
+
+    seen: set[tuple[str, int]] = set()
+    sent = 0
+    failed = 0
+    details = []
+    for row in rows:
+        grade, period, content = row[0], row[1], row[2]
+        key = (grade, period)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        hw = content
+        hw = hw.replace("\u2013", "-").replace("\u2014", "-")
+        hw = _re.sub(r"(\r\n|\n|\r)+", " | ", hw)
+        hw = hw.replace("\t", " ")
+        hw = _re.sub(r"[ ]{4,}", "   ", hw)
+        hw = _re.sub(r"[ ]+", " ", hw)
+        hw = hw.strip()[:900]
+
+        label = period_labels.get(period, f"Period {period}")
+        ok = await send_cloud_template_message(
+            phone, "ppis_classwork_homework",
+            body_params=[grade, label, hw],
+        )
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+        details.append({"grade": grade, "period": period, "status": "ok" if ok else "failed"})
+        await _asyncio.sleep(1)
+
+    return {"phone": phone, "sent": sent, "failed": failed, "details": details}
