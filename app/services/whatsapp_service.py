@@ -353,10 +353,21 @@ async def send_cloud_template_message(
                     f"id: {data['messages'][0]['id'][:30]}"
                 )
                 return True
-            logger.error(f"Cloud API template send failed: {data}")
+            err_code = ""
+            err_msg = ""
+            if "error" in data:
+                err_code = data["error"].get("code", "")
+                err_msg = data["error"].get("message", "")
+            logger.error(
+                f"Cloud API template '{template_name}' to {recipient} failed: "
+                f"HTTP {response.status_code}, code={err_code}, "
+                f"msg={err_msg}, full={data}"
+            )
             return False
     except Exception as e:
-        logger.error(f"Error sending Cloud API template: {e}")
+        logger.error(
+            f"Cloud API template '{template_name}' to {recipient} exception: {e}"
+        )
         return False
 
 
