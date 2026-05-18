@@ -666,12 +666,13 @@ async def _send_homework_to_parents(grade: str, homework: str,
     )
 
     # Sanitize content for Meta template parameters:
-    # - Replace en/em dashes with hyphens (Meta rejects some Unicode dashes)
-    # - Collapse excessive whitespace
-    # - Truncate for template parameter limit (~1024 chars)
+    # Meta rejects: newlines, tabs, 4+ consecutive spaces, some Unicode dashes
     hw_content = homework
     hw_content = hw_content.replace("\u2013", "-").replace("\u2014", "-")
-    hw_content = re.sub(r"[ \t]+", " ", hw_content)
+    hw_content = hw_content.replace("\r\n", " | ").replace("\n", " | ").replace("\r", " | ")
+    hw_content = hw_content.replace("\t", " ")
+    hw_content = re.sub(r"[ ]{4,}", "   ", hw_content)
+    hw_content = re.sub(r"[ ]+", " ", hw_content)
     hw_content = hw_content.strip()
     hw_content = hw_content[:900] if len(hw_content) > 900 else hw_content
 
