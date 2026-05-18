@@ -128,7 +128,7 @@ def _attendance_notif_name(person_id: str, name: str) -> str:
 def _attendance_template(person_id: str) -> tuple[str, str]:
     """Return (template_name, language_code) for attendance notifications."""
     if person_id.startswith("TEACHER_"):
-        return "ppis_teacher_present", "en"
+        return "ppis_teacher_present_text", "en"
     return "ppis_attendance_alert", "en"
 
 
