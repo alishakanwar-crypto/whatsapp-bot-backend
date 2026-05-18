@@ -54,6 +54,16 @@ PERIOD_LABELS = {
 # Phase 1 rollout: only Grade 9-12. Other grades will be added later.
 _HOMEWORK_ELIGIBLE_GRADES = re.compile(r"Grade\s*(9|10|11|12)", re.IGNORECASE)
 
+# Temporary review recipients: phone numbers that also receive CW/HW
+# notifications for specific grades (for admin review).
+# Format: {grade_substring: [(phone, expiry_date_str), ...]}
+# Entries expire after the specified date (IST).
+_HW_REVIEW_RECIPIENTS: dict[str, list[tuple[str, str]]] = {
+    "12A": [("8076455224", "2026-05-18")],
+    "12B": [("8076455224", "2026-05-18")],
+    "12C": [("8076455224", "2026-05-18")],
+}
+
 # Cached Google access token
 _google_access_token: str = ""
 _google_token_expiry: datetime | None = None
@@ -660,6 +670,16 @@ async def _send_homework_to_parents(grade: str, homework: str,
         return 0, 0
 
     phones_to_send = _deduplicate_phones(parents)
+
+    # Add review recipients for matching grades (if not expired)
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    for grade_key, recipients in _HW_REVIEW_RECIPIENTS.items():
+        if grade_key.lower() in grade.lower():
+            for phone, expiry in recipients:
+                if today_str <= expiry and phone not in phones_to_send:
+                    phones_to_send.append(phone)
+                    logger.info(f"[HW DELIVERY] Added review recipient {phone} for {grade}")
+
     logger.info(
         f"[HW DELIVERY] {grade}: {len(parents)} parent records → "
         f"{len(phones_to_send)} unique phones to notify"
