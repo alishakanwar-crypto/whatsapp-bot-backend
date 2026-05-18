@@ -556,6 +556,10 @@ async def run_homework_delivery(period: int) -> dict:
         if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
             continue
 
+        # Skip entries with no doc_id (not yet created)
+        if not doc_id:
+            continue
+
         results["grades_checked"] += 1
 
         # Fetch doc content (authenticated)
@@ -1119,6 +1123,10 @@ async def daily_clear_all_docs() -> dict:
 
         # Phase 1: only clear eligible grades (Grade 9-12)
         if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
+            continue
+
+        # Skip entries with no doc_id (not yet created)
+        if not doc_id:
             continue
 
         ok = await _clear_google_doc(doc_id, grade)
