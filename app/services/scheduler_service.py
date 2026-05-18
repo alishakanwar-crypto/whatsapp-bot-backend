@@ -718,6 +718,16 @@ def start_scheduler() -> None:
         )
         logger.info(f"Scheduled homework delivery: {desc}")
 
+    # Final safety-net check at 12:35 PM IST (07:05 UTC) to catch late entries
+    scheduler.add_job(
+        run_homework_delivery_sync,
+        trigger=CronTrigger(hour=7, minute=5, second=0),
+        args=[6],
+        id="homework_delivery_final_check",
+        replace_existing=True,
+    )
+    logger.info("Scheduled homework delivery: Final safety check 12:35 IST = 07:05 UTC")
+
     # --- Daily Doc Clear (3:00 PM IST = 9:30 UTC) ---
     # Clears all 34 homework Google Docs at end of school day,
     # restores template instructions, and resets content hashes.
