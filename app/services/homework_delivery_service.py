@@ -556,6 +556,10 @@ async def run_homework_delivery(period: int) -> dict:
         if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
             continue
 
+        # Skip entries with no doc_id (not yet created)
+        if not doc_id:
+            continue
+
         results["grades_checked"] += 1
 
         # Fetch doc content (authenticated)
@@ -661,8 +665,15 @@ async def _send_homework_to_parents(grade: str, homework: str,
         f"{len(phones_to_send)} unique phones to notify"
     )
 
-    # Truncate content for template parameter limit (~1024 chars)
-    hw_content = homework[:900] if len(homework) > 900 else homework
+    # Sanitize content for Meta template parameters:
+    # - Replace en/em dashes with hyphens (Meta rejects some Unicode dashes)
+    # - Collapse excessive whitespace
+    # - Truncate for template parameter limit (~1024 chars)
+    hw_content = homework
+    hw_content = hw_content.replace("\u2013", "-").replace("\u2014", "-")
+    hw_content = re.sub(r"[ \t]+", " ", hw_content)
+    hw_content = hw_content.strip()
+    hw_content = hw_content[:900] if len(hw_content) > 900 else hw_content
 
     sent = 0
     failed = 0
@@ -1112,6 +1123,10 @@ async def daily_clear_all_docs() -> dict:
 
         # Phase 1: only clear eligible grades (Grade 9-12)
         if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
+            continue
+
+        # Skip entries with no doc_id (not yet created)
+        if not doc_id:
             continue
 
         ok = await _clear_google_doc(doc_id, grade)

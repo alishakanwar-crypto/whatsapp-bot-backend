@@ -170,7 +170,7 @@ async def report_attendance(request: Request):
     except Exception:
         pass
 
-    # Validate attendance time window (7:00 AM - 9:30 AM IST)
+    # Validate attendance time window (7:00 AM - 9:00 AM IST)
     window_start = now_ist.replace(hour=ATTENDANCE_WINDOW_START, minute=0, second=0, microsecond=0)
     window_end = now_ist.replace(hour=ATTENDANCE_WINDOW_END_HOUR, minute=ATTENDANCE_WINDOW_END_MIN, second=0, microsecond=0)
     if not (window_start <= now_ist <= window_end):
