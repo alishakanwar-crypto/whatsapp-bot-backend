@@ -398,6 +398,57 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+async def _proofread_homework(text: str) -> str:
+    """Fix spelling and grammar errors in homework content using GPT.
+
+    Preserves the original meaning, subject names, formatting, Hindi text,
+    dates, and any URLs. Only corrects obvious spelling/grammar mistakes
+    in the English portions.
+    Returns the original text unchanged if GPT is unavailable or errors out.
+    """
+    from app.services.openai_service import get_client
+
+    ai_client = get_client()
+    if not ai_client:
+        logger.warning("[HW PROOFREAD] OpenAI client unavailable — skipping")
+        return text
+
+    try:
+        response = await ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "system",
+                "content": (
+                    "You are a proofreader for a school homework notification system. "
+                    "Fix ONLY spelling and grammar errors in the English text. "
+                    "Rules:\n"
+                    "- Do NOT change subject names, teacher names, dates, chapter/exercise numbers, or URLs\n"
+                    "- Do NOT change Hindi/Devanagari text at all\n"
+                    "- Do NOT add, remove, or reorder any content\n"
+                    "- Do NOT change abbreviations like CW, HW, C.W, H.W, Ch, Ex, Q, etc.\n"
+                    "- Do NOT add punctuation that isn't there\n"
+                    "- Keep the exact same line structure (each line on its own line)\n"
+                    "- If the text has no errors, return it exactly as-is\n"
+                    "- Return ONLY the corrected text, nothing else"
+                ),
+            }, {
+                "role": "user",
+                "content": text,
+            }],
+            max_tokens=1000,
+            temperature=0.0,
+        )
+        corrected = response.choices[0].message.content.strip()
+        if corrected:
+            if corrected != text:
+                logger.info(f"[HW PROOFREAD] Corrections applied: '{text[:80]}...' → '{corrected[:80]}...'")
+            return corrected
+        return text
+    except Exception as e:
+        logger.error(f"[HW PROOFREAD] Error: {e} — using original text")
+        return text
+
+
 # ---------------------------------------------------------------------------
 # Image rendering — create a clean homework screenshot using PIL
 # ---------------------------------------------------------------------------
@@ -618,8 +669,9 @@ async def run_homework_delivery(period: int) -> dict:
             results["details"].append({"grade": grade, "status": "minor_edit"})
             continue
 
-        # New homework detected — deliver only the new portion to parents
+        # New homework detected — proofread and deliver to parents
         logger.info(f"New homework for {grade}: {new_portion[:100]}...")
+        new_portion = await _proofread_homework(new_portion)
         results["grades_with_homework"] += 1
 
         sent, failed = await _send_homework_to_parents(
