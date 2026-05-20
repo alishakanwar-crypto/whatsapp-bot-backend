@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.services.whatsapp_service import send_whatsapp_message
-from app.services.sheet_refresh_service import refresh_teacher_data_sync, populate_parent_phones_sync
+from app.services.sheet_refresh_service import refresh_teacher_data_sync, populate_parent_phones_sync, refresh_pi_sheet_full_sync
 from app.services.email_polling_service import poll_homework_emails_sync
 
 logger = logging.getLogger(__name__)
@@ -581,6 +581,18 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled parent phone data refresh every 14 days (fortnightly)")
+
+    # --- Daily PI Sheet Full Refresh ---
+    # Fetch all grade tabs from PI Sheet every day at 07:30 IST (02:00 UTC).
+    # Includes cross-grade dedup: removes promoted students from old grade tabs
+    # so homework notifications only go to parents of the correct (current) grade.
+    scheduler.add_job(
+        refresh_pi_sheet_full_sync,
+        trigger=CronTrigger(hour=2, minute=0),  # 07:30 IST = 02:00 UTC
+        id="pi_sheet_daily_refresh",
+        replace_existing=True,
+    )
+    logger.info("Scheduled daily PI Sheet full refresh at 07:30 IST (02:00 UTC)")
 
     # --- Teacher Homework Email Polling ---
     # Poll info@ppischool.in IMAP inbox every 60 minutes (was 30 — caused OOM on 256MB)

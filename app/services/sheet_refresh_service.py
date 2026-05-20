@@ -562,6 +562,22 @@ def refresh_pi_sheet_sync() -> None:
         loop.close()
 
 
+def refresh_pi_sheet_full_sync() -> None:
+    """Synchronous wrapper for full PI Sheet refresh (all grade tabs + cross-grade dedup)."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(fetch_all_pi_sheet_tabs())
+        if result:
+            logger.info("PI SHEET FULL REFRESH: Daily refresh completed successfully")
+        else:
+            logger.error("PI SHEET FULL REFRESH: Daily refresh failed")
+    except Exception as e:
+        logger.error(f"PI SHEET FULL REFRESH: Daily refresh error: {e}")
+    finally:
+        loop.close()
+
+
 # ---------------------------------------------------------------------------
 # Parent phone data population from personalized_parents.json
 # ---------------------------------------------------------------------------
