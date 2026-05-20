@@ -225,15 +225,39 @@ def _canonicalize_grade(grade: str) -> str:
     return re.sub(r"\s+", "", g).lower()
 
 
+def _grade_number(canonicalized: str) -> int:
+    """Extract numeric grade level from a canonicalized grade string.
+
+    E.g. 'grade10a' → 10, 'grade11b' → 11, 'nursery1' → -4.
+    Used to determine which grade is "higher" when deduplicating students.
+    """
+    m = re.search(r"grade(\d+)", canonicalized)
+    if m:
+        return int(m.group(1))
+    if "popsicle" in canonicalized:
+        return -5
+    if "nursery" in canonicalized:
+        return -4
+    if "prep" in canonicalized:
+        return -3
+    return -1
+
+
 async def _get_parents_for_grade(grade: str) -> list[dict]:
     """Return list of {student_name, father_phone, mother_phone} for a grade.
 
     Handles stream-suffixed grade names (e.g. 'Grade 11A-SCIENCE') and
     PI sheet grade variations (e.g. 'GRADE 11A', 'GRADE 11 A', 'Grade 11A')
     by canonicalizing both sides before matching.
+
+    Cross-grade dedup: if the same student (same name + phone) appears in
+    multiple grades (stale entries from previous years), they are only
+    included in the highest grade. This prevents promoted students'
+    parents from receiving homework for their old grade.
     """
     from app.database import get_db
     target = _canonicalize_grade(grade)
+    target_num = _grade_number(target)
     db = await get_db()
     try:
         cursor = await db.execute(
@@ -241,12 +265,45 @@ async def _get_parents_for_grade(grade: str) -> list[dict]:
             "FROM pi_sheet_students",
         )
         rows = await cursor.fetchall()
-        return [
-            {"student_name": r[0], "father_phone": r[2] or "",
-             "mother_phone": r[3] or ""}
-            for r in rows
-            if _canonicalize_grade(r[1]) == target
-        ]
+
+        # Build map: (name_lower, phone_last10) → highest grade number
+        highest_grade: dict[tuple[str, str], int] = {}
+        for r in rows:
+            name_lower = (r[0] or "").strip().lower()
+            cg = _canonicalize_grade(r[1])
+            gnum = _grade_number(cg)
+            for ph in [r[2] or "", r[3] or ""]:
+                digits = re.sub(r"\D", "", ph)
+                if len(digits) >= 10:
+                    key = (name_lower, digits[-10:])
+                    if key not in highest_grade or gnum > highest_grade[key]:
+                        highest_grade[key] = gnum
+
+        result = []
+        for r in rows:
+            if _canonicalize_grade(r[1]) != target:
+                continue
+            name_lower = (r[0] or "").strip().lower()
+            skip = False
+            for ph in [r[2] or "", r[3] or ""]:
+                digits = re.sub(r"\D", "", ph)
+                if len(digits) >= 10:
+                    key = (name_lower, digits[-10:])
+                    if highest_grade.get(key, target_num) > target_num:
+                        skip = True
+                        break
+            if skip:
+                logger.debug(
+                    f"[HW DELIVERY] Skipping {r[0]} from {grade} — "
+                    f"also listed in a higher grade"
+                )
+                continue
+            result.append(
+                {"student_name": r[0], "father_phone": r[2] or "",
+                 "mother_phone": r[3] or ""}
+            )
+
+        return result
     finally:
         await db.close()
 
