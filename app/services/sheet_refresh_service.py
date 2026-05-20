@@ -755,9 +755,55 @@ async def fetch_all_pi_sheet_tabs() -> bool:
             seen.add(key)
             unique.append(s)
 
+    same_grade_dupes = len(active_students) - len(unique)
+
+    # --- Cross-grade dedup: keep highest grade per (name, phone) ---
+    # Students who appear in multiple grade tabs (e.g. promoted but old tab
+    # not cleaned) should only be kept in the highest grade.
+    def _extract_grade_num(grade_str: str) -> int:
+        m = _re.search(r"(\d+)", grade_str)
+        return int(m.group(1)) if m else -1
+
+    # Build map: (name_upper, phone_last10) → highest grade number
+    highest: dict[tuple[str, str], int] = {}
+    for s in unique:
+        name_key = s["name"].upper().strip()
+        gnum = _extract_grade_num(s["grade"])
+        for ph in [s["father_phone"], s["mother_phone"]]:
+            digits = _re.sub(r"\D", "", ph)
+            if len(digits) >= 10:
+                k = (name_key, digits[-10:])
+                if k not in highest or gnum > highest[k]:
+                    highest[k] = gnum
+
+    cross_grade_removed = 0
+    final: list[dict] = []
+    for s in unique:
+        name_key = s["name"].upper().strip()
+        gnum = _extract_grade_num(s["grade"])
+        dominated = False
+        for ph in [s["father_phone"], s["mother_phone"]]:
+            digits = _re.sub(r"\D", "", ph)
+            if len(digits) >= 10:
+                k = (name_key, digits[-10:])
+                if highest.get(k, gnum) > gnum:
+                    dominated = True
+                    break
+        if dominated:
+            cross_grade_removed += 1
+            logger.info(
+                f"PI SHEET DEDUP: Removing {s['name']} from {s['grade']} "
+                f"(also in a higher grade)"
+            )
+        else:
+            final.append(s)
+
+    unique = final
+
     logger.info(
         f"PI SHEET FULL REFRESH: {len(unique)} unique active students "
-        f"(from {len(active_students)} raw, {len(active_students) - len(unique)} duplicates removed)"
+        f"(from {len(active_students)} raw, {same_grade_dupes} same-grade "
+        f"dupes removed, {cross_grade_removed} cross-grade dupes removed)"
     )
 
     # --- Replace all rows in pi_sheet_students ---
