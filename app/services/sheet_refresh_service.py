@@ -45,7 +45,7 @@ PI_SHEET_PUB_BASE = os.getenv(
 # All known grade tab GIDs in the PI Sheet
 PI_SHEET_GRADE_GIDS = [
     "1288447916", "2004260388", "1830685668", "1370627064", "1786778811",
-    "313661668", "616483027", "1943511617", "1102992088", "352154940",
+    "616483027", "1943511617", "1102992088", "352154940",
     "81657730", "2002492962", "390677163", "2068519553", "873031775",
     "149553903", "22291716", "1168194216", "505784395", "1571684282",
     "353406549", "1466129543", "1448970633", "743552850", "43691386",
@@ -689,7 +689,18 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     if not row_text or row_text.replace(",", "").strip() == "":
                         continue
 
-                    if "withdrawal" in row_text or "withdraw" in row_text:
+                    # Detect withdrawal section markers: rows where the
+                    # first non-empty cell starts with "withdraw" and most
+                    # other cells are blank (e.g. "Withdrawal 2025-26,,,,").
+                    # This avoids false positives when "withdrawal" appears
+                    # inside a notes/comment column on a valid student row.
+                    first_cell = ""
+                    for cell in row:
+                        if cell.strip():
+                            first_cell = cell.strip().lower()
+                            break
+                    non_empty = sum(1 for c in row if c.strip())
+                    if first_cell.startswith("withdraw") and non_empty <= 3:
                         in_withdrawal = True
                         continue
 
