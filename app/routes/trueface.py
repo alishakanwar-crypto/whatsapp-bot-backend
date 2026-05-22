@@ -42,6 +42,10 @@ CHAIRMAN_TEMPLATE = os.environ.get(
     "TRUEFACE_CHAIRMAN_TEMPLATE", "ppis_chairman_teacher_arrival"
 )
 
+# Before this hour (IST), all detections count as arrival only.
+# Departure is only recorded after this hour.
+DEPARTURE_HOUR = int(os.environ.get("TRUEFACE_DEPARTURE_HOUR", "11"))
+
 
 # ============================================================
 # Database helpers
@@ -299,6 +303,12 @@ async def receive_trueface_event(request: Request):
 
             photo_b64 = evt.get("photo", "")
 
+            # Determine current IST hour from the event timestamp
+            try:
+                evt_hour = int(time_raw.split(":")[0])
+            except (ValueError, IndexError):
+                evt_hour = now.hour
+
             if not record:
                 # First detection → arrival
                 await db.execute(
@@ -331,8 +341,8 @@ async def receive_trueface_event(request: Request):
                     "time": time_str, "whatsapp": wa_ok,
                 })
 
-            elif not record["departure_time"]:
-                # Second detection → departure
+            elif not record["departure_time"] and evt_hour >= DEPARTURE_HOUR:
+                # After DEPARTURE_HOUR and no departure yet → mark departure
                 await db.execute(
                     "UPDATE trueface_attendance SET departure_time = ?, departure_whatsapp = 0 "
                     "WHERE pin = ? AND date = ?",
@@ -355,6 +365,17 @@ async def receive_trueface_event(request: Request):
                 results.append({
                     "pin": pin, "name": name, "status": "departure",
                     "time": time_str, "whatsapp": wa_ok,
+                })
+
+            elif not record["departure_time"] and evt_hour < DEPARTURE_HOUR:
+                # Before DEPARTURE_HOUR — ignore extra scans (arrival already recorded)
+                logger.info(
+                    f"[TRUEFACE] Ignored pre-{DEPARTURE_HOUR}:00 scan for {name} "
+                    f"at {time_str} (arrival already at {_format_time_12h(record['arrival_time'])})"
+                )
+                results.append({
+                    "pin": pin, "name": name, "status": "ignored_morning",
+                    "time": time_str,
                 })
 
             else:
