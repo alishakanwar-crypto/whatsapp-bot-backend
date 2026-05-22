@@ -2097,7 +2097,7 @@ async def reset_grade_hash(grade: str):
     """
     db = await get_db()
     result = await db.execute(
-        "DELETE FROM homework_doc_state WHERE grade = ?", (grade,)
+        "DELETE FROM homework_doc_state WHERE LOWER(grade) = LOWER(?)", (grade,)
     )
     await db.commit()
     deleted = result.rowcount

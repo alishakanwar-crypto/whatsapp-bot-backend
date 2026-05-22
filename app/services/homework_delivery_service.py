@@ -655,6 +655,11 @@ async def run_homework_delivery(period: int) -> dict:
     date_str = now_ist.strftime("%d/%m/%Y")
     period_label = PERIOD_LABELS.get(period, f"Period {period}")
 
+    # Skip weekends — no school, no homework delivery
+    if now_ist.weekday() in (5, 6):  # Saturday=5, Sunday=6
+        logger.info(f"=== HOMEWORK DELIVERY: Skipping — weekend ({now_ist.strftime('%A')}) ===")
+        return {"status": "weekend_skip", "grades_checked": 0}
+
     logger.info(f"=== HOMEWORK DELIVERY: Starting check after {period_label} ===")
 
     docs = await _get_homework_docs()
@@ -1253,6 +1258,12 @@ async def daily_clear_all_docs() -> dict:
     Restores each doc to the clean template and resets stored hashes
     so the next day's entries are treated as new content.
     """
+    # Skip weekends — no school, no docs to clear
+    now_ist = datetime.now(IST)
+    if now_ist.weekday() in (5, 6):  # Saturday=5, Sunday=6
+        logger.info(f"=== DAILY DOC CLEAR: Skipping — weekend ({now_ist.strftime('%A')}) ===")
+        return {"status": "weekend_skip", "cleared": 0, "failed": 0}
+
     logger.info("=== DAILY DOC CLEAR: Starting end-of-day cleanup ===")
 
     docs = await _get_homework_docs()
