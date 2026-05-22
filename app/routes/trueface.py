@@ -37,6 +37,11 @@ REPORT_RECIPIENTS = os.environ.get(
     "TRUEFACE_REPORT_EMAIL", "leave@ppischool.in"
 )
 
+CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
+CHAIRMAN_TEMPLATE = os.environ.get(
+    "TRUEFACE_CHAIRMAN_TEMPLATE", "ppis_chairman_teacher_arrival"
+)
+
 
 # ============================================================
 # Database helpers
@@ -197,6 +202,51 @@ async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool
         return False
 
 
+async def _notify_chairman_arrival(
+    name: str, time_str: str, photo_b64: str = "",
+) -> bool:
+    """Send arrival notification with optional face photo to the chairman."""
+    if not CHAIRMAN_PHONE:
+        return False
+
+    from app.services.whatsapp_service import send_cloud_template_message
+
+    display_name = name.title() if name == name.upper() else name
+    logger.info(
+        "[TRUEFACE] Chairman notify → %s: %s at %s (photo=%s)",
+        CHAIRMAN_PHONE, display_name, time_str, "yes" if photo_b64 else "no",
+    )
+
+    header_image_id = None
+    if photo_b64:
+        try:
+            from app.services.whatsapp_service import upload_base64_image_cloud
+            header_image_id = await upload_base64_image_cloud(photo_b64)
+            if header_image_id:
+                logger.info("[TRUEFACE] Uploaded face photo, media_id=%s", header_image_id)
+            else:
+                logger.warning("[TRUEFACE] Face photo upload failed — sending without photo")
+        except Exception as e:
+            logger.warning("[TRUEFACE] Face photo upload error: %s", e)
+
+    try:
+        ok = await send_cloud_template_message(
+            to=CHAIRMAN_PHONE,
+            template_name=CHAIRMAN_TEMPLATE,
+            language_code="en",
+            body_params=[display_name, time_str],
+            header_image_id=header_image_id,
+        )
+        logger.info(
+            "[TRUEFACE] Chairman WhatsApp %s for %s",
+            "OK" if ok else "FAILED", display_name,
+        )
+        return bool(ok)
+    except Exception as e:
+        logger.error("[TRUEFACE] Chairman WhatsApp error: %s", e)
+        return False
+
+
 # ============================================================
 # Core attendance event endpoint
 # ============================================================
@@ -247,6 +297,8 @@ async def receive_trueface_event(request: Request):
 
             record = await _get_attendance_record(db, pin, today)
 
+            photo_b64 = evt.get("photo", "")
+
             if not record:
                 # First detection → arrival
                 await db.execute(
@@ -267,6 +319,11 @@ async def receive_trueface_event(request: Request):
                             (pin, today),
                         )
                         await db.commit()
+
+                # Notify chairman of each arrival
+                asyncio.ensure_future(
+                    _notify_chairman_arrival(name, time_str, photo_b64)
+                )
 
                 logger.info(f"[TRUEFACE] ARRIVAL: {name} at {time_str} WA={wa_ok}")
                 results.append({
