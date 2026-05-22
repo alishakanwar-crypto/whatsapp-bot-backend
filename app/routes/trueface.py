@@ -136,7 +136,7 @@ async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool
     try:
         ok = await send_cloud_template_message(
             to=phone,
-            template_name="ppis_teacher_left_text",
+            template_name="ppis_teacher_departure",
             language_code="en",
             body_params=[display_name, time_str],
         )
