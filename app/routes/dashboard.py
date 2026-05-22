@@ -1712,10 +1712,13 @@ async def email_teacher_attendance_report(
     request: Request,
     _: None = Depends(verify_dashboard_secret),
 ):
-    """Generate teacher attendance Excel and email it.
+    """DEPRECATED — DVR-based teacher attendance report.
 
-    Called by the agent after Phase 1 (teacher scanning) completes.
+    Teacher attendance is now handled by the TrueFace 3000 system.
+    See /api/trueface/report/arrival and /api/trueface/report/departure.
+    This endpoint is kept for backward compatibility but is no longer called.
     """
+    return {"status": "deprecated", "message": "Teacher reports now use TrueFace system"}
     from app.services.email_service import send_email_async
 
     ist = timezone(timedelta(hours=5, minutes=30))
