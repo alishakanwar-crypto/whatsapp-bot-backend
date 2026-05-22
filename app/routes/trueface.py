@@ -95,6 +95,56 @@ async def _get_all_attendance(db, date: str) -> list[dict]:
     ]
 
 
+async def _auto_register_from_dvr(db, pin: str, evt_name: str) -> dict | None:
+    """Try to match a TrueFace event name against the DVR teacher database.
+
+    If the name matches a TEACHER_* or PRINCIPAL_* entry, auto-register
+    the teacher with their TrueFace PIN and phone number.
+    """
+    if not evt_name:
+        return None
+
+    # Normalize name for matching: lowercase, strip extra spaces
+    norm = evt_name.strip().lower()
+
+    try:
+        cur = await db.execute(
+            "SELECT person_id, name, phone FROM agent_registered_faces "
+            "WHERE (person_id LIKE 'TEACHER_%' OR person_id LIKE 'PRINCIPAL_%') "
+            "AND phone IS NOT NULL AND phone != ''"
+        )
+        rows = await cur.fetchall()
+    except Exception as e:
+        logger.warning(f"[TRUEFACE] Auto-register DB query failed: {e}")
+        return None
+
+    for r in rows:
+        db_name = (r[1] or "").strip()
+        db_phone = (r[2] or "").split(",")[0].strip()
+
+        # Match: exact (case-insensitive) or contained
+        if db_name.lower() == norm or norm in db_name.lower() or db_name.lower() in norm:
+            # Register this teacher with their TrueFace PIN
+            try:
+                await db.execute(
+                    "INSERT OR REPLACE INTO trueface_teachers (pin, name, phone) "
+                    "VALUES (?, ?, ?)",
+                    (pin, db_name, db_phone),
+                )
+                await db.commit()
+                logger.info(
+                    f"[TRUEFACE] Auto-registered: PIN={pin} name={db_name} "
+                    f"phone={db_phone} (matched from DVR: {r[0]})"
+                )
+                return {"pin": pin, "name": db_name, "phone": db_phone}
+            except Exception as e:
+                logger.error(f"[TRUEFACE] Auto-register insert failed: {e}")
+                return None
+
+    logger.info(f"[TRUEFACE] No DVR match for PIN={pin} name='{evt_name}'")
+    return None
+
+
 def _format_time_12h(timestamp: str) -> str:
     """Convert '2026-05-22 07:30:00' or '07:30:00' to '07:30 AM'."""
     try:
@@ -182,6 +232,9 @@ async def receive_trueface_event(request: Request):
                 continue
 
             teacher = await _get_teacher(db, pin)
+            if not teacher and evt_name:
+                # Auto-register: match name against DVR teacher database
+                teacher = await _auto_register_from_dvr(db, pin, evt_name)
             if not teacher:
                 logger.info(f"[TRUEFACE] Unknown PIN={pin} name={evt_name}")
                 results.append({"pin": pin, "status": "skipped", "reason": "unknown"})
