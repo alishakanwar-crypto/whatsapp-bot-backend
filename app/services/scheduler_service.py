@@ -658,26 +658,43 @@ def start_scheduler() -> None:
     else:
         logger.info("Meal monitoring auto-trigger DISABLED (toggle from control panel)")
 
-    # --- Teacher Attendance Excel ---
-    # Generate/update daily after attendance window closes (9:30 AM IST = 4:00 UTC)
-    from app.services.teacher_attendance_excel import generate_teacher_attendance_excel_sync
-    scheduler.add_job(
-        generate_teacher_attendance_excel_sync,
-        trigger=CronTrigger(hour=4, minute=5, second=0),
-        id="teacher_attendance_excel_daily",
-        replace_existing=True,
-    )
-    logger.info("Scheduled teacher attendance Excel generation at 9:35 AM IST daily")
+    # --- Teacher Attendance Excel (DVR-based) — DISABLED ---
+    # Replaced by TrueFace-based attendance tracking and reporting.
+    # from app.services.teacher_attendance_excel import generate_teacher_attendance_excel_sync
+    # scheduler.add_job(
+    #     generate_teacher_attendance_excel_sync,
+    #     trigger=CronTrigger(hour=4, minute=5, second=0),
+    #     id="teacher_attendance_excel_daily",
+    #     replace_existing=True,
+    # )
+    # scheduler.add_job(
+    #     generate_teacher_attendance_excel_sync,
+    #     trigger="date",
+    #     run_date=datetime.now() + timedelta(seconds=180),
+    #     id="teacher_attendance_excel_initial",
+    #     replace_existing=True,
+    # )
+    logger.info("DVR-based teacher attendance Excel DISABLED — using TrueFace system")
 
-    # Also generate on startup (after 180s to let attendance data settle)
+    # --- TrueFace Attendance Reports ---
+    # 8:00 AM IST (2:30 UTC) → Arrival report emailed to leave@ppischool.in
+    from app.routes.trueface import send_arrival_report_sync, send_departure_report_sync
     scheduler.add_job(
-        generate_teacher_attendance_excel_sync,
-        trigger="date",
-        run_date=datetime.now() + timedelta(seconds=180),
-        id="teacher_attendance_excel_initial",
+        send_arrival_report_sync,
+        trigger=CronTrigger(hour=2, minute=30, second=0),
+        id="trueface_arrival_report",
         replace_existing=True,
     )
-    logger.info("Scheduled initial teacher attendance Excel generation in 180 seconds")
+    logger.info("Scheduled TrueFace arrival report at 8:00 AM IST (2:30 UTC)")
+
+    # 3:00 PM IST (9:30 UTC) → Departure report emailed to leave@ppischool.in
+    scheduler.add_job(
+        send_departure_report_sync,
+        trigger=CronTrigger(hour=9, minute=30, second=0),
+        id="trueface_departure_report",
+        replace_existing=True,
+    )
+    logger.info("Scheduled TrueFace departure report at 3:00 PM IST (9:30 UTC)")
 
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.

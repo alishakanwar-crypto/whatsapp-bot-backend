@@ -1,22 +1,24 @@
 """
-TrueFace 3000 ADMS Protocol Integration
-========================================
-Receives attendance events from the TimeWatch TrueFace 3000 face recognition
-terminal via the ZKTeco ADMS push protocol.
+TrueFace 3000 Attendance System
+===============================
+Receives face-recognition attendance events from a browser-based poller
+running on the school PC (reads the TrueFace device's Search Records table).
 
-Protocol:
-- Device polls GET /iclock/getrequest?SN=xxx → server responds "OK"
-- Device pushes POST /iclock/cdata?SN=xxx&table=ATTLOG → attendance logs
-- Device pushes POST /iclock/cdata?SN=xxx&table=OPERLOG → user operations
-- Device confirms POST /iclock/devicecmd?SN=xxx → command acknowledgements
+Flow:
+  1. Browser JS poller detects new OK face scan → POST /api/trueface/event
+  2. First detection of the day for a teacher = "arrival" → WhatsApp sent
+  3. Second detection = "departure" → WhatsApp sent
+  4. 8:00 AM IST → Excel arrival report emailed to leave@ppischool.in
+  5. 3:00 PM IST → Excel departure report emailed to leave@ppischool.in
 
-When an ATTLOG event is received, we look up the teacher by PIN and send
-a WhatsApp notification confirming attendance was marked.
+Also keeps the legacy ADMS endpoints in case the device push protocol
+is enabled in the future.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -28,80 +30,91 @@ from fastapi.responses import PlainTextResponse
 
 logger = logging.getLogger("app.trueface")
 
-# IST timezone offset
 IST = timezone(timedelta(hours=5, minutes=30))
-
 router = APIRouter()
 
-# PIN → teacher mapping file
-TRUEFACE_USERS_FILE = Path(__file__).parent.parent / "trueface_users.json"
-
-# Command queue for sending commands to device
-_command_queue: list[str] = []
-
-# Dedup: track who was already notified today
-_notified_today: dict[str, str] = {}  # PIN → date string
-_last_dedup_date: str = ""
+REPORT_RECIPIENTS = os.environ.get(
+    "TRUEFACE_REPORT_EMAIL", "leave@ppischool.in"
+)
 
 
-def _load_users() -> dict[str, dict]:
-    """Load PIN → teacher mapping.
-    
-    Format: {"1": {"name": "Alisha Ahuja", "phone": "918076455224"}, ...}
-    """
-    if TRUEFACE_USERS_FILE.exists():
-        try:
-            with open(TRUEFACE_USERS_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Failed to load trueface_users.json: {e}")
-    return {}
+# ============================================================
+# Database helpers
+# ============================================================
+
+async def _get_db():
+    from app.database import get_db
+    return await get_db()
 
 
-def _save_users(users: dict[str, dict]):
-    """Save PIN → teacher mapping."""
-    with open(TRUEFACE_USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2, ensure_ascii=False)
+async def _get_teacher(db, pin: str) -> dict | None:
+    cur = await db.execute(
+        "SELECT pin, name, phone FROM trueface_teachers WHERE pin = ?", (pin,)
+    )
+    row = await cur.fetchone()
+    if row:
+        return {"pin": row[0], "name": row[1], "phone": row[2]}
+    return None
 
 
-def _clear_daily_dedup():
-    """Reset dedup cache if date changed."""
-    global _notified_today, _last_dedup_date
-    today = datetime.now(IST).strftime("%Y-%m-%d")
-    if today != _last_dedup_date:
-        _notified_today = {}
-        _last_dedup_date = today
+async def _get_all_teachers(db) -> list[dict]:
+    cur = await db.execute(
+        "SELECT pin, name, phone FROM trueface_teachers ORDER BY name"
+    )
+    return [{"pin": r[0], "name": r[1], "phone": r[2]} for r in await cur.fetchall()]
 
 
-def _parse_attlog(body: str) -> list[dict]:
-    """Parse ATTLOG body from device.
-    
-    Format: PIN\\tTimestamp\\tStatus\\tVerify\\tWorkCode\\tReserved1\\tReserved2
-    Example: 1\\t2026-05-25 07:30:00\\t0\\t15\\t0\\t1\\t0
-    """
-    records = []
-    for line in body.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("\t")
-        if len(parts) >= 2:
-            records.append({
-                "pin": parts[0].strip(),
-                "timestamp": parts[1].strip() if len(parts) > 1 else "",
-                "status": parts[2].strip() if len(parts) > 2 else "0",
-                "verify": parts[3].strip() if len(parts) > 3 else "0",
-            })
-    return records
+async def _get_attendance_record(db, pin: str, date: str) -> dict | None:
+    cur = await db.execute(
+        "SELECT id, pin, name, date, arrival_time, departure_time, "
+        "arrival_whatsapp, departure_whatsapp "
+        "FROM trueface_attendance WHERE pin = ? AND date = ?",
+        (pin, date),
+    )
+    row = await cur.fetchone()
+    if row:
+        return {
+            "id": row[0], "pin": row[1], "name": row[2], "date": row[3],
+            "arrival_time": row[4], "departure_time": row[5],
+            "arrival_whatsapp": row[6], "departure_whatsapp": row[7],
+        }
+    return None
 
 
-async def _send_teacher_whatsapp(name: str, phone: str, time_str: str):
-    """Send WhatsApp notification to teacher confirming attendance."""
+async def _get_all_attendance(db, date: str) -> list[dict]:
+    cur = await db.execute(
+        "SELECT pin, name, arrival_time, departure_time, "
+        "arrival_whatsapp, departure_whatsapp "
+        "FROM trueface_attendance WHERE date = ? ORDER BY arrival_time",
+        (date,),
+    )
+    return [
+        {"pin": r[0], "name": r[1], "arrival_time": r[2], "departure_time": r[3],
+         "arrival_whatsapp": r[4], "departure_whatsapp": r[5]}
+        for r in await cur.fetchall()
+    ]
+
+
+def _format_time_12h(timestamp: str) -> str:
+    """Convert '2026-05-22 07:30:00' or '07:30:00' to '07:30 AM'."""
+    try:
+        if " " in timestamp:
+            dt = datetime.strptime(timestamp.strip(), "%Y-%m-%d %H:%M:%S")
+        else:
+            dt = datetime.strptime(timestamp.strip(), "%H:%M:%S")
+        return dt.strftime("%I:%M %p")
+    except (ValueError, TypeError):
+        return timestamp or ""
+
+
+# ============================================================
+# WhatsApp notifications
+# ============================================================
+
+async def _send_arrival_whatsapp(name: str, phone: str, time_str: str) -> bool:
     from app.services.whatsapp_service import send_cloud_template_message
-
     display_name = name.title() if name == name.upper() else name
-    logger.info(f"[TRUEFACE] Sending WhatsApp to {phone} for {display_name} at {time_str}")
-
+    logger.info(f"[TRUEFACE] Arrival WhatsApp → {phone} for {display_name} at {time_str}")
     try:
         ok = await send_cloud_template_message(
             to=phone,
@@ -109,182 +122,489 @@ async def _send_teacher_whatsapp(name: str, phone: str, time_str: str):
             language_code="en",
             body_params=[display_name, time_str],
         )
-        if ok:
-            logger.info(f"[TRUEFACE] WhatsApp sent successfully to {phone}")
-        else:
-            logger.warning(f"[TRUEFACE] WhatsApp send failed for {phone}")
-        return ok
+        logger.info(f"[TRUEFACE] Arrival WhatsApp {'OK' if ok else 'FAILED'} for {phone}")
+        return bool(ok)
     except Exception as e:
-        logger.error(f"[TRUEFACE] WhatsApp error for {phone}: {e}")
+        logger.error(f"[TRUEFACE] Arrival WhatsApp error for {phone}: {e}")
+        return False
+
+
+async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool:
+    from app.services.whatsapp_service import send_cloud_template_message
+    display_name = name.title() if name == name.upper() else name
+    logger.info(f"[TRUEFACE] Departure WhatsApp → {phone} for {display_name} at {time_str}")
+    try:
+        ok = await send_cloud_template_message(
+            to=phone,
+            template_name="ppis_teacher_left_text",
+            language_code="en",
+            body_params=[display_name, time_str],
+        )
+        logger.info(f"[TRUEFACE] Departure WhatsApp {'OK' if ok else 'FAILED'} for {phone}")
+        return bool(ok)
+    except Exception as e:
+        logger.error(f"[TRUEFACE] Departure WhatsApp error for {phone}: {e}")
         return False
 
 
 # ============================================================
-# ADMS Protocol Endpoints
+# Core attendance event endpoint
+# ============================================================
+
+@router.post("/api/trueface/event")
+async def receive_trueface_event(request: Request):
+    """Receive a face-recognition event from the browser poller.
+
+    Body: {"pin": "1", "name": "alisha ahuja", "timestamp": "2026-05-22 07:30:00"}
+    Or batch: [{"pin": "1", ...}, {"pin": "2", ...}]
+
+    Returns which events were processed as arrival/departure.
+    """
+    body = await request.json()
+    events = body if isinstance(body, list) else [body]
+
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+
+    if now.weekday() in (5, 6):
+        return {"status": "skipped", "reason": "weekend"}
+
+    db = await _get_db()
+    results = []
+    try:
+        for evt in events:
+            pin = str(evt.get("pin", "")).strip()
+            timestamp = evt.get("timestamp", "").strip()
+            evt_name = evt.get("name", "").strip()
+
+            if not pin:
+                results.append({"pin": pin, "status": "skipped", "reason": "no pin"})
+                continue
+
+            teacher = await _get_teacher(db, pin)
+            if not teacher:
+                logger.info(f"[TRUEFACE] Unknown PIN={pin} name={evt_name}")
+                results.append({"pin": pin, "status": "skipped", "reason": "unknown"})
+                continue
+
+            name = teacher["name"]
+            phone = teacher["phone"]
+            time_str = _format_time_12h(timestamp) if timestamp else now.strftime("%I:%M %p")
+            time_raw = timestamp.split(" ")[1] if " " in timestamp else now.strftime("%H:%M:%S")
+
+            record = await _get_attendance_record(db, pin, today)
+
+            if not record:
+                # First detection → arrival
+                await db.execute(
+                    "INSERT INTO trueface_attendance "
+                    "(pin, name, date, arrival_time, arrival_whatsapp) "
+                    "VALUES (?, ?, ?, ?, 0)",
+                    (pin, name, today, time_raw),
+                )
+                await db.commit()
+
+                wa_ok = False
+                if phone:
+                    wa_ok = await _send_arrival_whatsapp(name, phone, time_str)
+                    if wa_ok:
+                        await db.execute(
+                            "UPDATE trueface_attendance SET arrival_whatsapp = 1 "
+                            "WHERE pin = ? AND date = ?",
+                            (pin, today),
+                        )
+                        await db.commit()
+
+                logger.info(f"[TRUEFACE] ARRIVAL: {name} at {time_str} WA={wa_ok}")
+                results.append({
+                    "pin": pin, "name": name, "status": "arrival",
+                    "time": time_str, "whatsapp": wa_ok,
+                })
+
+            elif not record["departure_time"]:
+                # Second detection → departure
+                await db.execute(
+                    "UPDATE trueface_attendance SET departure_time = ?, departure_whatsapp = 0 "
+                    "WHERE pin = ? AND date = ?",
+                    (time_raw, pin, today),
+                )
+                await db.commit()
+
+                wa_ok = False
+                if phone:
+                    wa_ok = await _send_departure_whatsapp(name, phone, time_str)
+                    if wa_ok:
+                        await db.execute(
+                            "UPDATE trueface_attendance SET departure_whatsapp = 1 "
+                            "WHERE pin = ? AND date = ?",
+                            (pin, today),
+                        )
+                        await db.commit()
+
+                logger.info(f"[TRUEFACE] DEPARTURE: {name} at {time_str} WA={wa_ok}")
+                results.append({
+                    "pin": pin, "name": name, "status": "departure",
+                    "time": time_str, "whatsapp": wa_ok,
+                })
+
+            else:
+                # Already have arrival + departure → update departure time silently
+                await db.execute(
+                    "UPDATE trueface_attendance SET departure_time = ? "
+                    "WHERE pin = ? AND date = ?",
+                    (time_raw, pin, today),
+                )
+                await db.commit()
+                results.append({
+                    "pin": pin, "name": name, "status": "updated_departure",
+                    "time": time_str,
+                })
+
+    finally:
+        await db.close()
+
+    return {"status": "ok", "results": results}
+
+
+# ============================================================
+# Excel report generation + email
+# ============================================================
+
+def _generate_attendance_excel(
+    teachers: list[dict],
+    attendance: list[dict],
+    report_date: str,
+    report_type: str = "arrival",
+) -> bytes:
+    """Generate an Excel report for teacher attendance."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+
+    title_label = "Arrival" if report_type == "arrival" else "Departure"
+    ws.title = f"Teacher {title_label}"
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="2F5496")
+    present_fill = PatternFill("solid", fgColor="C6EFCE")
+    absent_fill = PatternFill("solid", fgColor="FFC7CE")
+    left_fill = PatternFill("solid", fgColor="BDD7EE")
+    border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+
+    ws.merge_cells("A1:F1")
+    ws["A1"] = (
+        f"PP International School — Teacher {title_label} Report — {report_date}"
+    )
+    ws["A1"].font = Font(bold=True, size=14, color="2F5496")
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    if report_type == "arrival":
+        headers = ["S.No", "Teacher Name", "Status", "Arrival Time", "WhatsApp Sent", "Remarks"]
+    else:
+        headers = ["S.No", "Teacher Name", "Arrival Time", "Departure Time", "WhatsApp Sent", "Remarks"]
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=3, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
+
+    att_map = {a["pin"]: a for a in attendance}
+
+    row = 4
+    present_count = 0
+    for i, t in enumerate(teachers, 1):
+        pin = t["pin"]
+        att = att_map.get(pin)
+
+        ws.cell(row=row, column=1, value=i).border = border
+        ws.cell(row=row, column=2, value=t["name"]).border = border
+
+        if report_type == "arrival":
+            if att and att.get("arrival_time"):
+                present_count += 1
+                ws.cell(row=row, column=3, value="Present").border = border
+                ws.cell(row=row, column=3).fill = present_fill
+                ws.cell(row=row, column=4, value=_format_time_12h(att["arrival_time"])).border = border
+                ws.cell(row=row, column=5, value="Yes" if att.get("arrival_whatsapp") else "No").border = border
+            else:
+                ws.cell(row=row, column=3, value="Absent").border = border
+                ws.cell(row=row, column=3).fill = absent_fill
+                ws.cell(row=row, column=4, value="-").border = border
+                ws.cell(row=row, column=5, value="-").border = border
+            ws.cell(row=row, column=6, value="").border = border
+        else:
+            arrival_time = _format_time_12h(att["arrival_time"]) if att and att.get("arrival_time") else "-"
+            departure_time = _format_time_12h(att["departure_time"]) if att and att.get("departure_time") else "-"
+            ws.cell(row=row, column=3, value=arrival_time).border = border
+            if att and att.get("departure_time"):
+                ws.cell(row=row, column=4, value=departure_time).border = border
+                ws.cell(row=row, column=4).fill = left_fill
+                ws.cell(row=row, column=5, value="Yes" if att.get("departure_whatsapp") else "No").border = border
+                present_count += 1
+            elif att and att.get("arrival_time"):
+                ws.cell(row=row, column=4, value="Still Present").border = border
+                ws.cell(row=row, column=4).fill = present_fill
+                ws.cell(row=row, column=5, value="-").border = border
+                present_count += 1
+            else:
+                ws.cell(row=row, column=4, value="Absent").border = border
+                ws.cell(row=row, column=4).fill = absent_fill
+                ws.cell(row=row, column=5, value="-").border = border
+            ws.cell(row=row, column=6, value="").border = border
+
+        row += 1
+
+    # Summary row
+    row += 1
+    total = len(teachers)
+    absent = total - present_count
+    ws.cell(row=row, column=2, value=f"Total: {total} | Present: {present_count} | Absent: {absent}")
+    ws.cell(row=row, column=2).font = Font(bold=True)
+
+    for col in range(1, 7):
+        ws.column_dimensions[chr(64 + col)].width = 20
+    ws.column_dimensions["B"].width = 30
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+async def send_attendance_report(report_type: str = "arrival"):
+    """Generate and email attendance report."""
+    from app.services.email_service import send_email_async
+
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    today_display = datetime.now(IST).strftime("%d %b %Y (%A)")
+
+    now = datetime.now(IST)
+    if now.weekday() in (5, 6):
+        logger.info(f"[TRUEFACE] Weekend — skipping {report_type} report")
+        return
+
+    db = await _get_db()
+    try:
+        teachers = await _get_all_teachers(db)
+        attendance = await _get_all_attendance(db, today)
+    finally:
+        await db.close()
+
+    if not teachers:
+        logger.warning("[TRUEFACE] No teachers registered — skipping report")
+        return
+
+    present = len([a for a in attendance if a.get("arrival_time")])
+    total = len(teachers)
+
+    title_label = "Arrival" if report_type == "arrival" else "Departure"
+    xlsx_bytes = _generate_attendance_excel(teachers, attendance, today, report_type)
+    filename = f"Teacher_{title_label}_{today}.xlsx"
+
+    body = (
+        f"Daily Teacher {title_label} Report — {today_display}\n\n"
+        f"Present: {present} / {total}\n"
+        f"Absent: {total - present}\n\n"
+        f"Please find the detailed report attached.\n\n"
+        f"— PPIS TrueFace Attendance System"
+    )
+
+    recipients = [r.strip() for r in REPORT_RECIPIENTS.split(",") if r.strip()]
+    for email in recipients:
+        ok = await send_email_async(
+            email,
+            f"Teacher {title_label} Report — {today_display}",
+            body,
+            "PP International School",
+            attachments=[(filename, xlsx_bytes)],
+        )
+        logger.info(f"[TRUEFACE] {title_label} report → {email}: {'OK' if ok else 'FAILED'}")
+
+
+def send_arrival_report_sync():
+    """Sync wrapper for scheduler."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(send_attendance_report("arrival"))
+        else:
+            loop.run_until_complete(send_attendance_report("arrival"))
+    except RuntimeError:
+        asyncio.run(send_attendance_report("arrival"))
+
+
+def send_departure_report_sync():
+    """Sync wrapper for scheduler."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(send_attendance_report("departure"))
+        else:
+            loop.run_until_complete(send_attendance_report("departure"))
+    except RuntimeError:
+        asyncio.run(send_attendance_report("departure"))
+
+
+# ============================================================
+# Legacy ADMS Protocol Endpoints (kept for future use)
 # ============================================================
 
 @router.get("/iclock/cdata")
 async def iclock_cdata_get(request: Request):
-    """Device initial handshake (GET)."""
     sn = request.query_params.get("SN", "unknown")
-    logger.info(f"[TRUEFACE] GET handshake from SN={sn}, params={dict(request.query_params)}")
+    logger.info(f"[TRUEFACE] GET handshake from SN={sn}")
     return PlainTextResponse("OK")
 
 
 @router.post("/iclock/cdata")
 async def iclock_cdata_post(request: Request):
-    """Receive attendance logs and operation logs from device."""
     sn = request.query_params.get("SN", "unknown")
     table = request.query_params.get("table", "").upper()
-
     body = await request.body()
     body_text = body.decode("utf-8", errors="replace")
-
-    logger.info(f"[TRUEFACE] POST /iclock/cdata SN={sn} table={table} len={len(body_text)}")
-    logger.info(f"[TRUEFACE] Body: {body_text[:500]}")
-
-    if table == "ATTLOG":
-        records = _parse_attlog(body_text)
-        _clear_daily_dedup()
-        users = _load_users()
-
-        for record in records:
-            pin = record["pin"]
-            timestamp = record["timestamp"]
-
-            logger.info(f"[TRUEFACE] Attendance: PIN={pin} time={timestamp} "
-                       f"status={record['status']} verify={record['verify']}")
-
-            user = users.get(pin)
-            if not user:
-                logger.warning(f"[TRUEFACE] Unknown PIN={pin} — not registered")
-                continue
-
-            # Dedup: only notify once per day
-            today = datetime.now(IST).strftime("%Y-%m-%d")
-            if _notified_today.get(pin) == today:
-                logger.info(f"[TRUEFACE] Already notified {user['name']} today, skipping")
-                continue
-
-            # Weekend check
-            now = datetime.now(IST)
-            if now.weekday() in (5, 6):
-                logger.info(f"[TRUEFACE] Weekend — skipping for {user['name']}")
-                continue
-
-            # Extract time for notification
-            try:
-                dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-                time_str = dt.strftime("%I:%M %p")
-            except (ValueError, TypeError):
-                time_str = datetime.now(IST).strftime("%I:%M %p")
-
-            phone = user.get("phone", "")
-            if phone:
-                _notified_today[pin] = today
-                asyncio.create_task(_send_teacher_whatsapp(user["name"], phone, time_str))
-            else:
-                logger.warning(f"[TRUEFACE] No phone for {user['name']} (PIN={pin})")
-
-    elif table == "OPERLOG":
-        logger.info(f"[TRUEFACE] OPERLOG: {body_text[:500]}")
-    else:
-        logger.info(f"[TRUEFACE] Unknown table={table}: {body_text[:200]}")
-
+    logger.info(f"[TRUEFACE] ADMS POST SN={sn} table={table}: {body_text[:300]}")
     return PlainTextResponse("OK")
 
 
 @router.get("/iclock/getrequest")
 async def iclock_getrequest(request: Request):
-    """Device polls for pending commands."""
-    sn = request.query_params.get("SN", "unknown")
-
-    if _command_queue:
-        cmd = _command_queue.pop(0)
-        logger.info(f"[TRUEFACE] Sending command to SN={sn}: {cmd[:100]}")
-        return PlainTextResponse(cmd)
-
     return PlainTextResponse("OK")
 
 
 @router.post("/iclock/devicecmd")
 async def iclock_devicecmd(request: Request):
-    """Device confirms command execution."""
-    sn = request.query_params.get("SN", "unknown")
-    body = await request.body()
-    logger.info(f"[TRUEFACE] CMD ACK from SN={sn}: {body.decode('utf-8', errors='replace')[:200]}")
     return PlainTextResponse("OK")
 
 
 # ============================================================
-# Management API
+# Teacher Management API
 # ============================================================
 
-@router.get("/api/trueface/users")
-async def list_trueface_users():
-    """List all registered TrueFace users (PIN → teacher mapping)."""
-    return _load_users()
+@router.get("/api/trueface/teachers")
+async def list_teachers():
+    """List all registered TrueFace teachers."""
+    db = await _get_db()
+    try:
+        teachers = await _get_all_teachers(db)
+    finally:
+        await db.close()
+    return {"teachers": teachers, "count": len(teachers)}
 
 
-@router.post("/api/trueface/users")
-async def register_trueface_user(request: Request):
-    """Register a TrueFace user.
-    
-    Body: {"pin": "1", "name": "Alisha Ahuja", "phone": "918076455224"}
-    """
+@router.post("/api/trueface/teachers")
+async def register_teacher(request: Request):
+    """Register a single teacher. Body: {"pin": "1", "name": "...", "phone": "..."}"""
     data = await request.json()
-    pin = str(data.get("pin", ""))
-    name = data.get("name", "")
-    phone = data.get("phone", "")
+    pin = str(data.get("pin", "")).strip()
+    name = data.get("name", "").strip()
+    phone = data.get("phone", "").strip()
 
     if not pin or not name:
         return {"error": "pin and name are required"}
 
-    users = _load_users()
-    users[pin] = {"name": name, "phone": phone}
-    _save_users(users)
-    logger.info(f"[TRUEFACE] User registered: PIN={pin} name={name} phone={phone}")
+    db = await _get_db()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO trueface_teachers (pin, name, phone) VALUES (?, ?, ?)",
+            (pin, name, phone),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    logger.info(f"[TRUEFACE] Teacher registered: PIN={pin} name={name} phone={phone}")
     return {"status": "ok", "pin": pin, "name": name}
 
 
-@router.post("/api/trueface/users/bulk")
-async def bulk_register_users(request: Request):
-    """Bulk register TrueFace users.
-    
-    Body: [{"pin": "1", "name": "...", "phone": "..."}, ...]
-    """
+@router.post("/api/trueface/teachers/bulk")
+async def bulk_register_teachers(request: Request):
+    """Bulk register teachers. Body: [{"pin": "1", "name": "...", "phone": "..."}, ...]"""
     data = await request.json()
-    users = _load_users()
+    db = await _get_db()
     count = 0
-    for entry in data:
-        pin = str(entry.get("pin", ""))
-        name = entry.get("name", "")
-        phone = entry.get("phone", "")
-        if pin and name:
-            users[pin] = {"name": name, "phone": phone}
-            count += 1
-    _save_users(users)
-    logger.info(f"[TRUEFACE] Bulk registered {count} users")
+    try:
+        for entry in data:
+            pin = str(entry.get("pin", "")).strip()
+            name = entry.get("name", "").strip()
+            phone = entry.get("phone", "").strip()
+            if pin and name:
+                await db.execute(
+                    "INSERT OR REPLACE INTO trueface_teachers (pin, name, phone) VALUES (?, ?, ?)",
+                    (pin, name, phone),
+                )
+                count += 1
+        await db.commit()
+    finally:
+        await db.close()
+
+    logger.info(f"[TRUEFACE] Bulk registered {count} teachers")
     return {"status": "ok", "registered": count}
 
 
-@router.delete("/api/trueface/users/{pin}")
-async def delete_trueface_user(pin: str):
-    """Remove a TrueFace user mapping."""
-    users = _load_users()
-    if pin in users:
-        del users[pin]
-        _save_users(users)
-    return {"status": "ok", "deleted": pin}
+@router.get("/api/trueface/attendance")
+async def get_attendance(date: str | None = None):
+    """Get attendance for a given date (default: today)."""
+    if not date:
+        date = datetime.now(IST).strftime("%Y-%m-%d")
+    db = await _get_db()
+    try:
+        teachers = await _get_all_teachers(db)
+        attendance = await _get_all_attendance(db, date)
+    finally:
+        await db.close()
+
+    att_map = {a["pin"]: a for a in attendance}
+    result = []
+    for t in teachers:
+        att = att_map.get(t["pin"], {})
+        result.append({
+            "pin": t["pin"],
+            "name": t["name"],
+            "phone": t["phone"],
+            "arrival_time": _format_time_12h(att["arrival_time"]) if att.get("arrival_time") else None,
+            "departure_time": _format_time_12h(att["departure_time"]) if att.get("departure_time") else None,
+            "status": "departed" if att.get("departure_time") else ("present" if att.get("arrival_time") else "absent"),
+        })
+
+    present = sum(1 for r in result if r["status"] != "absent")
+    return {"date": date, "total": len(teachers), "present": present, "records": result}
+
+
+@router.post("/api/trueface/report/arrival")
+async def trigger_arrival_report():
+    """Manually trigger the arrival report."""
+    await send_attendance_report("arrival")
+    return {"status": "ok", "type": "arrival"}
+
+
+@router.post("/api/trueface/report/departure")
+async def trigger_departure_report():
+    """Manually trigger the departure report."""
+    await send_attendance_report("departure")
+    return {"status": "ok", "type": "departure"}
 
 
 @router.get("/api/trueface/status")
 async def trueface_status():
     """Get TrueFace integration status."""
-    users = _load_users()
+    db = await _get_db()
+    try:
+        teachers = await _get_all_teachers(db)
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        attendance = await _get_all_attendance(db, today)
+    finally:
+        await db.close()
+
     return {
-        "registered_users": len(users),
-        "notified_today": len(_notified_today),
-        "pending_commands": len(_command_queue),
-        "users": users,
+        "registered_teachers": len(teachers),
+        "today_present": len([a for a in attendance if a.get("arrival_time")]),
+        "today_departed": len([a for a in attendance if a.get("departure_time")]),
     }

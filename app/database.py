@@ -307,6 +307,33 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- ── TrueFace attendance tracking ──────────────────────────
+            CREATE TABLE IF NOT EXISTS trueface_teachers (
+                pin TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                phone TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS trueface_attendance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pin TEXT NOT NULL,
+                name TEXT NOT NULL,
+                date TEXT NOT NULL,
+                arrival_time TEXT,
+                departure_time TEXT,
+                arrival_whatsapp INTEGER DEFAULT 0,
+                departure_whatsapp INTEGER DEFAULT 0,
+                arrival_report_sent INTEGER DEFAULT 0,
+                departure_report_sent INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_trueface_att_date
+                ON trueface_attendance (date);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_trueface_att_pin_date
+                ON trueface_attendance (pin, date);
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
