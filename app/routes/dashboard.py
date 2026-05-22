@@ -2085,3 +2085,20 @@ async def send_review_copies(payload: dict):
         await _asyncio.sleep(1)
 
     return {"phone": phone, "sent": sent, "failed": failed, "details": details}
+
+
+@router.post("/homework/reset-hash/{grade}", dependencies=[Depends(verify_dashboard_secret)])
+async def reset_grade_hash(grade: str):
+    """Reset the content hash for a grade so the next scheduled check retries delivery.
+
+    Useful when delivery failed (e.g. rate limiting) and the hash was
+    incorrectly updated.  After calling this, the next homework check
+    will treat the current doc content as 'new' and resend it.
+    """
+    db = await get_db()
+    result = await db.execute(
+        "DELETE FROM homework_doc_state WHERE grade = ?", (grade,)
+    )
+    await db.commit()
+    deleted = result.rowcount
+    return {"grade": grade, "hash_reset": deleted > 0, "rows_deleted": deleted}

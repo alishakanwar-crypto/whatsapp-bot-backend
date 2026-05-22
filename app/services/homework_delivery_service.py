@@ -735,8 +735,16 @@ async def run_homework_delivery(period: int) -> dict:
             grade, new_portion, period_label,
         )
 
-        # Update stored hash
-        await _update_content_hash(grade, new_hash, homework)
+        # Only update stored hash if at least one parent was notified.
+        # If ALL sends failed (rate-limiting, API outage, etc.), keep the
+        # old hash so the next scheduled check retries delivery.
+        if sent > 0:
+            await _update_content_hash(grade, new_hash, homework)
+        else:
+            logger.warning(
+                f"[HW DELIVERY] {grade}: all {failed} sends failed — "
+                f"NOT updating content hash so next check retries"
+            )
 
         # Log delivery
         status_label = "delivered" if sent > 0 else "all_failed"
@@ -755,7 +763,7 @@ async def run_homework_delivery(period: int) -> dict:
 
         # Pause between grades to avoid Meta API rate limiting
         if sent > 0 or failed > 0:
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(15.0)
 
     logger.info(
         f"=== HOMEWORK DELIVERY COMPLETE: {results['grades_with_homework']}/"
