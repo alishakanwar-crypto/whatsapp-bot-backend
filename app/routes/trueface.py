@@ -42,6 +42,9 @@ CHAIRMAN_TEMPLATE = os.environ.get(
     "TRUEFACE_CHAIRMAN_TEMPLATE", "ppis_chairman_teacher_arrival"
 )
 
+# Kill switch: set TRUEFACE_WHATSAPP_DISABLED=true to suppress all WhatsApp sends
+WHATSAPP_DISABLED = os.environ.get("TRUEFACE_WHATSAPP_DISABLED", "").lower() in ("true", "1", "yes")
+
 # Before this hour (IST), all detections count as arrival only.
 # Departure is only recorded after this hour.
 DEPARTURE_HOUR = int(os.environ.get("TRUEFACE_DEPARTURE_HOUR", "11"))
@@ -171,6 +174,9 @@ def _format_time_12h(timestamp: str) -> str:
 # ============================================================
 
 async def _send_arrival_whatsapp(name: str, phone: str, time_str: str) -> bool:
+    if WHATSAPP_DISABLED:
+        logger.info("[TRUEFACE] WhatsApp DISABLED — skipping arrival for %s", name)
+        return False
     from app.services.whatsapp_service import send_cloud_template_message
     display_name = name.title() if name == name.upper() else name
     logger.info(f"[TRUEFACE] Arrival WhatsApp → {phone} for {display_name} at {time_str}")
@@ -189,6 +195,9 @@ async def _send_arrival_whatsapp(name: str, phone: str, time_str: str) -> bool:
 
 
 async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool:
+    if WHATSAPP_DISABLED:
+        logger.info("[TRUEFACE] WhatsApp DISABLED — skipping departure for %s", name)
+        return False
     from app.services.whatsapp_service import send_cloud_template_message
     display_name = name.title() if name == name.upper() else name
     logger.info(f"[TRUEFACE] Departure WhatsApp → {phone} for {display_name} at {time_str}")
@@ -237,6 +246,9 @@ async def _notify_chairman_arrival(
     The template requires an IMAGE header. If no live photo was captured
     from the device, we fall back to the stored database photo.
     """
+    if WHATSAPP_DISABLED:
+        logger.info("[TRUEFACE] WhatsApp DISABLED — skipping chairman notify for %s", name)
+        return False
     if not CHAIRMAN_PHONE:
         return False
 
