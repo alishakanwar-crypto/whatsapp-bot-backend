@@ -206,32 +206,74 @@ async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool
         return False
 
 
+async def _get_db_photo_b64(name: str) -> str:
+    """Fetch the stored face photo from the DVR database for a teacher."""
+    import base64
+
+    try:
+        db = await _get_db()
+        norm = name.strip().lower()
+        cur = await db.execute(
+            "SELECT image_data FROM agent_registered_faces "
+            "WHERE (person_id LIKE 'TEACHER_%' OR person_id LIKE 'PRINCIPAL_%') "
+            "AND LOWER(name) LIKE ? "
+            "ORDER BY registered_at DESC LIMIT 1",
+            (f"%{norm}%",),
+        )
+        row = await cur.fetchone()
+        await db.close()
+        if row and row[0]:
+            return base64.b64encode(row[0]).decode()
+    except Exception as e:
+        logger.debug("[TRUEFACE] DB photo lookup failed for %s: %s", name, e)
+    return ""
+
+
 async def _notify_chairman_arrival(
     name: str, time_str: str, photo_b64: str = "",
 ) -> bool:
-    """Send arrival notification with optional face photo to the chairman."""
+    """Send arrival notification with face photo to the chairman.
+
+    The template requires an IMAGE header. If no live photo was captured
+    from the device, we fall back to the stored database photo.
+    """
     if not CHAIRMAN_PHONE:
         return False
 
-    from app.services.whatsapp_service import send_cloud_template_message
-
-    display_name = name.title() if name == name.upper() else name
-    logger.info(
-        "[TRUEFACE] Chairman notify → %s: %s at %s (photo=%s)",
-        CHAIRMAN_PHONE, display_name, time_str, "yes" if photo_b64 else "no",
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        upload_base64_image_cloud,
     )
 
+    display_name = name.title() if name == name.upper() else name
+
+    # Try live photo first, then fall back to database photo
+    image_b64 = photo_b64
+    photo_source = "live"
+    if not image_b64:
+        image_b64 = await _get_db_photo_b64(name)
+        photo_source = "database" if image_b64 else "none"
+
+    logger.info(
+        "[TRUEFACE] Chairman notify → %s: %s at %s (photo=%s)",
+        CHAIRMAN_PHONE, display_name, time_str, photo_source,
+    )
+
+    if not image_b64:
+        logger.warning("[TRUEFACE] No photo available for %s — skipping chairman notify", name)
+        return False
+
     header_image_id = None
-    if photo_b64:
-        try:
-            from app.services.whatsapp_service import upload_base64_image_cloud
-            header_image_id = await upload_base64_image_cloud(photo_b64)
-            if header_image_id:
-                logger.info("[TRUEFACE] Uploaded face photo, media_id=%s", header_image_id)
-            else:
-                logger.warning("[TRUEFACE] Face photo upload failed — sending without photo")
-        except Exception as e:
-            logger.warning("[TRUEFACE] Face photo upload error: %s", e)
+    try:
+        header_image_id = await upload_base64_image_cloud(image_b64)
+        if header_image_id:
+            logger.info("[TRUEFACE] Uploaded %s photo, media_id=%s", photo_source, header_image_id)
+        else:
+            logger.warning("[TRUEFACE] Photo upload failed for %s", name)
+            return False
+    except Exception as e:
+        logger.warning("[TRUEFACE] Photo upload error: %s", e)
+        return False
 
     try:
         ok = await send_cloud_template_message(
