@@ -3152,7 +3152,14 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
             sc_rows = await sc_cursor.fetchall()
             existing_names = {r["student_name"].upper() for r in results}
             for row in sc_rows:
-                if row[0].upper() not in existing_names:
+                sc_name = row[0].upper().strip()
+                # Skip if this summer camp student already exists in PI sheet
+                # (exact match OR first name is contained in an existing entry)
+                is_dup = (
+                    sc_name in existing_names
+                    or any(sc_name in en or en in sc_name for en in existing_names)
+                )
+                if not is_dup:
                     contact_digits = re.sub(r"\D", "", row[2] or "")
                     parent_phones = [f"91{contact_digits[-10:]}"] if len(contact_digits) >= 10 else []
                     results.append({
