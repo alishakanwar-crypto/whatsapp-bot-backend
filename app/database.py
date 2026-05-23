@@ -317,6 +317,7 @@ async def init_db():
 
             CREATE TABLE IF NOT EXISTS trueface_contacts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pin TEXT,
                 name TEXT NOT NULL,
                 phone TEXT NOT NULL,
                 category TEXT DEFAULT 'staff',
@@ -408,6 +409,13 @@ async def init_db():
         try:
             await db.execute(
                 "ALTER TABLE messages ADD COLUMN wa_message_id TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE trueface_contacts ADD COLUMN pin TEXT"
             )
         except Exception:
             pass  # column already exists
