@@ -270,9 +270,6 @@ async def receive_trueface_event(request: Request):
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
 
-    if now.weekday() in (5, 6):
-        return {"status": "skipped", "reason": "weekend"}
-
     db = await _get_db()
     results = []
     try:
@@ -516,9 +513,6 @@ async def send_attendance_report(report_type: str = "arrival"):
     today_display = datetime.now(IST).strftime("%d %b %Y (%A)")
 
     now = datetime.now(IST)
-    if now.weekday() in (5, 6):
-        logger.info(f"[TRUEFACE] Weekend — skipping {report_type} report")
-        return
 
     db = await _get_db()
     try:
