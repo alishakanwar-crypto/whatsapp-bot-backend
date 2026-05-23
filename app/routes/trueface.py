@@ -34,7 +34,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 router = APIRouter()
 
 REPORT_RECIPIENTS = os.environ.get(
-    "TRUEFACE_REPORT_EMAIL", "leave@ppischool.in"
+    "TRUEFACE_REPORT_EMAIL", "leave@ppischool.in,alisha.kanwar@ppischool.in"
 )
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")

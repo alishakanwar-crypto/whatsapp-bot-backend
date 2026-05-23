@@ -689,24 +689,24 @@ def start_scheduler() -> None:
     logger.info("DVR-based teacher attendance Excel DISABLED — using TrueFace system")
 
     # --- TrueFace Attendance Reports ---
-    # 8:00 AM IST (2:30 UTC) → Arrival report emailed to leave@ppischool.in
+    # 9:00 AM IST (3:30 UTC) → Arrival report emailed
     from app.routes.trueface import send_arrival_report_sync, send_departure_report_sync
     scheduler.add_job(
         send_arrival_report_sync,
-        trigger=CronTrigger(hour=2, minute=30, second=0),
+        trigger=CronTrigger(hour=3, minute=30, second=0),
         id="trueface_arrival_report",
         replace_existing=True,
     )
-    logger.info("Scheduled TrueFace arrival report at 8:00 AM IST (2:30 UTC)")
+    logger.info("Scheduled TrueFace arrival report at 9:00 AM IST (3:30 UTC)")
 
-    # 3:00 PM IST (9:30 UTC) → Departure report emailed to leave@ppischool.in
+    # 4:30 PM IST (11:00 UTC) → Departure report emailed
     scheduler.add_job(
         send_departure_report_sync,
-        trigger=CronTrigger(hour=9, minute=30, second=0),
+        trigger=CronTrigger(hour=11, minute=0, second=0),
         id="trueface_departure_report",
         replace_existing=True,
     )
-    logger.info("Scheduled TrueFace departure report at 3:00 PM IST (9:30 UTC)")
+    logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
