@@ -163,11 +163,19 @@ async def _auto_register_from_dvr(db, pin: str, evt_name: str) -> dict | None:
 
 
 async def _auto_register_from_contacts(db, pin: str, evt_name: str) -> dict | None:
-    """Match a TrueFace event name against the uploaded contact sheet."""
+    """Match a TrueFace event name against the uploaded contact sheet.
+
+    Uses priority matching to avoid ambiguity:
+    1. Exact full name match (highest priority)
+    2. Full name contained in contact name or vice versa
+    3. First name match (only if exactly ONE contact matches)
+    If multiple contacts match at the same priority, skip (ambiguous).
+    """
     if not evt_name:
         return None
 
     norm = evt_name.strip().lower()
+    norm_parts = norm.split()
 
     try:
         cur = await db.execute("SELECT name, phone FROM trueface_contacts")
@@ -176,32 +184,77 @@ async def _auto_register_from_contacts(db, pin: str, evt_name: str) -> dict | No
         logger.warning(f"[TRUEFACE] Contact sheet lookup failed: {e}")
         return None
 
+    # Priority 1: Exact full name match
     for r in rows:
         contact_name = (r[0] or "").strip()
-        contact_phone = (r[1] or "").strip()
         cn_lower = contact_name.lower()
+        if cn_lower == norm:
+            return await _register_contact_match(db, pin, evt_name, contact_name, r[1])
 
-        # Match: exact, first name match, or substring
-        if (cn_lower == norm or norm in cn_lower or cn_lower in norm
-                or norm.split()[0] == cn_lower.split()[0]):
-            try:
-                await db.execute(
-                    "INSERT OR REPLACE INTO trueface_teachers (pin, name, phone) "
-                    "VALUES (?, ?, ?)",
-                    (pin, evt_name.strip(), contact_phone),
-                )
-                await db.commit()
-                logger.info(
-                    f"[TRUEFACE] Auto-registered from contacts: PIN={pin} "
-                    f"name={evt_name.strip()} phone={contact_phone} "
-                    f"(matched: {contact_name})"
-                )
-                return {"pin": pin, "name": evt_name.strip(), "phone": contact_phone}
-            except Exception as e:
-                logger.error(f"[TRUEFACE] Contact register insert failed: {e}")
-                return None
+    # Priority 2: Full name substring match (one contains the other)
+    substring_matches = []
+    for r in rows:
+        contact_name = (r[0] or "").strip()
+        cn_lower = contact_name.lower()
+        if norm in cn_lower or cn_lower in norm:
+            substring_matches.append((contact_name, r[1]))
+
+    if len(substring_matches) == 1:
+        return await _register_contact_match(
+            db, pin, evt_name, substring_matches[0][0], substring_matches[0][1])
+    elif len(substring_matches) > 1:
+        names = [m[0] for m in substring_matches]
+        logger.warning(
+            f"[TRUEFACE] Ambiguous substring match for PIN={pin} name='{evt_name}': "
+            f"{names} — skipping auto-register")
+        return None
+
+    # Priority 3: First name match (only if unambiguous)
+    if norm_parts:
+        first_name = norm_parts[0]
+        first_name_matches = []
+        for r in rows:
+            contact_name = (r[0] or "").strip()
+            cn_parts = contact_name.lower().split()
+            if cn_parts and cn_parts[0] == first_name:
+                first_name_matches.append((contact_name, r[1]))
+            elif len(cn_parts) > 1 and cn_parts[-1] == first_name:
+                # Also check last word (e.g., "Advocate Muskaan" → last word "muskaan")
+                first_name_matches.append((contact_name, r[1]))
+
+        if len(first_name_matches) == 1:
+            return await _register_contact_match(
+                db, pin, evt_name, first_name_matches[0][0], first_name_matches[0][1])
+        elif len(first_name_matches) > 1:
+            names = [m[0] for m in first_name_matches]
+            logger.warning(
+                f"[TRUEFACE] Ambiguous first-name match for PIN={pin} name='{evt_name}': "
+                f"{names} — skipping auto-register")
+            return None
 
     return None
+
+
+async def _register_contact_match(db, pin: str, evt_name: str,
+                                   contact_name: str, phone) -> dict | None:
+    """Register a matched contact as a TrueFace teacher."""
+    contact_phone = (phone or "").strip()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO trueface_teachers (pin, name, phone) "
+            "VALUES (?, ?, ?)",
+            (pin, evt_name.strip(), contact_phone),
+        )
+        await db.commit()
+        logger.info(
+            f"[TRUEFACE] Auto-registered from contacts: PIN={pin} "
+            f"name={evt_name.strip()} phone={contact_phone} "
+            f"(matched: {contact_name})"
+        )
+        return {"pin": pin, "name": evt_name.strip(), "phone": contact_phone}
+    except Exception as e:
+        logger.error(f"[TRUEFACE] Contact register insert failed: {e}")
+        return None
 
 
 def _format_time_12h(timestamp: str) -> str:
