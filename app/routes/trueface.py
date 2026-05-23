@@ -206,32 +206,48 @@ async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool
         return False
 
 
+_PLACEHOLDER_IMAGE_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAAAtUlEQVR4nO3QQQkAIADAQJOYybAG"
+    "tIIfeNBhYO/unplZfz8A/zIrYFbArIBZAbMCZgXMCpgVMCtgVsCsgFkBswJmBcwKmBUwK2BWwKyA"
+    "WQGzAmYFzAqYFTArYFbArIBZAbMCZgXMCpgVMCtgVsCsgFkBswJmBcwKmBUwK2BWwKyAWQGzAmYF"
+    "zAqYFTArYFbArIBZAbMCZgXMCpgVMCtgVsCsgFkBswJmBcwKfAFfewMD+Up7mgAAAABJRU5ErkJg"
+    "gg=="
+)
+
+
 async def _notify_chairman_arrival(
     name: str, time_str: str, photo_b64: str = "",
 ) -> bool:
-    """Send arrival notification with optional face photo to the chairman."""
+    """Send arrival notification with face photo to the chairman.
+
+    The template requires an IMAGE header. If no face photo was captured,
+    a placeholder image is used so the message still sends.
+    """
     if not CHAIRMAN_PHONE:
         return False
 
-    from app.services.whatsapp_service import send_cloud_template_message
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        upload_base64_image_cloud,
+    )
 
     display_name = name.title() if name == name.upper() else name
+    image_source = photo_b64 if photo_b64 else _PLACEHOLDER_IMAGE_B64
     logger.info(
         "[TRUEFACE] Chairman notify → %s: %s at %s (photo=%s)",
-        CHAIRMAN_PHONE, display_name, time_str, "yes" if photo_b64 else "no",
+        CHAIRMAN_PHONE, display_name, time_str,
+        "face" if photo_b64 else "placeholder",
     )
 
     header_image_id = None
-    if photo_b64:
-        try:
-            from app.services.whatsapp_service import upload_base64_image_cloud
-            header_image_id = await upload_base64_image_cloud(photo_b64)
-            if header_image_id:
-                logger.info("[TRUEFACE] Uploaded face photo, media_id=%s", header_image_id)
-            else:
-                logger.warning("[TRUEFACE] Face photo upload failed — sending without photo")
-        except Exception as e:
-            logger.warning("[TRUEFACE] Face photo upload error: %s", e)
+    try:
+        header_image_id = await upload_base64_image_cloud(image_source)
+        if header_image_id:
+            logger.info("[TRUEFACE] Uploaded image, media_id=%s", header_image_id)
+        else:
+            logger.warning("[TRUEFACE] Image upload failed")
+    except Exception as e:
+        logger.warning("[TRUEFACE] Image upload error: %s", e)
 
     try:
         ok = await send_cloud_template_message(
