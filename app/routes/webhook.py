@@ -780,6 +780,52 @@ async def try_handle_pending_query(
     return True
 
 
+async def try_handle_pending_snapshot(
+    sender: str, message_text: str, reply_to: str
+) -> bool:
+    """Check if sender has a pending snapshot disambiguation request.
+
+    When a parent/admin with multiple wards asks for a snapshot without
+    specifying the grade, the bot asks them to specify. This function
+    links the follow-up reply (e.g. "Grade 3 C") back to the original
+    snapshot request so it is fulfilled instead of being treated as a
+    brand-new message.
+
+    Returns True if handled.
+    """
+    pending = await get_pending_query(sender)
+    if not pending:
+        return False
+
+    original = pending["original_query"]
+    if not original.startswith("SNAPSHOT:"):
+        return False
+
+    # Try extracting a grade from the reply
+    grade = _extract_classroom_from_message(message_text)
+    if not grade:
+        # Parent might have typed just "3 C" or "3C" without "grade" prefix
+        grade = _extract_classroom_from_message(f"grade {message_text}")
+    if not grade:
+        # Still no match — not a grade reply; clear stale pending and let
+        # normal message flow handle it.
+        await delete_pending_query(sender)
+        return False
+
+    await delete_pending_query(sender)
+
+    # Reconstruct a proper snapshot request with the grade so the
+    # existing snapshot handler fulfils it.
+    reconstructed = f"show photo of {grade}"
+    logger.info(
+        f"Pending snapshot resolved for {sender}: "
+        f"'{message_text}' → '{reconstructed}'"
+    )
+    return await detect_and_handle_snapshot_request(
+        sender, reconstructed, reply_to
+    )
+
+
 def _is_unknown_response(ai_response: str) -> bool:
     """Detect if the AI response indicates the bot doesn't have specific info.
     Returns True ONLY if the response is PRIMARILY a 'I don't know' message.
@@ -3494,6 +3540,7 @@ async def detect_and_handle_snapshot_request(
                     "Thank you.\n"
                     "Warm regards,\nPP International School"
                 )
+                await save_pending_query(sender, reply_to, f"SNAPSHOT:{message_text}")
                 return True
             else:
                 # Not a parent either — ask for location
@@ -3551,6 +3598,7 @@ async def detect_and_handle_snapshot_request(
                     "Thank you for your cooperation.\n"
                     "Warm regards,\nPP International School"
                 )
+                await save_pending_query(sender, reply_to, f"SNAPSHOT:{message_text}")
                 return True
             else:
                 await send_whatsapp_message(
@@ -3948,6 +3996,12 @@ async def receive_whatsapp_message(request: Request):
         # Check if this is a teacher replying to a forwarded message (text or media)
         relayed = await try_relay_teacher_reply(sender, message_text, reply_to, media_info)
         if relayed:
+            return {"status": "ok"}
+
+        # Check if sender has a pending snapshot disambiguation
+        # (e.g. bot asked "which ward?" and parent replied "Grade 3C")
+        pending_snap = await try_handle_pending_snapshot(sender, message_text, reply_to)
+        if pending_snap:
             return {"status": "ok"}
 
         # Check for classroom snapshot request (live photo from DVR camera)
@@ -5787,6 +5841,11 @@ async def receive_cloud_api_message(request: Request):
         # Check if this is a teacher replying to a forwarded message
         relayed = await try_relay_teacher_reply(sender, message_text, reply_to, media_info)
         if relayed:
+            return {"status": "ok"}
+
+        # Check if sender has a pending snapshot disambiguation
+        pending_snap = await try_handle_pending_snapshot(sender, message_text, reply_to)
+        if pending_snap:
             return {"status": "ok"}
 
         # Check for classroom snapshot request (live photo from DVR camera)
