@@ -702,81 +702,20 @@ async def try_handle_pending_query(
 
     original_query = pending["original_query"]
     teacher_name = teacher_entry["teacher"].split("/")[0].strip()
-    teacher_email = teacher_entry.get("email", "")
-    teacher_phone = teacher_entry.get("whatsapp", "")
     grade = teacher_entry["grade"]
 
-    if not teacher_email and not teacher_phone:
-        # No contact info for this teacher
-        msg = (
-            f"I found the class teacher for *{grade}* is *{teacher_name}*, "
-            f"but I don't have their contact details on file. "
-            f"Please contact the school office for assistance.\n\n"
-            f"Phone: 011-45161066 / 64 / 63\n"
-            f"Email: info@ppischool.in"
-        )
-        await send_whatsapp_message(reply_to, msg)
-        await delete_pending_query(sender)
-        return True
-
-    # Build the forwarded message for the teacher
-    notification = (
-        f"Dear {teacher_name},\n\n"
-        f"A parent has sent the following query via the *PPIS Bot* "
-        f"regarding *{grade}*:\n\n"
-        f"\U0001f4e9 \"{original_query}\"\n\n"
-        f"Please address this query at your earliest convenience.\n\n"
-        f"— PPIS Bot"
-    )
-
-    # Forward via WhatsApp (force-send — teacher may not have messaged bot recently)
-    wa_success = False
-    if teacher_phone:
-        chat_id = _teacher_chat_id(teacher_phone)
-        wa_success = await send_whatsapp_force(chat_id, notification)
-        if wa_success:
-            logger.info(f"Forwarded pending query via WhatsApp to {teacher_name} ({teacher_phone})")
-
-    # Forward via email
-    email_success = False
-    if teacher_email:
-        email_subject = f"PPIS Bot: Parent Query regarding {grade}"
-        email_body = (
-            f"Dear {teacher_name},\n\n"
-            f"A parent has sent the following query via the PPIS WhatsApp Bot "
-            f"regarding {grade}:\n\n"
-            f"\"{original_query}\"\n\n"
-            f"Please address this query at your earliest convenience.\n\n"
-            f"Regards,\nPPIS Bot"
-        )
-        email_success = await send_email_async(teacher_email, email_subject, email_body)
-        if email_success:
-            logger.info(f"Forwarded pending query via email to {teacher_name} ({teacher_email})")
-
-    # Build confirmation message
-    methods = []
-    if wa_success:
-        methods.append("WhatsApp")
-    if email_success:
-        methods.append(f"email ({teacher_email})")
-
-    if methods:
-        method_str = " and ".join(methods)
-        confirm_msg = (
-            f"Thank you! Your query has been forwarded to *{teacher_name}* "
-            f"(Class Teacher, {grade}) via {method_str}.\n\n"
-            f"They will get back to you soon."
-        )
-    else:
-        confirm_msg = (
-            f"I tried to forward your query to *{teacher_name}* ({grade}) "
-            f"but could not reach them right now. Please contact the school office directly.\n\n"
-            f"Phone: 011-45161066 / 64 / 63\n"
-            f"Email: info@ppischool.in"
-        )
-
-    await send_whatsapp_message(reply_to, confirm_msg)
+    # Instead of auto-forwarding, ask parent for confirmation
     await delete_pending_query(sender)
+    await save_pending_query(
+        sender, reply_to,
+        f"CONFIRM_FORWARD:{grade}:{original_query}",
+    )
+    _ask_confirm = (
+        f"Would you like me to forward your query to "
+        f"*{teacher_name}* (Class Teacher, {grade})?\n\n"
+        f"Reply *yes* to confirm."
+    )
+    await send_whatsapp_message(reply_to, _ask_confirm)
     return True
 
 
@@ -824,6 +763,87 @@ async def try_handle_pending_snapshot(
     return await detect_and_handle_snapshot_request(
         sender, reconstructed, reply_to
     )
+
+
+# Affirmative replies that confirm a pending forward
+_CONFIRM_YES_RE = re.compile(
+    r"^(?:yes|yeah|yea|yep|yup|ok|okay|sure|haan|haa|ji|ha|"
+    r"please|plz|pls|go ahead|forward|send|do it|confirm|"
+    r"yes please|ok please|haan ji|ji haan|theek hai|thik hai|"
+    r"👍|✅)\s*[.!?]*$",
+    re.IGNORECASE,
+)
+
+
+async def try_handle_pending_forward_confirmation(
+    sender: str, message_text: str, reply_to: str
+) -> bool:
+    """Check if sender has a pending teacher-forward awaiting confirmation.
+
+    When the bot asks 'Would you like me to forward this to the teacher?',
+    this function processes the yes/no reply.
+
+    Returns True if handled.
+    """
+    pending = await get_pending_query(sender)
+    if not pending:
+        return False
+
+    original = pending["original_query"]
+    if not original.startswith("CONFIRM_FORWARD:"):
+        return False
+
+    stripped = message_text.strip()
+
+    if _CONFIRM_YES_RE.match(stripped):
+        # Parent confirmed — extract info and forward
+        # Format: CONFIRM_FORWARD:child_grade:original_message
+        parts = original.split(":", 2)
+        if len(parts) < 3:
+            await delete_pending_query(sender)
+            return False
+
+        child_grade = parts[1]
+        original_message = parts[2]
+
+        await delete_pending_query(sender)
+
+        children = await _lookup_parent_child_class(sender)
+        child = next(
+            (c for c in children
+             if c["grade"].lower().replace(" ", "")
+             == child_grade.lower().replace(" ", "")),
+            children[0] if children else None,
+        )
+        if not child:
+            return False
+
+        teacher_entry = find_teacher_by_grade(child["grade"])
+        if not teacher_entry:
+            for entry in TEACHER_DATA:
+                entry_grade_low = entry["grade"].lower().replace(" ", "")
+                child_grade_low = child["grade"].lower().replace(" ", "")
+                if child_grade_low == entry_grade_low or child_grade_low in entry_grade_low:
+                    teacher_entry = entry
+                    break
+
+        if not teacher_entry:
+            return False
+
+        logger.info(
+            f"Parent {sender} confirmed forward to "
+            f"{teacher_entry['teacher']} ({child['grade']})"
+        )
+        return await _forward_query_to_class_teacher(
+            sender, original_message, reply_to, child, teacher_entry,
+        )
+
+    # Not a yes — parent declined or sent a new message
+    await delete_pending_query(sender)
+    logger.info(
+        f"Parent {sender} did not confirm forward (reply: {stripped[:50]})"
+    )
+    return False
 
 
 def _is_unknown_response(ai_response: str) -> bool:
@@ -2192,7 +2212,7 @@ async def try_route_parent_to_class_teacher(
         await send_whatsapp_message(reply_to, ask_msg)
         return True
 
-    # --- Single child: auto-route to class teacher ---
+    # --- Single child: ask parent for confirmation before forwarding ---
     child = children[0]
     teacher_entry = find_teacher_by_grade(child["grade"])
     if not teacher_entry:
@@ -2208,9 +2228,26 @@ async def try_route_parent_to_class_teacher(
         logger.warning(f"[PARENT→TEACHER] No teacher found for grade {child['grade']}")
         return False  # Fall through to GPT
 
-    return await _forward_query_to_class_teacher(
-        sender, message_text, reply_to, child, teacher_entry, media_info,
+    # For media (images/docs), auto-forward since that's clearly the intent
+    if media_info and media_info.get("cloud_media_id"):
+        return await _forward_query_to_class_teacher(
+            sender, message_text, reply_to, child, teacher_entry, media_info,
+        )
+
+    # For text queries, ask parent for confirmation first
+    teacher_name = teacher_entry["teacher"].split("/")[0].strip()
+    teacher_grade = teacher_entry["grade"]
+    await save_pending_query(
+        sender, reply_to,
+        f"CONFIRM_FORWARD:{child['grade']}:{message_text}",
     )
+    _ask_confirm = (
+        f"Would you like me to forward your query to "
+        f"*{teacher_name}* (Class Teacher, {teacher_grade})?\n\n"
+        f"Reply *yes* to confirm."
+    )
+    await send_whatsapp_message(reply_to, _ask_confirm)
+    return True
 
 
 async def _forward_query_to_class_teacher(
@@ -3998,6 +4035,12 @@ async def receive_whatsapp_message(request: Request):
         if relayed:
             return {"status": "ok"}
 
+        # Check if sender has a pending forward confirmation
+        # (bot asked "Would you like me to forward to teacher?" and parent replied)
+        pending_fwd = await try_handle_pending_forward_confirmation(sender, message_text, reply_to)
+        if pending_fwd:
+            return {"status": "ok"}
+
         # Check if sender has a pending snapshot disambiguation
         # (e.g. bot asked "which ward?" and parent replied "Grade 3C")
         pending_snap = await try_handle_pending_snapshot(sender, message_text, reply_to)
@@ -4141,9 +4184,8 @@ async def receive_whatsapp_message(request: Request):
         # Meal menu image sharing — DISABLED per user request
         # Photo gallery sharing — DISABLED per user request
 
-        # Forward to teachers if a class/teacher was mentioned, and confirm delivery
-        # Also forward any attached media to the teacher
-        await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)
+        # NOTE: Do NOT auto-forward to teachers after GPT responds.
+        # Parent must explicitly confirm before any query is forwarded.
 
         return {"status": "ok"}
     finally:
@@ -5843,6 +5885,11 @@ async def receive_cloud_api_message(request: Request):
         if relayed:
             return {"status": "ok"}
 
+        # Check if sender has a pending forward confirmation
+        pending_fwd = await try_handle_pending_forward_confirmation(sender, message_text, reply_to)
+        if pending_fwd:
+            return {"status": "ok"}
+
         # Check if sender has a pending snapshot disambiguation
         pending_snap = await try_handle_pending_snapshot(sender, message_text, reply_to)
         if pending_snap:
@@ -6070,7 +6117,7 @@ async def receive_cloud_api_message(request: Request):
 
         ai_response = await generate_response(gpt_query, system_prompt, history)
 
-        # If GPT couldn't answer → forward to class teacher for known parents
+        # If GPT couldn't answer → ask parent for confirmation before forwarding
         if _is_unknown_response(ai_response):
             _parent_children = await _lookup_parent_child_class(sender)
             if _parent_children:
@@ -6085,18 +6132,25 @@ async def receive_cloud_api_message(request: Request):
                             break
 
                 if teacher_entry:
-                    _custom_confirm = (
-                        "I will forward your query to the Class Teacher, "
-                        "once she replies, I'll share her response with you.\n\n"
-                        "Thanks and regards,\nPP International School"
+                    teacher_name = teacher_entry["teacher"].split("/")[0].strip()
+                    teacher_grade = teacher_entry["grade"]
+                    # Save pending confirmation instead of auto-forwarding
+                    await save_pending_query(
+                        sender, reply_to,
+                        f"CONFIRM_FORWARD:{child['grade']}:{message_text}",
                     )
-                    routed = await _forward_query_to_class_teacher(
-                        sender, message_text, reply_to, child,
-                        teacher_entry, media_info,
-                        custom_confirm=_custom_confirm,
+                    _ask_confirm = (
+                        f"I don't have specific information about this. "
+                        f"Would you like me to forward your query to "
+                        f"*{teacher_name}* (Class Teacher, {teacher_grade})?\n\n"
+                        f"Reply *yes* to confirm."
                     )
-                    if routed:
-                        return {"status": "ok"}
+                    await send_whatsapp_message(reply_to, _ask_confirm)
+                    await save_message(
+                        bot_phone, sender, _ask_confirm,
+                        "whatsapp", "outgoing",
+                    )
+                    return {"status": "ok"}
 
             # Non-parent or no teacher found — show escalation contacts
             await save_pending_query(sender, reply_to, message_text)
@@ -6138,8 +6192,8 @@ async def receive_cloud_api_message(request: Request):
         sent_wa_id = getattr(send_whatsapp_message, "last_wa_id", "") or ""
         await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing", wa_message_id=sent_wa_id)
 
-        # Forward to teachers if mentioned
-        await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)
+        # NOTE: Do NOT auto-forward to teachers after GPT responds.
+        # Parent must explicitly confirm before any query is forwarded.
 
         return {"status": "ok"}
     finally:
