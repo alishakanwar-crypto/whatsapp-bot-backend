@@ -163,10 +163,11 @@ async def _auto_register_from_dvr(db, pin: str, evt_name: str) -> dict | None:
 
 
 async def _auto_register_from_contacts(db, pin: str, evt_name: str) -> dict | None:
-    """Match a TrueFace event name against the uploaded contact sheet.
+    """Match a TrueFace event against the uploaded contact sheet.
 
-    Uses priority matching to avoid ambiguity:
-    1. Exact full name match (highest priority)
+    Uses priority matching:
+    0. PIN-based match (highest priority — exact employee ID match)
+    1. Exact full name match
     2. Full name contained in contact name or vice versa
     3. First name match (only if exactly ONE contact matches)
     If multiple contacts match at the same priority, skip (ambiguous).
@@ -178,26 +179,35 @@ async def _auto_register_from_contacts(db, pin: str, evt_name: str) -> dict | No
     norm_parts = norm.split()
 
     try:
-        cur = await db.execute("SELECT name, phone FROM trueface_contacts")
+        cur = await db.execute("SELECT pin, name, phone FROM trueface_contacts")
         rows = await cur.fetchall()
     except Exception as e:
         logger.warning(f"[TRUEFACE] Contact sheet lookup failed: {e}")
         return None
 
+    # Priority 0: PIN-based match (exact employee ID)
+    if pin:
+        for r in rows:
+            contact_pin = (r[0] or "").strip()
+            if contact_pin and contact_pin == pin:
+                contact_name = (r[1] or "").strip()
+                return await _register_contact_match(
+                    db, pin, evt_name, contact_name, r[2])
+
     # Priority 1: Exact full name match
     for r in rows:
-        contact_name = (r[0] or "").strip()
+        contact_name = (r[1] or "").strip()
         cn_lower = contact_name.lower()
         if cn_lower == norm:
-            return await _register_contact_match(db, pin, evt_name, contact_name, r[1])
+            return await _register_contact_match(db, pin, evt_name, contact_name, r[2])
 
     # Priority 2: Full name substring match (one contains the other)
     substring_matches = []
     for r in rows:
-        contact_name = (r[0] or "").strip()
+        contact_name = (r[1] or "").strip()
         cn_lower = contact_name.lower()
         if norm in cn_lower or cn_lower in norm:
-            substring_matches.append((contact_name, r[1]))
+            substring_matches.append((contact_name, r[2]))
 
     if len(substring_matches) == 1:
         return await _register_contact_match(
@@ -214,13 +224,12 @@ async def _auto_register_from_contacts(db, pin: str, evt_name: str) -> dict | No
         first_name = norm_parts[0]
         first_name_matches = []
         for r in rows:
-            contact_name = (r[0] or "").strip()
+            contact_name = (r[1] or "").strip()
             cn_parts = contact_name.lower().split()
             if cn_parts and cn_parts[0] == first_name:
-                first_name_matches.append((contact_name, r[1]))
+                first_name_matches.append((contact_name, r[2]))
             elif len(cn_parts) > 1 and cn_parts[-1] == first_name:
-                # Also check last word (e.g., "Advocate Muskaan" → last word "muskaan")
-                first_name_matches.append((contact_name, r[1]))
+                first_name_matches.append((contact_name, r[2]))
 
         if len(first_name_matches) == 1:
             return await _register_contact_match(
@@ -830,7 +839,7 @@ async def bulk_register_teachers(request: Request):
 
 @router.post("/api/trueface/contacts/bulk")
 async def bulk_upload_contacts(request: Request):
-    """Upload contact sheet data. Body: [{"name": "...", "phone": "...", "category": "staff"}, ...]"""
+    """Upload contact sheet data. Body: [{"pin": "...", "name": "...", "phone": "...", "category": "staff"}, ...]"""
     data = await request.json()
     db = await _get_db()
     count = 0
@@ -838,13 +847,14 @@ async def bulk_upload_contacts(request: Request):
         # Clear existing contacts and re-insert
         await db.execute("DELETE FROM trueface_contacts")
         for entry in data:
+            pin = (entry.get("pin") or "").strip()
             name = (entry.get("name") or "").strip()
             phone = (entry.get("phone") or "").strip()
             category = (entry.get("category") or "staff").strip()
             if name and phone:
                 await db.execute(
-                    "INSERT INTO trueface_contacts (name, phone, category) VALUES (?, ?, ?)",
-                    (name, phone, category),
+                    "INSERT INTO trueface_contacts (pin, name, phone, category) VALUES (?, ?, ?, ?)",
+                    (pin, name, phone, category),
                 )
                 count += 1
         await db.commit()
@@ -860,11 +870,11 @@ async def list_contacts():
     """List all uploaded contacts."""
     db = await _get_db()
     try:
-        cur = await db.execute("SELECT name, phone, category FROM trueface_contacts ORDER BY name")
+        cur = await db.execute("SELECT pin, name, phone, category FROM trueface_contacts ORDER BY name")
         rows = await cur.fetchall()
     finally:
         await db.close()
-    return {"contacts": [{"name": r[0], "phone": r[1], "category": r[2]} for r in rows], "count": len(rows)}
+    return {"contacts": [{"pin": r[0], "name": r[1], "phone": r[2], "category": r[3]} for r in rows], "count": len(rows)}
 
 
 @router.get("/api/trueface/attendance")
