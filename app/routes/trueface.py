@@ -153,7 +153,54 @@ async def _auto_register_from_dvr(db, pin: str, evt_name: str) -> dict | None:
                 logger.error(f"[TRUEFACE] Auto-register insert failed: {e}")
                 return None
 
-    logger.info(f"[TRUEFACE] No DVR match for PIN={pin} name='{evt_name}'")
+    # Fallback: try matching against the contacts sheet
+    result = await _auto_register_from_contacts(db, pin, evt_name)
+    if result:
+        return result
+
+    logger.info(f"[TRUEFACE] No match for PIN={pin} name='{evt_name}' in DVR or contacts")
+    return None
+
+
+async def _auto_register_from_contacts(db, pin: str, evt_name: str) -> dict | None:
+    """Match a TrueFace event name against the uploaded contact sheet."""
+    if not evt_name:
+        return None
+
+    norm = evt_name.strip().lower()
+
+    try:
+        cur = await db.execute("SELECT name, phone FROM trueface_contacts")
+        rows = await cur.fetchall()
+    except Exception as e:
+        logger.warning(f"[TRUEFACE] Contact sheet lookup failed: {e}")
+        return None
+
+    for r in rows:
+        contact_name = (r[0] or "").strip()
+        contact_phone = (r[1] or "").strip()
+        cn_lower = contact_name.lower()
+
+        # Match: exact, first name match, or substring
+        if (cn_lower == norm or norm in cn_lower or cn_lower in norm
+                or norm.split()[0] == cn_lower.split()[0]):
+            try:
+                await db.execute(
+                    "INSERT OR REPLACE INTO trueface_teachers (pin, name, phone) "
+                    "VALUES (?, ?, ?)",
+                    (pin, evt_name.strip(), contact_phone),
+                )
+                await db.commit()
+                logger.info(
+                    f"[TRUEFACE] Auto-registered from contacts: PIN={pin} "
+                    f"name={evt_name.strip()} phone={contact_phone} "
+                    f"(matched: {contact_name})"
+                )
+                return {"pin": pin, "name": evt_name.strip(), "phone": contact_phone}
+            except Exception as e:
+                logger.error(f"[TRUEFACE] Contact register insert failed: {e}")
+                return None
+
     return None
 
 
@@ -726,6 +773,45 @@ async def bulk_register_teachers(request: Request):
 
     logger.info(f"[TRUEFACE] Bulk registered {count} teachers")
     return {"status": "ok", "registered": count}
+
+
+@router.post("/api/trueface/contacts/bulk")
+async def bulk_upload_contacts(request: Request):
+    """Upload contact sheet data. Body: [{"name": "...", "phone": "...", "category": "staff"}, ...]"""
+    data = await request.json()
+    db = await _get_db()
+    count = 0
+    try:
+        # Clear existing contacts and re-insert
+        await db.execute("DELETE FROM trueface_contacts")
+        for entry in data:
+            name = (entry.get("name") or "").strip()
+            phone = (entry.get("phone") or "").strip()
+            category = (entry.get("category") or "staff").strip()
+            if name and phone:
+                await db.execute(
+                    "INSERT INTO trueface_contacts (name, phone, category) VALUES (?, ?, ?)",
+                    (name, phone, category),
+                )
+                count += 1
+        await db.commit()
+    finally:
+        await db.close()
+
+    logger.info(f"[TRUEFACE] Uploaded {count} contacts from sheet")
+    return {"status": "ok", "uploaded": count}
+
+
+@router.get("/api/trueface/contacts")
+async def list_contacts():
+    """List all uploaded contacts."""
+    db = await _get_db()
+    try:
+        cur = await db.execute("SELECT name, phone, category FROM trueface_contacts ORDER BY name")
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+    return {"contacts": [{"name": r[0], "phone": r[1], "category": r[2]} for r in rows], "count": len(rows)}
 
 
 @router.get("/api/trueface/attendance")
