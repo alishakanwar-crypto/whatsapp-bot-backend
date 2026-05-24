@@ -445,6 +445,25 @@ async def receive_trueface_event(request: Request):
                 results.append({"pin": pin, "status": "skipped", "reason": "no pin"})
                 continue
 
+            # Use the event's own date (from the device timestamp), not today.
+            # This prevents stale events from yesterday being recorded under today.
+            evt_date = today
+            if timestamp and " " in timestamp:
+                evt_date_part = timestamp.split(" ")[0]
+                if len(evt_date_part) == 10:  # YYYY-MM-DD format
+                    evt_date = evt_date_part
+
+            if evt_date != today:
+                logger.info(
+                    f"[TRUEFACE] Skipping stale event: PIN={pin} name={evt_name} "
+                    f"event_date={evt_date} today={today}"
+                )
+                results.append({
+                    "pin": pin, "status": "skipped",
+                    "reason": f"stale event from {evt_date}",
+                })
+                continue
+
             teacher = await _get_teacher(db, pin)
             if not teacher and evt_name:
                 # Auto-register: match name against DVR teacher database
