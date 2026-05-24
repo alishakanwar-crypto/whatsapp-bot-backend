@@ -368,12 +368,9 @@ async def _notify_chairman_arrival(
 
     display_name = name.title() if name == name.upper() else name
 
-    # Try live photo first, then fall back to database photo
+    # Only use live photo from the device — never fall back to database photos
     image_b64 = photo_b64
-    photo_source = "live"
-    if not image_b64:
-        image_b64 = await _get_db_photo_b64(name)
-        photo_source = "database" if image_b64 else "none"
+    photo_source = "live" if image_b64 else "none"
 
     logger.info(
         "[TRUEFACE] Chairman notify → %s: %s at %s (photo=%s)",
