@@ -253,7 +253,7 @@ async def mood_report(date: str, person: str | None = None):
 
 
 # ---------------------------------------------------------------------------
-# Daily Report (called by scheduler at 12:00 PM IST)
+# Hourly Report (called by scheduler every hour 7 AM - 12 PM IST)
 # ---------------------------------------------------------------------------
 
 def _generate_mood_excel(date: str, person_reports: dict) -> bytes:
@@ -334,6 +334,8 @@ async def send_daily_mood_report():
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
+    time_display = now.strftime("%I:%M %p")
+    current_hour = now.strftime("%H:00")
 
     db = await _get_db()
     try:
@@ -370,28 +372,36 @@ async def send_daily_mood_report():
         return
 
     xlsx_bytes = _generate_mood_excel(today, person_reports)
-    filename = f"Mood_Temperament_Report_{today}.xlsx"
+    filename = f"Mood_Report_{today}_{now.strftime('%H%M')}.xlsx"
 
-    # Build email body with all persons
     persons_tracked = list(person_reports.keys())
     body = (
-        f"Mood & Temperament Report — {today_display}\n"
+        f"Hourly Mood Report — {today_display} at {time_display} IST\n"
         f"Persons tracked: {', '.join(persons_tracked)}\n\n"
     )
 
     for pname, pr in person_reports.items():
+        hourly = pr.get("hourly_summary", {})
+        # Highlight current hour
+        this_hour = hourly.get(current_hour, {})
+        if this_hour:
+            body += (
+                f"--- {pname} (This Hour: {current_hour}) ---\n"
+                f"  Observations this hour: {this_hour.get('observations', 0)}\n"
+                f"  Mood: {this_hour.get('dominant_emotion', 'N/A')}\n"
+                f"  Temperament: {this_hour.get('dominant_temperament', 'N/A')}\n"
+                f"  Intensity: {this_hour.get('avg_intensity', 0)}%\n\n"
+            )
+        else:
+            body += f"--- {pname} (No observations this hour) ---\n\n"
+
         body += (
-            f"--- {pname} ---\n"
-            f"Total Observations: {pr['total_observations']}\n"
-            f"Dominant Mood: {pr['dominant_mood']}\n"
-            f"Dominant Temperament: {pr['dominant_temperament']}\n"
-            f"Avg Expression Intensity: {pr['avg_intensity']}%\n"
-            f"Best Time to Approach: {pr.get('best_time_to_approach', 'N/A')}\n"
-            f"Emotion Breakdown:\n"
+            f"Day Summary ({pr['total_observations']} total observations):\n"
+            f"  Dominant Mood: {pr['dominant_mood']}\n"
+            f"  Dominant Temperament: {pr['dominant_temperament']}\n"
+            f"  Avg Intensity: {pr['avg_intensity']}%\n"
+            f"  Best Time to Approach: {pr.get('best_time_to_approach', 'N/A')}\n\n"
         )
-        for emo, pct in sorted(pr.get("emotion_distribution", {}).items(), key=lambda x: -x[1]):
-            body += f"  {emo}: {pct}%\n"
-        body += "\n"
 
     body += "— PPIS Mood & Temperament Monitor"
 
@@ -400,16 +410,16 @@ async def send_daily_mood_report():
     for email in recipients:
         ok = await send_email_async(
             email,
-            f"Mood & Temperament Report — {today_display}",
+            f"Hourly Mood Report — {today_display} {time_display} IST",
             body,
             "PP International School",
             attachments=[(filename, xlsx_bytes)],
         )
-        logger.info("[MOOD] Report → %s: %s", email, "OK" if ok else "FAILED")
+        logger.info("[MOOD] Hourly report → %s: %s", email, "OK" if ok else "FAILED")
 
     logger.info(
-        "[MOOD] Daily report sent: %d observations for %s",
-        report["total_observations"], ", ".join(persons_tracked),
+        "[MOOD] Hourly report sent at %s: %d observations for %s",
+        time_display, report["total_observations"], ", ".join(persons_tracked),
     )
 
 
