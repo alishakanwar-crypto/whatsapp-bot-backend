@@ -396,6 +396,23 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_chairman_mood_person
                 ON chairman_mood_log (person);
 
+            -- ── DVR Teacher Sightings (for head count reconciliation) ──
+            CREATE TABLE IF NOT EXISTS teacher_dvr_sightings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                person_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                confidence REAL DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dvr_sightings_date
+                ON teacher_dvr_sightings (date);
+            CREATE INDEX IF NOT EXISTS idx_dvr_sightings_person
+                ON teacher_dvr_sightings (date, person_id);
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
