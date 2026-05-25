@@ -37,7 +37,7 @@ REPORT_RECIPIENTS = os.environ.get(
     "TRUEFACE_REPORT_EMAIL", "leave@ppischool.in,alisha.kanwar@ppischool.in"
 )
 
-CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "")
+CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 CHAIRMAN_TEMPLATE = os.environ.get(
     "TRUEFACE_CHAIRMAN_TEMPLATE", "ppis_chairman_teacher_arrival"
 )
