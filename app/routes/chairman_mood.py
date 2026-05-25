@@ -1,8 +1,10 @@
 """
-Chairman Mood & Temperament API
-================================
+Mood & Temperament API (Multi-Person)
+======================================
 Receives mood observations from the campus agent, stores them,
 and generates daily mood/temperament reports at 12:00 PM IST.
+
+Supports multiple tracked persons (Chairman, Alisha, etc.).
 """
 
 from __future__ import annotations
@@ -39,11 +41,11 @@ async def _get_db():
 
 @router.post("/api/chairman/mood")
 async def receive_mood(request: Request):
-    """Receive a single mood observation from the campus agent."""
     data = await request.json()
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
 
+    person = data.get("person", "Chairman")
     timestamp = data.get("timestamp", now.strftime("%Y-%m-%d %H:%M:%S"))
     camera = data.get("camera", "unknown")
     dominant_emotion = data.get("dominant_emotion", "unknown")
@@ -58,11 +60,11 @@ async def receive_mood(request: Request):
     try:
         await db.execute(
             "INSERT INTO chairman_mood_log "
-            "(date, timestamp, camera, dominant_emotion, emotions_json, "
+            "(person, date, timestamp, camera, dominant_emotion, emotions_json, "
             "temperament, intensity, face_distance, face_confidence, face_crop) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                today, timestamp, camera, dominant_emotion,
+                person, today, timestamp, camera, dominant_emotion,
                 json.dumps(emotions), temperament, intensity,
                 face_distance, face_confidence, face_crop,
             ),
@@ -72,74 +74,78 @@ async def receive_mood(request: Request):
         await db.close()
 
     logger.info(
-        "[MOOD] Logged: %s on %s — %s (%s) intensity=%.1f",
-        timestamp, camera, dominant_emotion, temperament, intensity,
+        "[MOOD] Logged: %s — %s on %s — %s (%s) intensity=%.1f",
+        person, timestamp, camera, dominant_emotion, temperament, intensity,
     )
 
-    return {"status": "ok", "emotion": dominant_emotion, "temperament": temperament}
+    return {"status": "ok", "person": person, "emotion": dominant_emotion, "temperament": temperament}
 
 
 # ---------------------------------------------------------------------------
-# GET /api/chairman/mood/today — today's mood summary
+# GET /api/chairman/mood/today — today's mood summary (all persons)
 # ---------------------------------------------------------------------------
 
 @router.get("/api/chairman/mood/today")
-async def today_mood():
-    """Get today's mood observations and summary."""
+async def today_mood(person: str | None = None):
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
 
     db = await _get_db()
     try:
-        cur = await db.execute(
-            "SELECT timestamp, camera, dominant_emotion, temperament, intensity "
-            "FROM chairman_mood_log WHERE date = ? ORDER BY timestamp",
-            (today,),
-        )
+        if person:
+            cur = await db.execute(
+                "SELECT person, timestamp, camera, dominant_emotion, temperament, intensity "
+                "FROM chairman_mood_log WHERE date = ? AND person = ? ORDER BY timestamp",
+                (today, person),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT person, timestamp, camera, dominant_emotion, temperament, intensity "
+                "FROM chairman_mood_log WHERE date = ? ORDER BY timestamp",
+                (today,),
+            )
         rows = await cur.fetchall()
     finally:
         await db.close()
 
     observations = [
         {
-            "timestamp": r[0],
-            "camera": r[1],
-            "emotion": r[2],
-            "temperament": r[3],
-            "intensity": r[4],
+            "person": r[0],
+            "timestamp": r[1],
+            "camera": r[2],
+            "emotion": r[3],
+            "temperament": r[4],
+            "intensity": r[5],
         }
         for r in rows
     ]
 
-    # Compute summary
-    if observations:
-        emotions = [o["emotion"] for o in observations]
-        temperaments = [o["temperament"] for o in observations]
+    # Build per-person summaries
+    by_person: dict[str, list] = {}
+    for o in observations:
+        by_person.setdefault(o["person"], []).append(o)
+
+    person_summaries = {}
+    for pname, obs_list in by_person.items():
+        emotions = [o["emotion"] for o in obs_list]
+        temperaments = [o["temperament"] for o in obs_list]
         emotion_counts = Counter(emotions)
         temperament_counts = Counter(temperaments)
-        total = len(observations)
+        total = len(obs_list)
 
-        emotion_pct = {k: round(v / total * 100, 1) for k, v in emotion_counts.items()}
-        temperament_pct = {k: round(v / total * 100, 1) for k, v in temperament_counts.items()}
-        avg_intensity = sum(o["intensity"] for o in observations) / total
-
-        dominant_mood = emotion_counts.most_common(1)[0][0]
-        dominant_temperament = temperament_counts.most_common(1)[0][0]
-    else:
-        emotion_pct = {}
-        temperament_pct = {}
-        avg_intensity = 0.0
-        dominant_mood = "no data"
-        dominant_temperament = "no data"
+        person_summaries[pname] = {
+            "total_observations": total,
+            "dominant_mood": emotion_counts.most_common(1)[0][0],
+            "dominant_temperament": temperament_counts.most_common(1)[0][0],
+            "avg_intensity": round(sum(o["intensity"] for o in obs_list) / total, 1),
+            "emotion_distribution": {k: round(v / total * 100, 1) for k, v in emotion_counts.items()},
+            "temperament_distribution": {k: round(v / total * 100, 1) for k, v in temperament_counts.items()},
+        }
 
     return {
         "date": today,
         "total_observations": len(observations),
-        "dominant_mood": dominant_mood,
-        "dominant_temperament": dominant_temperament,
-        "avg_intensity": round(avg_intensity, 1),
-        "emotion_distribution": emotion_pct,
-        "temperament_distribution": temperament_pct,
+        "person_summaries": person_summaries,
         "observations": observations,
     }
 
@@ -149,82 +155,100 @@ async def today_mood():
 # ---------------------------------------------------------------------------
 
 @router.get("/api/chairman/mood/report/{date}")
-async def mood_report(date: str):
-    """Get full mood report data for a given date."""
+async def mood_report(date: str, person: str | None = None):
     db = await _get_db()
     try:
-        cur = await db.execute(
-            "SELECT timestamp, camera, dominant_emotion, emotions_json, "
-            "temperament, intensity, face_confidence "
-            "FROM chairman_mood_log WHERE date = ? ORDER BY timestamp",
-            (date,),
-        )
+        if person:
+            cur = await db.execute(
+                "SELECT person, timestamp, camera, dominant_emotion, emotions_json, "
+                "temperament, intensity, face_confidence "
+                "FROM chairman_mood_log WHERE date = ? AND person = ? ORDER BY timestamp",
+                (date, person),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT person, timestamp, camera, dominant_emotion, emotions_json, "
+                "temperament, intensity, face_confidence "
+                "FROM chairman_mood_log WHERE date = ? ORDER BY timestamp",
+                (date,),
+            )
         rows = await cur.fetchall()
     finally:
         await db.close()
 
     observations = []
     for r in rows:
-        emotions = json.loads(r[3]) if r[3] else {}
+        emotions = json.loads(r[4]) if r[4] else {}
         observations.append({
-            "timestamp": r[0],
-            "camera": r[1],
-            "dominant_emotion": r[2],
+            "person": r[0],
+            "timestamp": r[1],
+            "camera": r[2],
+            "dominant_emotion": r[3],
             "emotions": emotions,
-            "temperament": r[4],
-            "intensity": r[5],
-            "face_confidence": r[6],
+            "temperament": r[5],
+            "intensity": r[6],
+            "face_confidence": r[7],
         })
 
     if not observations:
         return {"date": date, "total_observations": 0, "summary": "No data"}
 
-    # Hourly breakdown
-    hourly: dict[str, list] = {}
+    # Build per-person report
+    by_person: dict[str, list] = {}
     for obs in observations:
-        try:
-            hour = obs["timestamp"].split(" ")[1][:2] + ":00"
-        except (IndexError, AttributeError):
-            hour = "unknown"
-        hourly.setdefault(hour, []).append(obs)
+        by_person.setdefault(obs["person"], []).append(obs)
 
-    hourly_summary = {}
-    for hour, obs_list in sorted(hourly.items()):
-        emotions = [o["dominant_emotion"] for o in obs_list]
-        temperaments = [o["temperament"] for o in obs_list]
-        hourly_summary[hour] = {
-            "observations": len(obs_list),
-            "dominant_emotion": Counter(emotions).most_common(1)[0][0],
-            "dominant_temperament": Counter(temperaments).most_common(1)[0][0],
-            "avg_intensity": round(
-                sum(o["intensity"] for o in obs_list) / len(obs_list), 1
-            ),
+    person_reports = {}
+    for pname, obs_list in by_person.items():
+        # Hourly breakdown
+        hourly: dict[str, list] = {}
+        for obs in obs_list:
+            try:
+                hour = obs["timestamp"].split(" ")[1][:2] + ":00"
+            except (IndexError, AttributeError):
+                hour = "unknown"
+            hourly.setdefault(hour, []).append(obs)
+
+        hourly_summary = {}
+        for hour, h_obs in sorted(hourly.items()):
+            emos = [o["dominant_emotion"] for o in h_obs]
+            temps = [o["temperament"] for o in h_obs]
+            hourly_summary[hour] = {
+                "observations": len(h_obs),
+                "dominant_emotion": Counter(emos).most_common(1)[0][0],
+                "dominant_temperament": Counter(temps).most_common(1)[0][0],
+                "avg_intensity": round(
+                    sum(o["intensity"] for o in h_obs) / len(h_obs), 1
+                ),
+            }
+
+        all_emotions = [o["dominant_emotion"] for o in obs_list]
+        all_temperaments = [o["temperament"] for o in obs_list]
+        total = len(obs_list)
+        emotion_counts = Counter(all_emotions)
+        temperament_counts = Counter(all_temperaments)
+
+        best_hour = min(hourly_summary, key=lambda h: hourly_summary[h]["avg_intensity"]) if hourly_summary else "N/A"
+
+        person_reports[pname] = {
+            "total_observations": total,
+            "dominant_mood": emotion_counts.most_common(1)[0][0],
+            "dominant_temperament": temperament_counts.most_common(1)[0][0],
+            "avg_intensity": round(sum(o["intensity"] for o in obs_list) / total, 1),
+            "emotion_distribution": {
+                k: round(v / total * 100, 1) for k, v in emotion_counts.items()
+            },
+            "temperament_distribution": {
+                k: round(v / total * 100, 1) for k, v in temperament_counts.items()
+            },
+            "hourly_summary": hourly_summary,
+            "best_time_to_approach": best_hour,
         }
-
-    # Overall
-    all_emotions = [o["dominant_emotion"] for o in observations]
-    all_temperaments = [o["temperament"] for o in observations]
-    total = len(observations)
-    emotion_counts = Counter(all_emotions)
-    temperament_counts = Counter(all_temperaments)
-
-    # Best time to approach (lowest intensity hour)
-    best_hour = min(hourly_summary, key=lambda h: hourly_summary[h]["avg_intensity"])
 
     return {
         "date": date,
-        "total_observations": total,
-        "dominant_mood": emotion_counts.most_common(1)[0][0],
-        "dominant_temperament": temperament_counts.most_common(1)[0][0],
-        "avg_intensity": round(sum(o["intensity"] for o in observations) / total, 1),
-        "emotion_distribution": {
-            k: round(v / total * 100, 1) for k, v in emotion_counts.items()
-        },
-        "temperament_distribution": {
-            k: round(v / total * 100, 1) for k, v in temperament_counts.items()
-        },
-        "hourly_summary": hourly_summary,
-        "best_time_to_approach": best_hour,
+        "total_observations": len(observations),
+        "person_reports": person_reports,
     }
 
 
@@ -232,17 +256,11 @@ async def mood_report(date: str):
 # Daily Report (called by scheduler at 12:00 PM IST)
 # ---------------------------------------------------------------------------
 
-def _generate_mood_excel(report: dict) -> bytes:
-    """Generate an Excel report for the chairman's mood data."""
+def _generate_mood_excel(date: str, person_reports: dict) -> bytes:
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles import Font, PatternFill, Border, Side
 
     wb = Workbook()
-
-    # --- Summary sheet ---
-    ws = wb.active
-    ws.title = "Summary"
-
     header_font = Font(bold=True, color="FFFFFF", size=11)
     header_fill = PatternFill("solid", fgColor="2F5496")
     border = Border(
@@ -250,55 +268,62 @@ def _generate_mood_excel(report: dict) -> bytes:
         top=Side(style="thin"), bottom=Side(style="thin"),
     )
 
-    ws.cell(row=1, column=1, value="Chairman Mood Report").font = Font(bold=True, size=14)
-    ws.cell(row=2, column=1, value=f"Date: {report['date']}")
-    ws.cell(row=3, column=1, value=f"Total Observations: {report['total_observations']}")
-    ws.cell(row=4, column=1, value=f"Dominant Mood: {report['dominant_mood']}")
-    ws.cell(row=5, column=1, value=f"Dominant Temperament: {report['dominant_temperament']}")
-    ws.cell(row=6, column=1, value=f"Avg Expression Intensity: {report['avg_intensity']}%")
-    ws.cell(row=7, column=1, value=f"Best Time to Approach: {report.get('best_time_to_approach', 'N/A')}")
+    first_sheet = True
+    for pname, report in person_reports.items():
+        if first_sheet:
+            ws = wb.active
+            ws.title = pname
+            first_sheet = False
+        else:
+            ws = wb.create_sheet(pname)
 
-    # Emotion distribution
-    row = 9
-    ws.cell(row=row, column=1, value="Emotion").font = Font(bold=True)
-    ws.cell(row=row, column=2, value="Percentage").font = Font(bold=True)
-    for emo, pct in sorted(report.get("emotion_distribution", {}).items(), key=lambda x: -x[1]):
+        ws.cell(row=1, column=1, value=f"{pname} — Mood Report").font = Font(bold=True, size=14)
+        ws.cell(row=2, column=1, value=f"Date: {date}")
+        ws.cell(row=3, column=1, value=f"Total Observations: {report['total_observations']}")
+        ws.cell(row=4, column=1, value=f"Dominant Mood: {report['dominant_mood']}")
+        ws.cell(row=5, column=1, value=f"Dominant Temperament: {report['dominant_temperament']}")
+        ws.cell(row=6, column=1, value=f"Avg Expression Intensity: {report['avg_intensity']}%")
+        ws.cell(row=7, column=1, value=f"Best Time to Approach: {report.get('best_time_to_approach', 'N/A')}")
+
+        # Emotion distribution
+        row = 9
+        ws.cell(row=row, column=1, value="Emotion").font = Font(bold=True)
+        ws.cell(row=row, column=2, value="Percentage").font = Font(bold=True)
+        for emo, pct in sorted(report.get("emotion_distribution", {}).items(), key=lambda x: -x[1]):
+            row += 1
+            ws.cell(row=row, column=1, value=emo).border = border
+            ws.cell(row=row, column=2, value=f"{pct}%").border = border
+
+        # Temperament distribution
+        row += 2
+        ws.cell(row=row, column=1, value="Temperament").font = Font(bold=True)
+        ws.cell(row=row, column=2, value="Percentage").font = Font(bold=True)
+        for temp, pct in sorted(report.get("temperament_distribution", {}).items(), key=lambda x: -x[1]):
+            row += 1
+            ws.cell(row=row, column=1, value=temp).border = border
+            ws.cell(row=row, column=2, value=f"{pct}%").border = border
+
+        ws.column_dimensions["A"].width = 25
+        ws.column_dimensions["B"].width = 15
+
+        # Hourly breakdown
+        row += 2
+        ws.cell(row=row, column=1, value="Hourly Breakdown").font = Font(bold=True, size=12)
         row += 1
-        ws.cell(row=row, column=1, value=emo).border = border
-        ws.cell(row=row, column=2, value=f"{pct}%").border = border
+        headers = ["Hour", "Observations", "Dominant Mood", "Dominant Temperament", "Avg Intensity"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = border
 
-    # Temperament distribution
-    row += 2
-    ws.cell(row=row, column=1, value="Temperament").font = Font(bold=True)
-    ws.cell(row=row, column=2, value="Percentage").font = Font(bold=True)
-    for temp, pct in sorted(report.get("temperament_distribution", {}).items(), key=lambda x: -x[1]):
-        row += 1
-        ws.cell(row=row, column=1, value=temp).border = border
-        ws.cell(row=row, column=2, value=f"{pct}%").border = border
-
-    ws.column_dimensions["A"].width = 25
-    ws.column_dimensions["B"].width = 15
-
-    # --- Hourly breakdown sheet ---
-    ws2 = wb.create_sheet("Hourly Breakdown")
-    headers = ["Hour", "Observations", "Dominant Mood", "Dominant Temperament", "Avg Intensity"]
-    for col, h in enumerate(headers, 1):
-        cell = ws2.cell(row=1, column=col, value=h)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.border = border
-
-    row = 2
-    for hour, data in sorted(report.get("hourly_summary", {}).items()):
-        ws2.cell(row=row, column=1, value=hour).border = border
-        ws2.cell(row=row, column=2, value=data["observations"]).border = border
-        ws2.cell(row=row, column=3, value=data["dominant_emotion"]).border = border
-        ws2.cell(row=row, column=4, value=data["dominant_temperament"]).border = border
-        ws2.cell(row=row, column=5, value=f"{data['avg_intensity']}%").border = border
-        row += 1
-
-    for col_letter in ["A", "B", "C", "D", "E"]:
-        ws2.column_dimensions[col_letter].width = 20
+        for hour, data in sorted(report.get("hourly_summary", {}).items()):
+            row += 1
+            ws.cell(row=row, column=1, value=hour).border = border
+            ws.cell(row=row, column=2, value=data["observations"]).border = border
+            ws.cell(row=row, column=3, value=data["dominant_emotion"]).border = border
+            ws.cell(row=row, column=4, value=data["dominant_temperament"]).border = border
+            ws.cell(row=row, column=5, value=f"{data['avg_intensity']}%").border = border
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -306,12 +331,10 @@ def _generate_mood_excel(report: dict) -> bytes:
 
 
 async def send_daily_mood_report():
-    """Generate and send the daily mood report at 12:00 PM IST."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
 
-    # Fetch report data via the API logic
     db = await _get_db()
     try:
         cur = await db.execute(
@@ -326,7 +349,6 @@ async def send_daily_mood_report():
         logger.info("[MOOD] No mood observations for %s — skipping report", today)
         return
 
-    # Build report using the report endpoint logic
     import httpx
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -342,30 +364,43 @@ async def send_daily_mood_report():
         logger.info("[MOOD] No observations in report for %s", today)
         return
 
-    # Generate Excel
-    xlsx_bytes = _generate_mood_excel(report)
-    filename = f"Chairman_Mood_Report_{today}.xlsx"
+    person_reports = report.get("person_reports", {})
+    if not person_reports:
+        logger.info("[MOOD] No person reports for %s", today)
+        return
 
-    # Email report
+    xlsx_bytes = _generate_mood_excel(today, person_reports)
+    filename = f"Mood_Temperament_Report_{today}.xlsx"
+
+    # Build email body with all persons
+    persons_tracked = list(person_reports.keys())
     body = (
-        f"Chairman Mood & Temperament Report — {today_display}\n\n"
-        f"Total Observations: {report['total_observations']}\n"
-        f"Dominant Mood: {report['dominant_mood']}\n"
-        f"Dominant Temperament: {report['dominant_temperament']}\n"
-        f"Avg Expression Intensity: {report['avg_intensity']}%\n"
-        f"Best Time to Approach: {report.get('best_time_to_approach', 'N/A')}\n\n"
-        f"Emotion Breakdown:\n"
+        f"Mood & Temperament Report — {today_display}\n"
+        f"Persons tracked: {', '.join(persons_tracked)}\n\n"
     )
-    for emo, pct in sorted(report.get("emotion_distribution", {}).items(), key=lambda x: -x[1]):
-        body += f"  {emo}: {pct}%\n"
-    body += f"\n— PPIS Chairman Mood Monitor"
+
+    for pname, pr in person_reports.items():
+        body += (
+            f"--- {pname} ---\n"
+            f"Total Observations: {pr['total_observations']}\n"
+            f"Dominant Mood: {pr['dominant_mood']}\n"
+            f"Dominant Temperament: {pr['dominant_temperament']}\n"
+            f"Avg Expression Intensity: {pr['avg_intensity']}%\n"
+            f"Best Time to Approach: {pr.get('best_time_to_approach', 'N/A')}\n"
+            f"Emotion Breakdown:\n"
+        )
+        for emo, pct in sorted(pr.get("emotion_distribution", {}).items(), key=lambda x: -x[1]):
+            body += f"  {emo}: {pct}%\n"
+        body += "\n"
+
+    body += "— PPIS Mood & Temperament Monitor"
 
     from app.services.email_service import send_email_async
     recipients = [r.strip() for r in REPORT_EMAIL.split(",") if r.strip()]
     for email in recipients:
         ok = await send_email_async(
             email,
-            f"Chairman Mood Report — {today_display}",
+            f"Mood & Temperament Report — {today_display}",
             body,
             "PP International School",
             attachments=[(filename, xlsx_bytes)],
@@ -373,13 +408,12 @@ async def send_daily_mood_report():
         logger.info("[MOOD] Report → %s: %s", email, "OK" if ok else "FAILED")
 
     logger.info(
-        "[MOOD] Daily report sent: %d observations, mood=%s, temperament=%s",
-        report["total_observations"], report["dominant_mood"], report["dominant_temperament"],
+        "[MOOD] Daily report sent: %d observations for %s",
+        report["total_observations"], ", ".join(persons_tracked),
     )
 
 
 def send_daily_mood_report_sync():
-    """Sync wrapper for scheduler."""
     import asyncio
     try:
         loop = asyncio.get_event_loop()
