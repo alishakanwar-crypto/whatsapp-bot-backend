@@ -729,16 +729,21 @@ def start_scheduler() -> None:
         )
     logger.info("Scheduled gate reconciliation reports hourly 7:00 AM - 5:00 PM IST")
 
-    # --- Chairman Mood Report ---
-    # 12:00 PM IST = 6:30 UTC
+    # --- Mood & Temperament Reports (hourly 7 AM - 12 PM IST) ---
+    # IST 7:00=1:30 UTC, 8:00=2:30, 9:00=3:30, 10:00=4:30, 11:00=5:30, 12:00=6:30
     from app.routes.chairman_mood import send_daily_mood_report_sync
-    scheduler.add_job(
-        send_daily_mood_report_sync,
-        trigger=CronTrigger(hour=6, minute=30, second=0),
-        id="chairman_mood_report",
-        replace_existing=True,
-    )
-    logger.info("Scheduled chairman mood report at 12:00 PM IST (6:30 UTC)")
+    for ist_hour in range(7, 13):  # 7 AM through 12 PM IST
+        utc_hour = ist_hour - 6
+        utc_minute = 30
+        if utc_hour < 0:
+            utc_hour += 24
+        scheduler.add_job(
+            send_daily_mood_report_sync,
+            trigger=CronTrigger(hour=utc_hour, minute=utc_minute, second=0),
+            id=f"mood_report_{ist_hour:02d}00",
+            replace_existing=True,
+        )
+    logger.info("Scheduled mood reports hourly 7:00 AM - 12:00 PM IST")
 
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
