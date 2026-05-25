@@ -36,7 +36,7 @@ router = APIRouter()
 
 REPORT_RECIPIENTS = os.environ.get(
     "GATE_REPORT_EMAIL",
-    os.environ.get("TRUEFACE_REPORT_EMAIL", "leave@ppischool.in,alisha.kanwar@ppischool.in"),
+    "alisha.kanwar@ppischool.in",
 )
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
