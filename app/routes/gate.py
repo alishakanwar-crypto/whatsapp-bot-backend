@@ -382,20 +382,8 @@ async def send_reconciliation_report():
         )
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
 
-    # WhatsApp summary to chairman
-    try:
-        from app.services.whatsapp_service import send_whatsapp_message
-        summary = (
-            f"Gate Reconciliation — {today_display} {time_display} IST\n\n"
-            f"Gate Entries: {recon['total_gate_in']}\n"
-            f"TrueFace Identified: {recon['trueface_identified']}\n"
-            f"Unreconciled: {recon['unreconciled_count']}\n\n"
-            f"Detailed report sent to email."
-        )
-        await send_whatsapp_message(CHAIRMAN_PHONE, summary)
-        logger.info("[GATE] WhatsApp summary sent to chairman")
-    except Exception as e:
-        logger.warning("[GATE] WhatsApp summary failed: %s", e)
+    # NOTE: Chairman WhatsApp notification disabled per user request.
+    # Gate head count reports are only sent via email for now.
 
     logger.info(
         "[GATE] Hourly report sent at %s: IN=%d, TrueFace=%d, Unreconciled=%d",
