@@ -3530,7 +3530,7 @@ async def detect_and_handle_snapshot_request(
 
         # Alert admin only after 5+ consecutive failures (silent to parents)
         if consecutive >= 5 and should_alert_admin():
-            admin_phones = ["919599488106", "918076455224"]
+            admin_phones = ["919971166562", "919599488106", "918076455224"]
             for admin_phone in admin_phones:
                 try:
                     await send_whatsapp_force(
