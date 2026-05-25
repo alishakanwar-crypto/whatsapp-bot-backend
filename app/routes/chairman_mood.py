@@ -29,8 +29,8 @@ REPORT_EMAIL = os.environ.get("MOOD_REPORT_EMAIL", "alisha.kanwar@ppischool.in")
 # ---------------------------------------------------------------------------
 
 async def _get_db():
-    from app.database import get_database
-    return await get_database()
+    from app.database import get_db
+    return await get_db()
 
 
 # ---------------------------------------------------------------------------
