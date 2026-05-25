@@ -758,34 +758,277 @@ def send_departure_report_sync():
 
 
 # ============================================================
-# Legacy ADMS Protocol Endpoints (kept for future use)
+# ADMS Protocol Endpoints — TrueFace device pushes events here
 # ============================================================
+#
+# ZKTeco ADMS (Automatic Data Master Server) protocol:
+#   1. GET  /iclock/cdata?SN=xxx — device check-in / handshake
+#   2. POST /iclock/cdata?SN=xxx&table=ATTLOG — attendance records push
+#   3. GET  /iclock/getrequest?SN=xxx — device asks for pending commands
+#   4. POST /iclock/devicecmd?SN=xxx — device reports command results
+#
+# The device pushes attendance records as tab-separated lines:
+#   PIN\tTimestamp\tStatus\tVerify\tWorkCode\tReserved1\tReserved2
+#   Example: 1395\t2026-05-25 08:30:00\t0\t15\t0\t1\t0
+
+ADMS_SERIAL = os.environ.get("TRUEFACE_SERIAL", "TW30000001260433")
+
 
 @router.get("/iclock/cdata")
 async def iclock_cdata_get(request: Request):
+    """ADMS handshake — device checks in and asks for options.
+
+    The response tells the device what data tables to push and how often.
+    """
     sn = request.query_params.get("SN", "unknown")
-    logger.info(f"[TRUEFACE] GET handshake from SN={sn}")
-    return PlainTextResponse("OK")
+    logger.info(f"[ADMS] Handshake from SN={sn}")
+
+    # Respond with standard ADMS options
+    # TransFlag=TransData  → device should push attendance data
+    # Realtime=1           → push events in near-realtime
+    # TransInterval=1      → push every 1 minute
+    options = (
+        f"GET OPTION FROM: {sn}\r\n"
+        f"Stamp=0\r\n"
+        f"OpStamp=0\r\n"
+        f"PhotoStamp=0\r\n"
+        f"TransFlag=TransData AttLog\tOpLog\r\n"
+        f"Realtime=1\r\n"
+        f"TransInterval=1\r\n"
+        f"TransTimes=00:00;23:59\r\n"
+        f"Encrypt=0\r\n"
+    )
+    return PlainTextResponse(options)
 
 
 @router.post("/iclock/cdata")
 async def iclock_cdata_post(request: Request):
+    """ADMS data push — device sends attendance or operation logs.
+
+    For ATTLOG table, each line is a tab-separated attendance record.
+    We parse these and feed them into the same event pipeline as the
+    browser-based poller (receive_trueface_event).
+    """
     sn = request.query_params.get("SN", "unknown")
     table = request.query_params.get("table", "").upper()
     body = await request.body()
-    body_text = body.decode("utf-8", errors="replace")
-    logger.info(f"[TRUEFACE] ADMS POST SN={sn} table={table}: {body_text[:300]}")
+    body_text = body.decode("utf-8", errors="replace").strip()
+
+    logger.info(f"[ADMS] POST from SN={sn} table={table} ({len(body_text)} bytes)")
+
+    if table == "ATTLOG" and body_text:
+        events = _parse_adms_attlog(body_text)
+        if events:
+            logger.info(f"[ADMS] Parsed {len(events)} attendance event(s)")
+            results = await _process_adms_events(events)
+            logger.info(f"[ADMS] Processed: {results}")
+    elif table == "OPERLOG":
+        logger.info(f"[ADMS] Operation log: {body_text[:200]}")
+    else:
+        logger.info(f"[ADMS] Other data (table={table}): {body_text[:200]}")
+
     return PlainTextResponse("OK")
 
 
 @router.get("/iclock/getrequest")
 async def iclock_getrequest(request: Request):
+    """Device asks for pending commands. Return OK (no pending commands)."""
     return PlainTextResponse("OK")
 
 
 @router.post("/iclock/devicecmd")
 async def iclock_devicecmd(request: Request):
+    """Device reports command execution results."""
+    body = await request.body()
+    logger.info(f"[ADMS] Device command result: {body.decode('utf-8', errors='replace')[:200]}")
     return PlainTextResponse("OK")
+
+
+def _parse_adms_attlog(body: str) -> list[dict]:
+    """Parse ADMS ATTLOG push data into event dicts.
+
+    Format (tab-separated, one record per line):
+        PIN\tTimestamp\tStatus\tVerify\tWorkCode[\tReserved1\tReserved2]
+
+    Status: 0=Check-In, 1=Check-Out, 2=Break-Out, 3=Break-In, 4=OT-In, 5=OT-Out
+    Verify: 1=FP, 4=Card, 15=Face
+    """
+    events = []
+    for line in body.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        parts = line.split("\t")
+        if len(parts) < 2:
+            logger.warning(f"[ADMS] Skipping malformed line: {line[:100]}")
+            continue
+
+        pin = parts[0].strip()
+        timestamp = parts[1].strip() if len(parts) > 1 else ""
+        status = parts[2].strip() if len(parts) > 2 else "0"
+        verify = parts[3].strip() if len(parts) > 3 else ""
+
+        if not pin or not timestamp:
+            continue
+
+        # Map verify code to method name
+        verify_method = {
+            "1": "Fingerprint", "4": "Card", "15": "Face",
+        }.get(verify, f"Method-{verify}")
+
+        events.append({
+            "pin": pin,
+            "name": "",  # ADMS doesn't always send name; lookup happens in pipeline
+            "timestamp": timestamp,
+            "adms_status": status,
+            "adms_verify": verify_method,
+        })
+
+    return events
+
+
+async def _process_adms_events(events: list[dict]) -> list[dict]:
+    """Process ADMS events through the same pipeline as browser poller events.
+
+    Reuses the exact same arrival/departure logic, WhatsApp notifications,
+    and chairman alerts as receive_trueface_event().
+    """
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+
+    db = await _get_db()
+    results = []
+    try:
+        for evt in events:
+            pin = str(evt.get("pin", "")).strip()
+            timestamp = evt.get("timestamp", "").strip()
+            evt_name = evt.get("name", "").strip()
+
+            if not pin:
+                results.append({"pin": pin, "status": "skipped", "reason": "no pin"})
+                continue
+
+            # Extract event date — skip stale events
+            evt_date = today
+            if timestamp and " " in timestamp:
+                evt_date_part = timestamp.split(" ")[0]
+                if len(evt_date_part) == 10:
+                    evt_date = evt_date_part
+
+            if evt_date != today:
+                logger.info(
+                    f"[ADMS] Skipping stale event: PIN={pin} "
+                    f"event_date={evt_date} today={today}"
+                )
+                results.append({
+                    "pin": pin, "status": "skipped",
+                    "reason": f"stale event from {evt_date}",
+                })
+                continue
+
+            # Look up teacher by PIN
+            teacher = await _get_teacher(db, pin)
+            if not teacher and evt_name:
+                teacher = await _auto_register_from_dvr(db, pin, evt_name)
+            if not teacher:
+                # Try contact sheet lookup by PIN alone
+                teacher = await _auto_register_from_contacts(db, pin, evt_name or f"PIN-{pin}")
+            if not teacher:
+                logger.info(f"[ADMS] Unknown PIN={pin}")
+                results.append({"pin": pin, "status": "skipped", "reason": "unknown"})
+                continue
+
+            name = teacher["name"]
+            phone = teacher["phone"]
+            time_str = _format_time_12h(timestamp) if timestamp else now.strftime("%I:%M %p")
+            time_raw = timestamp.split(" ")[1] if " " in timestamp else now.strftime("%H:%M:%S")
+
+            record = await _get_attendance_record(db, pin, today)
+
+            try:
+                evt_hour = int(time_raw.split(":")[0])
+            except (ValueError, IndexError):
+                evt_hour = now.hour
+
+            if not record:
+                # First detection → arrival
+                await db.execute(
+                    "INSERT INTO trueface_attendance "
+                    "(pin, name, date, arrival_time, arrival_whatsapp) "
+                    "VALUES (?, ?, ?, ?, 0)",
+                    (pin, name, today, time_raw),
+                )
+                await db.commit()
+
+                wa_ok = False
+                if phone:
+                    wa_ok = await _send_arrival_whatsapp(name, phone, time_str)
+                    if wa_ok:
+                        await db.execute(
+                            "UPDATE trueface_attendance SET arrival_whatsapp = 1 "
+                            "WHERE pin = ? AND date = ?",
+                            (pin, today),
+                        )
+                        await db.commit()
+
+                asyncio.ensure_future(
+                    _notify_chairman_arrival(name, time_str, "")
+                )
+
+                logger.info(f"[ADMS] ARRIVAL: {name} at {time_str} WA={wa_ok}")
+                results.append({
+                    "pin": pin, "name": name, "status": "arrival",
+                    "time": time_str, "whatsapp": wa_ok,
+                })
+
+            elif not record["departure_time"] and evt_hour >= DEPARTURE_HOUR:
+                await db.execute(
+                    "UPDATE trueface_attendance SET departure_time = ?, departure_whatsapp = 0 "
+                    "WHERE pin = ? AND date = ?",
+                    (time_raw, pin, today),
+                )
+                await db.commit()
+
+                wa_ok = False
+                if phone:
+                    wa_ok = await _send_departure_whatsapp(name, phone, time_str)
+                    if wa_ok:
+                        await db.execute(
+                            "UPDATE trueface_attendance SET departure_whatsapp = 1 "
+                            "WHERE pin = ? AND date = ?",
+                            (pin, today),
+                        )
+                        await db.commit()
+
+                logger.info(f"[ADMS] DEPARTURE: {name} at {time_str} WA={wa_ok}")
+                results.append({
+                    "pin": pin, "name": name, "status": "departure",
+                    "time": time_str, "whatsapp": wa_ok,
+                })
+
+            elif not record["departure_time"] and evt_hour < DEPARTURE_HOUR:
+                results.append({
+                    "pin": pin, "name": name, "status": "ignored_morning",
+                    "time": time_str,
+                })
+
+            else:
+                await db.execute(
+                    "UPDATE trueface_attendance SET departure_time = ? "
+                    "WHERE pin = ? AND date = ?",
+                    (time_raw, pin, today),
+                )
+                await db.commit()
+                results.append({
+                    "pin": pin, "name": name, "status": "updated_departure",
+                    "time": time_str,
+                })
+
+    finally:
+        await db.close()
+
+    return results
 
 
 # ============================================================
