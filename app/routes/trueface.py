@@ -573,6 +573,23 @@ async def receive_trueface_event(request: Request):
     return {"status": "ok", "results": results}
 
 
+@router.delete("/api/trueface/attendance/{pin}")
+async def reset_attendance_for_pin(pin: str):
+    """Delete today's attendance record for a specific PIN (for testing)."""
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+    db = await _get_db()
+    try:
+        await db.execute(
+            "DELETE FROM trueface_attendance WHERE pin = ? AND date = ?",
+            (pin, today),
+        )
+        await db.commit()
+        return {"status": "ok", "pin": pin, "date": today, "action": "deleted"}
+    finally:
+        await db.close()
+
+
 # ============================================================
 # Excel report generation + email
 # ============================================================
