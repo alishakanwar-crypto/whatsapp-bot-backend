@@ -729,6 +729,17 @@ def start_scheduler() -> None:
         )
     logger.info("Scheduled gate reconciliation reports hourly 7:00 AM - 5:00 PM IST")
 
+    # --- Chairman Mood Report ---
+    # 12:00 PM IST = 6:30 UTC
+    from app.routes.chairman_mood import send_daily_mood_report_sync
+    scheduler.add_job(
+        send_daily_mood_report_sync,
+        trigger=CronTrigger(hour=6, minute=30, second=0),
+        id="chairman_mood_report",
+        replace_existing=True,
+    )
+    logger.info("Scheduled chairman mood report at 12:00 PM IST (6:30 UTC)")
+
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
     # Times are offset by +3 minutes to give teachers time to update.
