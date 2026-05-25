@@ -542,11 +542,11 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
 
 # ============================================================
-# EOD Reconciliation Report
+# Hourly Reconciliation Report (7 AM - 5 PM IST)
 # ============================================================
 
 async def send_reconciliation_report():
-    """Generate and send the hourly gate reconciliation report (7 AM - 5 PM IST)."""
+    """Generate and send the hourly head count reconciliation report."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
@@ -602,7 +602,7 @@ async def send_reconciliation_report():
     for email in recipients:
         ok = await send_email_async(
             email,
-            f"Head Count Reconciliation — {today_display} {time_display} IST",
+            f"Hourly Head Count Reconciliation — {today_display} {time_display} IST",
             body,
             "PP International School",
             attachments=[(filename, xlsx_bytes)],
