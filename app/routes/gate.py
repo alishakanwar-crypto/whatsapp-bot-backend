@@ -338,29 +338,15 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 # ============================================================
 
 async def send_reconciliation_report():
-    """Generate and send the daily gate reconciliation report."""
+    """Generate and send the hourly gate reconciliation report (7 AM - 5 PM IST)."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
+    time_display = now.strftime("%I:%M %p")
 
     db = await _get_db()
     try:
         recon = await _reconcile(db, today)
-
-        # Check if report already sent
-        cur = await db.execute(
-            "SELECT report_sent FROM gate_daily_summary WHERE date = ?", (today,),
-        )
-        row = await cur.fetchone()
-        if row and row[0]:
-            logger.info("[GATE] Reconciliation report already sent for %s", today)
-            return
-
-        # Mark as sent
-        await db.execute(
-            "UPDATE gate_daily_summary SET report_sent = 1 WHERE date = ?", (today,),
-        )
-        await db.commit()
     finally:
         await db.close()
 
@@ -370,11 +356,11 @@ async def send_reconciliation_report():
 
     # Generate Excel
     xlsx_bytes = _generate_reconciliation_excel(recon)
-    filename = f"Gate_Reconciliation_{today}.xlsx"
+    filename = f"Gate_Reconciliation_{today}_{now.strftime('%H%M')}.xlsx"
 
     # Email report
     body = (
-        f"Gate Head Count Reconciliation — {today_display}\n\n"
+        f"Gate Head Count Reconciliation — {today_display} at {time_display} IST\n\n"
         f"Gate Entries (IN): {recon['total_gate_in']}\n"
         f"Gate Exits (OUT): {recon['total_gate_out']}\n"
         f"TrueFace Identified: {recon['trueface_identified']}\n"
@@ -389,7 +375,7 @@ async def send_reconciliation_report():
     for email in recipients:
         ok = await send_email_async(
             email,
-            f"Gate Reconciliation Report — {today_display}",
+            f"Gate Reconciliation Report — {today_display} {time_display} IST",
             body,
             "PP International School",
             attachments=[(filename, xlsx_bytes)],
@@ -400,7 +386,7 @@ async def send_reconciliation_report():
     try:
         from app.services.whatsapp_service import send_whatsapp_message
         summary = (
-            f"Gate Reconciliation — {today_display}\n\n"
+            f"Gate Reconciliation — {today_display} {time_display} IST\n\n"
             f"Gate Entries: {recon['total_gate_in']}\n"
             f"TrueFace Identified: {recon['trueface_identified']}\n"
             f"Unreconciled: {recon['unreconciled_count']}\n\n"
@@ -412,7 +398,8 @@ async def send_reconciliation_report():
         logger.warning("[GATE] WhatsApp summary failed: %s", e)
 
     logger.info(
-        "[GATE] EOD report sent: IN=%d, TrueFace=%d, Unreconciled=%d",
+        "[GATE] Hourly report sent at %s: IN=%d, TrueFace=%d, Unreconciled=%d",
+        time_display,
         recon["total_gate_in"], recon["trueface_identified"], recon["unreconciled_count"],
     )
 

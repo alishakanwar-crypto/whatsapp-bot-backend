@@ -708,16 +708,26 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
-    # --- Gate Reconciliation Report ---
-    # 5:00 PM IST (11:30 UTC) → EOD gate head count reconciliation
+    # --- Gate Reconciliation Reports (Hourly) ---
+    # 7:00 AM - 5:00 PM IST → hourly gate head count report
+    # IST → UTC: subtract 5h30m  (7 AM IST = 1:30 UTC, 5 PM IST = 11:30 UTC)
     from app.routes.gate import send_reconciliation_report_sync
-    scheduler.add_job(
-        send_reconciliation_report_sync,
-        trigger=CronTrigger(hour=11, minute=30, second=0),
-        id="gate_reconciliation_report",
-        replace_existing=True,
-    )
-    logger.info("Scheduled gate reconciliation report at 5:00 PM IST (11:30 UTC)")
+    for ist_hour in range(7, 18):  # 7 AM to 5 PM IST inclusive
+        utc_hour = ist_hour - 6 if ist_hour >= 6 else ist_hour + 18
+        utc_min = 30 if ist_hour >= 6 else 30
+        # IST to UTC: subtract 5:30
+        # e.g. 7:00 IST = 1:30 UTC, 8:00 IST = 2:30 UTC, ..., 17:00 IST = 11:30 UTC
+        utc_h = (ist_hour * 60 + 0 - 330) // 60  # minutes from midnight IST minus 330 min
+        utc_m = (ist_hour * 60 + 0 - 330) % 60
+        if utc_h < 0:
+            utc_h += 24
+        scheduler.add_job(
+            send_reconciliation_report_sync,
+            trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
+            id=f"gate_report_{ist_hour:02d}00",
+            replace_existing=True,
+        )
+    logger.info("Scheduled gate reconciliation reports hourly 7:00 AM - 5:00 PM IST")
 
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
