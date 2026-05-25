@@ -374,6 +374,25 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- ── Chairman mood tracking ────────────────────────────────
+            CREATE TABLE IF NOT EXISTS chairman_mood_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                dominant_emotion TEXT NOT NULL,
+                emotions_json TEXT DEFAULT '{}',
+                temperament TEXT NOT NULL DEFAULT 'neutral',
+                intensity REAL DEFAULT 0.0,
+                face_distance REAL DEFAULT 0.0,
+                face_confidence REAL DEFAULT 0.0,
+                face_crop TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chairman_mood_date
+                ON chairman_mood_log (date);
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
