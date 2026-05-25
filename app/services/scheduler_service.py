@@ -708,6 +708,17 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
+    # --- Gate Reconciliation Report ---
+    # 5:00 PM IST (11:30 UTC) → EOD gate head count reconciliation
+    from app.routes.gate import send_reconciliation_report_sync
+    scheduler.add_job(
+        send_reconciliation_report_sync,
+        trigger=CronTrigger(hour=11, minute=30, second=0),
+        id="gate_reconciliation_report",
+        replace_existing=True,
+    )
+    logger.info("Scheduled gate reconciliation report at 5:00 PM IST (11:30 UTC)")
+
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
     # Times are offset by +3 minutes to give teachers time to update.

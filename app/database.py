@@ -343,6 +343,37 @@ async def init_db():
             CREATE UNIQUE INDEX IF NOT EXISTS idx_trueface_att_pin_date
                 ON trueface_attendance (pin, date);
 
+            -- ── Gate Head Count ──────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS gate_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                direction TEXT NOT NULL DEFAULT 'IN',
+                attire_color TEXT DEFAULT 'unknown',
+                person_crop TEXT DEFAULT '',
+                reconciled INTEGER DEFAULT 0,
+                matched_pin TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gate_entries_date
+                ON gate_entries (date);
+            CREATE INDEX IF NOT EXISTS idx_gate_entries_date_dir
+                ON gate_entries (date, direction);
+
+            CREATE TABLE IF NOT EXISTS gate_daily_summary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT UNIQUE NOT NULL,
+                total_in INTEGER DEFAULT 0,
+                total_out INTEGER DEFAULT 0,
+                trueface_matched INTEGER DEFAULT 0,
+                unreconciled INTEGER DEFAULT 0,
+                report_sent INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
