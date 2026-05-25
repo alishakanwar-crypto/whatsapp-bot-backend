@@ -374,9 +374,10 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
-            -- ── Chairman mood tracking ────────────────────────────────
+            -- ── Mood tracking (multi-person) ─────────────────────────
             CREATE TABLE IF NOT EXISTS chairman_mood_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person TEXT NOT NULL DEFAULT 'Chairman',
                 date TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 camera TEXT NOT NULL,
@@ -392,6 +393,8 @@ async def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_chairman_mood_date
                 ON chairman_mood_log (date);
+            CREATE INDEX IF NOT EXISTS idx_chairman_mood_person
+                ON chairman_mood_log (person);
 
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
@@ -466,6 +469,13 @@ async def init_db():
         try:
             await db.execute(
                 "ALTER TABLE trueface_contacts ADD COLUMN pin TEXT"
+            )
+        except Exception:
+            pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE chairman_mood_log ADD COLUMN person TEXT NOT NULL DEFAULT 'Chairman'"
             )
         except Exception:
             pass  # column already exists
