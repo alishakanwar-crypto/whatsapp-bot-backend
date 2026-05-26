@@ -49,6 +49,13 @@ WHATSAPP_DISABLED = os.environ.get("TRUEFACE_WHATSAPP_DISABLED", "").lower() in 
 # Departure is only recorded after this hour.
 DEPARTURE_HOUR = int(os.environ.get("TRUEFACE_DEPARTURE_HOUR", "11"))
 
+# Persons whose mood should be logged from TrueFace photos
+MOOD_TRACKED_NAMES = {
+    "RAHUL GUPTA": "Chairman",
+    "ALISHA AHUJA": "Alisha",
+    "ALISHA KANWAR": "Alisha",
+}
+
 
 # ============================================================
 # Database helpers
@@ -412,6 +419,41 @@ async def _notify_chairman_arrival(
 
 
 # ============================================================
+# Mood logging from TrueFace photos
+# ============================================================
+
+async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
+    """If the person is Chairman or Alisha, log a mood observation from their
+    TrueFace recognition photo. Uses the same chairman_mood_log table."""
+    person_label = MOOD_TRACKED_NAMES.get(name.upper().strip())
+    if not person_label:
+        return
+
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+
+    db = await _get_db()
+    try:
+        await db.execute(
+            "INSERT INTO chairman_mood_log "
+            "(person, date, timestamp, camera, dominant_emotion, emotions_json, "
+            "temperament, intensity, face_distance, face_confidence, face_crop) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                person_label, today, timestamp or now.strftime("%Y-%m-%d %H:%M:%S"),
+                "TrueFace 3000", "detected", json.dumps({"detected": 1.0}),
+                "present", 1.0, 0.0, 1.0, photo_b64[:200] if photo_b64 else "",
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    logger.info("[TRUEFACE] Mood logged for %s (%s) at %s via TrueFace camera",
+                name, person_label, timestamp)
+
+
+# ============================================================
 # Core attendance event endpoint
 # ============================================================
 
@@ -478,6 +520,11 @@ async def receive_trueface_event(request: Request):
             record = await _get_attendance_record(db, pin, today)
 
             photo_b64 = evt.get("photo", "")
+
+            # Log mood observation for Chairman/Alisha from TrueFace photo
+            asyncio.ensure_future(
+                _log_mood_from_trueface(name, timestamp, photo_b64)
+            )
 
             # Determine current IST hour from the event timestamp
             try:
@@ -946,6 +993,11 @@ async def _process_adms_events(events: list[dict]) -> list[dict]:
             time_raw = timestamp.split(" ")[1] if " " in timestamp else now.strftime("%H:%M:%S")
 
             record = await _get_attendance_record(db, pin, today)
+
+            # Log mood observation for Chairman/Alisha from ADMS event
+            asyncio.ensure_future(
+                _log_mood_from_trueface(name, timestamp, "")
+            )
 
             try:
                 evt_hour = int(time_raw.split(":")[0])
