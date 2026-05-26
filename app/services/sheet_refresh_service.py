@@ -705,18 +705,20 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     if not row_text or row_text.replace(",", "").strip() == "":
                         continue
 
-                    # Detect withdrawal section markers: rows where the
-                    # first non-empty cell starts with "withdraw" and most
-                    # other cells are blank (e.g. "Withdrawal 2025-26,,,,").
-                    # This avoids false positives when "withdrawal" appears
-                    # inside a notes/comment column on a valid student row.
+                    # Detect withdrawal section markers.
+                    # A marker row is any row whose first non-empty cell
+                    # contains "withdraw" (covers "Withdrawal 2025-26",
+                    # "Withdrawals in Session 2023-24", "Potential
+                    # Withdrawal 2023-24", etc.).  Once we enter a
+                    # withdrawal section, every subsequent row is skipped
+                    # (withdrawn students are never followed by active
+                    # students in these sheets).
                     first_cell = ""
                     for cell in row:
                         if cell.strip():
                             first_cell = cell.strip().lower()
                             break
-                    non_empty = sum(1 for c in row if c.strip())
-                    if first_cell.startswith("withdraw") and non_empty <= 3:
+                    if "withdraw" in first_cell:
                         in_withdrawal = True
                         continue
 
@@ -734,6 +736,27 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         in ("STUDENT NAME", "STUDENTNAME", "S.NO.", "SR. NO.", "NAME")
                         or name.isdigit()
                     ):
+                        continue
+
+                    # Skip individual students marked as withdrawn
+                    # inline (e.g. "(WITHDRAWAN THE SERVICES)" in the
+                    # Previous GRADE column).  Only trigger on cells
+                    # whose text *starts with* "withdraw" or is wrapped
+                    # like "(withdraw…)" — ignore casual mentions in
+                    # notes/comments columns.
+                    _is_inline_withdrawn = False
+                    for c in row:
+                        ct = c.strip().lower()
+                        if not ct:
+                            continue
+                        if ct.startswith("withdraw") or ct.startswith("(withdraw"):
+                            _is_inline_withdrawn = True
+                            break
+                    if _is_inline_withdrawn:
+                        logger.debug(
+                            f"PI SHEET TAB gid={gid}: skipping withdrawn "
+                            f"student '{name}' (inline marker)"
+                        )
                         continue
 
                     grade = (
