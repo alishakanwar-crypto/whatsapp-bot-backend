@@ -307,6 +307,127 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- ── TrueFace attendance tracking ──────────────────────────
+            CREATE TABLE IF NOT EXISTS trueface_teachers (
+                pin TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                phone TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS trueface_contacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pin TEXT,
+                name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                category TEXT DEFAULT 'staff',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS trueface_attendance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pin TEXT NOT NULL,
+                name TEXT NOT NULL,
+                date TEXT NOT NULL,
+                arrival_time TEXT,
+                departure_time TEXT,
+                arrival_whatsapp INTEGER DEFAULT 0,
+                departure_whatsapp INTEGER DEFAULT 0,
+                arrival_report_sent INTEGER DEFAULT 0,
+                departure_report_sent INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_trueface_att_date
+                ON trueface_attendance (date);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_trueface_att_pin_date
+                ON trueface_attendance (pin, date);
+
+            -- ── Gate Head Count ──────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS gate_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                direction TEXT NOT NULL DEFAULT 'IN',
+                attire_color TEXT DEFAULT 'unknown',
+                person_crop TEXT DEFAULT '',
+                reconciled INTEGER DEFAULT 0,
+                matched_pin TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gate_entries_date
+                ON gate_entries (date);
+            CREATE INDEX IF NOT EXISTS idx_gate_entries_date_dir
+                ON gate_entries (date, direction);
+
+            CREATE TABLE IF NOT EXISTS gate_daily_summary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT UNIQUE NOT NULL,
+                total_in INTEGER DEFAULT 0,
+                total_out INTEGER DEFAULT 0,
+                trueface_matched INTEGER DEFAULT 0,
+                unreconciled INTEGER DEFAULT 0,
+                report_sent INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- ── Mood tracking (multi-person) ─────────────────────────
+            CREATE TABLE IF NOT EXISTS chairman_mood_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person TEXT NOT NULL DEFAULT 'Chairman',
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                dominant_emotion TEXT NOT NULL,
+                emotions_json TEXT DEFAULT '{}',
+                temperament TEXT NOT NULL DEFAULT 'neutral',
+                intensity REAL DEFAULT 0.0,
+                face_distance REAL DEFAULT 0.0,
+                face_confidence REAL DEFAULT 0.0,
+                face_crop TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chairman_mood_date
+                ON chairman_mood_log (date);
+            CREATE INDEX IF NOT EXISTS idx_chairman_mood_person
+                ON chairman_mood_log (person);
+
+            -- ── DVR Teacher Sightings (for head count reconciliation) ──
+            CREATE TABLE IF NOT EXISTS teacher_dvr_sightings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                person_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                confidence REAL DEFAULT 0.0,
+                outfit_color TEXT DEFAULT '',
+                outfit_description TEXT DEFAULT '',
+                outfit_colors_json TEXT DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dvr_sightings_date
+                ON teacher_dvr_sightings (date);
+            CREATE INDEX IF NOT EXISTS idx_dvr_sightings_person
+                ON teacher_dvr_sightings (date, person_id);
+
+            -- ── DVR Visitor Sightings (unknown faces on gate/reception cameras) ──
+            CREATE TABLE IF NOT EXISTS visitor_dvr_sightings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_visitor_sightings_date
+                ON visitor_dvr_sightings (date);
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
@@ -376,6 +497,32 @@ async def init_db():
             )
         except Exception:
             pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE trueface_contacts ADD COLUMN pin TEXT"
+            )
+        except Exception:
+            pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE chairman_mood_log ADD COLUMN person TEXT NOT NULL DEFAULT 'Chairman'"
+            )
+        except Exception:
+            pass  # column already exists
+
+        for col_name, col_def in [
+            ("outfit_color", "TEXT DEFAULT ''"),
+            ("outfit_description", "TEXT DEFAULT ''"),
+            ("outfit_colors_json", "TEXT DEFAULT '[]'"),
+        ]:
+            try:
+                await db.execute(
+                    f"ALTER TABLE teacher_dvr_sightings ADD COLUMN {col_name} {col_def}"
+                )
+            except Exception:
+                pass  # column already exists
 
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()

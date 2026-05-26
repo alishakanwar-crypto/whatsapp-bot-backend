@@ -144,17 +144,9 @@ async def report_attendance(request: Request):
     now_ist = datetime.now(ist)
     day_name = now_ist.strftime("%A")
 
-    # Block entirely on Sundays (no one works)
-    if day_name == "Sunday":
-        return {"status": "blocked", "reason": "Sunday — school is closed", "inserted": 0}
-    # Block entirely on 2nd Saturday (no one works)
-    is_saturday = day_name == "Saturday"
-    if is_saturday:
-        sat_number = (now_ist.day - 1) // 7 + 1
-        if sat_number == 2:
-            return {"status": "blocked", "reason": "2nd Saturday — school is closed", "inserted": 0}
-    # Flag: students are blocked on ALL Saturdays (teachers may still work)
-    _block_students_today = is_saturday
+    # Block entirely on weekends (all Saturdays and Sundays)
+    if day_name in ("Saturday", "Sunday"):
+        return {"status": "blocked", "reason": f"{day_name} — school is closed (weekend)", "inserted": 0}
     # Block on holidays
     today_str = now_ist.strftime("%Y-%m-%d")
     try:
@@ -202,12 +194,6 @@ async def report_attendance(request: Request):
             notified = 1 if rec.get("notification_sent") else 0
             phones = rec.get("parent_phones", "")
             logged_at = rec.get("logged_at", datetime.now().isoformat())
-
-            # Skip student records on ALL Saturdays (teachers/principals still allowed)
-            if _block_students_today and not person_id.startswith(("TEACHER_", "PRINCIPAL_")):
-                rejected += 1
-                logger.info(f"Student attendance skipped on Saturday: {name} ({person_id})")
-                continue
 
             # Confidence floor: reject low-confidence matches at backend level
             if confidence < MINIMUM_CONFIDENCE:
@@ -1726,10 +1712,13 @@ async def email_teacher_attendance_report(
     request: Request,
     _: None = Depends(verify_dashboard_secret),
 ):
-    """Generate teacher attendance Excel and email it.
+    """DEPRECATED — DVR-based teacher attendance report.
 
-    Called by the agent after Phase 1 (teacher scanning) completes.
+    Teacher attendance is now handled by the TrueFace 3000 system.
+    See /api/trueface/report/arrival and /api/trueface/report/departure.
+    This endpoint is kept for backward compatibility but is no longer called.
     """
+    return {"status": "deprecated", "message": "Teacher reports now use TrueFace system"}
     from app.services.email_service import send_email_async
 
     ist = timezone(timedelta(hours=5, minutes=30))

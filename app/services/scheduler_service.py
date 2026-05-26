@@ -670,26 +670,80 @@ def start_scheduler() -> None:
     else:
         logger.info("Meal monitoring auto-trigger DISABLED (toggle from control panel)")
 
-    # --- Teacher Attendance Excel ---
-    # Generate/update daily after attendance window closes (9:30 AM IST = 4:00 UTC)
-    from app.services.teacher_attendance_excel import generate_teacher_attendance_excel_sync
-    scheduler.add_job(
-        generate_teacher_attendance_excel_sync,
-        trigger=CronTrigger(hour=4, minute=5, second=0),
-        id="teacher_attendance_excel_daily",
-        replace_existing=True,
-    )
-    logger.info("Scheduled teacher attendance Excel generation at 9:35 AM IST daily")
+    # --- Teacher Attendance Excel (DVR-based) — DISABLED ---
+    # Replaced by TrueFace-based attendance tracking and reporting.
+    # from app.services.teacher_attendance_excel import generate_teacher_attendance_excel_sync
+    # scheduler.add_job(
+    #     generate_teacher_attendance_excel_sync,
+    #     trigger=CronTrigger(hour=4, minute=5, second=0),
+    #     id="teacher_attendance_excel_daily",
+    #     replace_existing=True,
+    # )
+    # scheduler.add_job(
+    #     generate_teacher_attendance_excel_sync,
+    #     trigger="date",
+    #     run_date=datetime.now() + timedelta(seconds=180),
+    #     id="teacher_attendance_excel_initial",
+    #     replace_existing=True,
+    # )
+    logger.info("DVR-based teacher attendance Excel DISABLED — using TrueFace system")
 
-    # Also generate on startup (after 180s to let attendance data settle)
+    # --- TrueFace Attendance Reports ---
+    # 9:00 AM IST (3:30 UTC) → Arrival report emailed
+    from app.routes.trueface import send_arrival_report_sync, send_departure_report_sync
     scheduler.add_job(
-        generate_teacher_attendance_excel_sync,
-        trigger="date",
-        run_date=datetime.now() + timedelta(seconds=180),
-        id="teacher_attendance_excel_initial",
+        send_arrival_report_sync,
+        trigger=CronTrigger(hour=3, minute=30, second=0),
+        id="trueface_arrival_report",
         replace_existing=True,
     )
-    logger.info("Scheduled initial teacher attendance Excel generation in 180 seconds")
+    logger.info("Scheduled TrueFace arrival report at 9:00 AM IST (3:30 UTC)")
+
+    # 4:30 PM IST (11:00 UTC) → Departure report emailed
+    scheduler.add_job(
+        send_departure_report_sync,
+        trigger=CronTrigger(hour=11, minute=0, second=0),
+        id="trueface_departure_report",
+        replace_existing=True,
+    )
+    logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
+
+    # --- Gate Reconciliation Reports (Hourly) ---
+    # 7:00 AM - 5:00 PM IST → hourly gate head count report
+    # IST → UTC: subtract 5h30m  (7 AM IST = 1:30 UTC, 5 PM IST = 11:30 UTC)
+    from app.routes.gate import send_reconciliation_report_sync
+    for ist_hour in range(7, 18):  # 7 AM to 5 PM IST inclusive
+        utc_hour = ist_hour - 6 if ist_hour >= 6 else ist_hour + 18
+        utc_min = 30 if ist_hour >= 6 else 30
+        # IST to UTC: subtract 5:30
+        # e.g. 7:00 IST = 1:30 UTC, 8:00 IST = 2:30 UTC, ..., 17:00 IST = 11:30 UTC
+        utc_h = (ist_hour * 60 + 0 - 330) // 60  # minutes from midnight IST minus 330 min
+        utc_m = (ist_hour * 60 + 0 - 330) % 60
+        if utc_h < 0:
+            utc_h += 24
+        scheduler.add_job(
+            send_reconciliation_report_sync,
+            trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
+            id=f"gate_report_{ist_hour:02d}00",
+            replace_existing=True,
+        )
+    logger.info("Scheduled gate reconciliation reports hourly 7:00 AM - 5:00 PM IST")
+
+    # --- Mood & Temperament Reports (hourly 7 AM - 12 PM IST) ---
+    # IST 7:00=1:30 UTC, 8:00=2:30, 9:00=3:30, 10:00=4:30, 11:00=5:30, 12:00=6:30
+    from app.routes.chairman_mood import send_daily_mood_report_sync
+    for ist_hour in range(7, 13):  # 7 AM through 12 PM IST
+        utc_hour = ist_hour - 6
+        utc_minute = 30
+        if utc_hour < 0:
+            utc_hour += 24
+        scheduler.add_job(
+            send_daily_mood_report_sync,
+            trigger=CronTrigger(hour=utc_hour, minute=utc_minute, second=0),
+            id=f"mood_report_{ist_hour:02d}00",
+            replace_existing=True,
+        )
+    logger.info("Scheduled mood reports hourly 7:00 AM - 12:00 PM IST")
 
     # --- Homework Delivery (Google Docs) ---
     # Check homework docs after each period ends.
