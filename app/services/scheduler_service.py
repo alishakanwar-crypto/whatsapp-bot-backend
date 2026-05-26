@@ -831,18 +831,18 @@ def start_scheduler() -> None:
         )
         logger.info(f"Scheduled homework delivery (summer): {desc}")
 
-    # Summer safety-net at 01:38 PM IST (08:08 UTC)
+    # Summer safety-net at 02:30 PM IST (09:00 UTC)
     scheduler.add_job(
         run_homework_delivery_sync,
         trigger=CronTrigger(
-            hour=8, minute=8, second=0,
+            hour=9, minute=0, second=0,
             start_date=_summer_start,
         ),
         args=[8],
         id="homework_delivery_summer_final_check",
         replace_existing=True,
     )
-    logger.info("Scheduled homework delivery (summer): safety check 01:38 IST")
+    logger.info("Scheduled homework delivery (summer): safety check 02:30 PM IST")
 
     # --- Daily Doc Clear (3:00 PM IST = 9:30 UTC) ---
     # Clears all 34 homework Google Docs at end of school day,
