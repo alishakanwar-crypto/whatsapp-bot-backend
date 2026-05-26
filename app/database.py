@@ -413,6 +413,18 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_dvr_sightings_person
                 ON teacher_dvr_sightings (date, person_id);
 
+            -- ── DVR Visitor Sightings (unknown faces on gate/reception cameras) ──
+            CREATE TABLE IF NOT EXISTS visitor_dvr_sightings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_visitor_sightings_date
+                ON visitor_dvr_sightings (date);
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
