@@ -116,18 +116,18 @@ async def _get_trueface_attendance(db, date: str) -> list[dict]:
 
 
 async def _get_total_teachers(db) -> int:
-    """Get total registered teachers count."""
-    cur = await db.execute("SELECT COUNT(*) FROM trueface_teachers WHERE phone != ''")
+    """Get total registered teachers count (all teachers, not just those with phones)."""
+    cur = await db.execute("SELECT COUNT(*) FROM trueface_teachers")
     row = await cur.fetchone()
     return row[0] if row else 0
 
 
 async def _get_all_teachers(db) -> list[dict]:
-    """Get all registered teachers with phone numbers."""
+    """Get all registered teachers (including those without phone numbers)."""
     cur = await db.execute(
-        "SELECT pin, name, phone FROM trueface_teachers WHERE phone != '' ORDER BY name"
+        "SELECT pin, name, phone FROM trueface_teachers ORDER BY name"
     )
-    return [{"pin": r[0], "name": r[1], "phone": r[2]} for r in await cur.fetchall()]
+    return [{"pin": r[0], "name": r[1], "phone": r[2] or ""} for r in await cur.fetchall()]
 
 
 async def _store_teacher_sightings(db, sightings: list[dict]) -> int:
