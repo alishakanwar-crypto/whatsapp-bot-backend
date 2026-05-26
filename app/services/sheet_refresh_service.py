@@ -706,17 +706,16 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         continue
 
                     # Detect withdrawal section markers: rows where the
-                    # first non-empty cell starts with "withdraw" and most
-                    # other cells are blank (e.g. "Withdrawal 2025-26,,,,").
-                    # This avoids false positives when "withdrawal" appears
-                    # inside a notes/comment column on a valid student row.
+                    # first non-empty cell contains "withdrawal" and most
+                    # other cells are blank (e.g. "Withdrawal 2025-26,,,,",
+                    # "Potential Withdrawal 2023-24,,,,", "Withdrawals,,,,").
                     first_cell = ""
                     for cell in row:
                         if cell.strip():
                             first_cell = cell.strip().lower()
                             break
                     non_empty = sum(1 for c in row if c.strip())
-                    if first_cell.startswith("withdraw") and non_empty <= 3:
+                    if "withdrawal" in first_cell and non_empty <= 3:
                         in_withdrawal = True
                         continue
 
