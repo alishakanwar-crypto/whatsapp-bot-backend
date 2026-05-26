@@ -687,6 +687,17 @@ async def run_homework_delivery(period: int) -> dict:
         if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
             continue
 
+        # Temporary blackout: skip grades 9-12 from 27-May-2026
+        # through 30-Jun-2026 (inclusive).
+        _blackout_start = datetime(2026, 5, 27, 0, 0, tzinfo=IST)
+        _blackout_end = datetime(2026, 7, 1, 0, 0, tzinfo=IST)
+        if _blackout_start <= now_ist < _blackout_end:
+            logger.info(
+                f"Skipping {grade} — CW/HW disabled for grades 9-12 "
+                f"until 30-Jun-2026"
+            )
+            continue
+
         # Skip entries with no doc_id (not yet created)
         if not doc_id:
             continue
