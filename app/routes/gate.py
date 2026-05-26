@@ -136,6 +136,21 @@ async def _get_all_teachers(db) -> list[dict]:
     return [{"pin": r[0], "name": r[1], "phone": r[2] or ""} for r in await cur.fetchall()]
 
 
+async def _get_contact_categories(db) -> dict[str, str]:
+    """Get category for each contact by PIN from trueface_contacts.
+    Returns dict mapping UPPERCASED name -> category."""
+    cur = await db.execute(
+        "SELECT name, category FROM trueface_contacts ORDER BY name"
+    )
+    result: dict[str, str] = {}
+    for r in await cur.fetchall():
+        name = (r[0] or "").upper().strip()
+        category = (r[1] or "staff").lower().strip()
+        if name:
+            result[name] = category
+    return result
+
+
 async def _store_teacher_sightings(db, sightings: list[dict]) -> int:
     """Store DVR teacher sightings in the database."""
     count = 0
@@ -245,6 +260,7 @@ async def _reconcile(db, date: str) -> dict:
     total_teachers = len(all_teachers)
     dvr_sightings = await _get_teacher_sightings(db, date)
     visitor_sightings = await _get_visitor_sightings(db, date)
+    contact_categories = await _get_contact_categories(db)
 
     total_in = len(gate_in)
     total_out = len(gate_out)
@@ -317,8 +333,34 @@ async def _reconcile(db, date: str) -> dict:
         else:
             outfit_summary = "—"
 
+        # Category from trueface_contacts
+        category = contact_categories.get(name_upper, "staff")
+
+        # Build time trail — chronological sequence of detections across systems
+        time_trail: list[dict] = []
+        if tf and tf.get("arrival_time"):
+            time_trail.append({
+                "time": tf["arrival_time"],
+                "source": "TrueFace 3000",
+                "event": "Attendance Marked",
+            })
+        for det in dvr_sighting_details:
+            time_trail.append({
+                "time": det["time"],
+                "source": det["camera"],
+                "event": f"DVR Sighting ({det.get('outfit_color', '')})" if det.get("outfit_color") else "DVR Sighting",
+            })
+        if tf and tf.get("departure_time"):
+            time_trail.append({
+                "time": tf["departure_time"],
+                "source": "TrueFace 3000",
+                "event": "Departure Marked",
+            })
+        time_trail.sort(key=lambda x: x["time"])
+
         teacher_detail.append({
             "name": display_name,
+            "category": category,
             "trueface_present": tf is not None,
             "trueface_arrival": tf["arrival_time"] if tf else None,
             "trueface_departure": tf["departure_time"] if tf else None,
@@ -332,6 +374,7 @@ async def _reconcile(db, date: str) -> dict:
             "dvr_sighting_details": dvr_sighting_details,
             "outfit_summary": outfit_summary,
             "outfit_observations": outfit_observations,
+            "time_trail": time_trail,
             "status": _reconciliation_status(tf is not None, len(dvr_list) > 0),
         })
 
@@ -372,6 +415,55 @@ async def _reconcile(db, date: str) -> dict:
         cam = v.get("camera", "Unknown")
         visitor_by_camera.setdefault(cam, []).append(v)
 
+    # --- Mismatch Alerts ---
+    alerts: list[dict] = []
+    # Attendance marked but no gate/DVR entry
+    for t in side_by_side["trueface_only"]:
+        alerts.append({
+            "type": "ATTENDANCE_WITHOUT_ENTRY",
+            "severity": "medium",
+            "person": t["name"],
+            "category": t.get("category", "staff"),
+            "detail": f"TrueFace at {t.get('trueface_arrival', '?')} but not seen on any DVR camera.",
+        })
+    # DVR entry but attendance NOT marked
+    for t in side_by_side["dvr_only"]:
+        alerts.append({
+            "type": "ENTRY_WITHOUT_ATTENDANCE",
+            "severity": "high",
+            "person": t["name"],
+            "category": t.get("category", "staff"),
+            "detail": f"Seen on DVR ({', '.join(t.get('dvr_cameras', []))}) at {t.get('dvr_first_seen', '?')} but NOT marked on TrueFace.",
+        })
+    # Visitors still inside (entered but no exit event — compare gate in vs out)
+    visitors_in = len([v for v in visitor_sightings
+                       if any(kw in (v.get("camera", "").lower()) for kw in ("gate", "entry", "reception"))])
+    if visitors_in > 0 and total_out < total_in:
+        alerts.append({
+            "type": "VISITORS_POSSIBLY_INSIDE",
+            "severity": "low",
+            "person": "",
+            "category": "visitor",
+            "detail": f"{visitors_in} visitor detection(s) at gate/reception. Gate IN={total_in}, OUT={total_out}.",
+        })
+    # Unknown/unrecognized at gate
+    if len(visitor_sightings) > 0:
+        alerts.append({
+            "type": "UNKNOWN_PERSONS",
+            "severity": "medium",
+            "person": "",
+            "category": "unknown",
+            "detail": f"{len(visitor_sightings)} unknown/unidentified person(s) detected on gate/reception cameras.",
+        })
+
+    # --- Category breakdown ---
+    from collections import Counter
+    category_counts: Counter = Counter()
+    for t in teacher_detail:
+        if t["trueface_present"] or t["dvr_seen"]:
+            cat = _normalize_category(t.get("category", "staff"))
+            category_counts[cat] += 1
+
     return {
         "date": date,
         "total_gate_in": total_in,
@@ -386,7 +478,31 @@ async def _reconcile(db, date: str) -> dict:
         "visitor_count": len(visitor_sightings),
         "visitor_sightings": visitor_sightings,
         "visitor_by_camera": visitor_by_camera,
+        "alerts": alerts,
+        "category_counts": dict(category_counts),
     }
+
+
+def _normalize_category(raw: str) -> str:
+    """Normalize raw TrueFace category into display group."""
+    raw = (raw or "staff").lower().strip()
+    teacher_keywords = ("teacher", "eng-teacher", "comp. teacher", "art teacher",
+                        "music teacher", "sports teacher", "dance teacher",
+                        "theatre teacher", "trainee teacher", "lib. teacher",
+                        "taekwondo tea.", "principal")
+    admin_keywords = ("admin", "admin it", "account", "est. manager",
+                      "lab. incharge", "max nurse")
+    if any(kw == raw for kw in teacher_keywords):
+        return "Teachers"
+    if any(kw == raw for kw in admin_keywords):
+        return "Admin / Office Staff"
+    if raw in ("advocate",):
+        return "Advocates / Legal"
+    if raw in ("staff",):
+        return "Support Staff"
+    if raw in ("web designers",):
+        return "IT / Design"
+    return raw.title()
 
 
 def _reconciliation_status(trueface_present: bool, dvr_seen: bool) -> str:
@@ -509,13 +625,15 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     """Generate the comprehensive School Headcount Reconciliation report.
 
     Sheets:
-      1. Summary — overall counts & reconciliation breakdown
-      2. Verified Movements — per-person detail with outfit + timestamps
-      3. Sighting Timeline — every DVR sighting chronologically
+      1. Summary — overall counts, category breakdown, reconciliation status
+      2. Verified Movements — per-person detail with category, outfit, timestamps
+      3. Sighting Timeline — every DVR sighting chronologically with category
       4. Reconciliation — side-by-side comparison by status category
       5. Visitors — visitor head count, per-camera, timeline
       6. Outfit Reconciliation — outfit tracking across sightings
       7. AI Observations — automated intelligence notes
+      8. Time Trail — movement reconstruction per person across cameras
+      9. Mismatch Alerts — attendance/entry mismatches, unknown persons
     """
     from collections import Counter
 
@@ -576,7 +694,14 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         ("  — DVR Cameras Only", recon.get("dvr_sighted", 0), None),
         ("Visitors / Parents / Vendors", visitor_count, orange_fill),
         ("", "", None),
-        ("════════ TEACHER RECONCILIATION ════════", "", None),
+        ("════════ STAFF CATEGORY BREAKDOWN ════════", "", None),
+    ]
+    # Insert category counts
+    for cat_name, cat_count in sorted(recon.get("category_counts", {}).items()):
+        summary_rows.append((f"  {cat_name}", cat_count, None))
+    summary_rows += [
+        ("", "", None),
+        ("════════ RECONCILIATION STATUS ════════", "", None),
         ("✓ Fully Verified (TrueFace + DVR)", len(fully_verified), green_fill),
         ("⚠ Entry Only (DVR — Not on TrueFace)", len(dvr_only), red_fill),
         ("⚠ TrueFace Only (No DVR Sighting)", len(trueface_only), yellow_fill),
@@ -618,7 +743,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     for i, t in enumerate(teacher_detail, 1):
         ws2.cell(row=r, column=1, value=i).border = border
         ws2.cell(row=r, column=2, value=t["name"]).border = border
-        ws2.cell(row=r, column=3, value="Teacher").border = border
+        ws2.cell(row=r, column=3, value=_normalize_category(t.get("category", "staff"))).border = border
 
         status_cell = ws2.cell(row=r, column=4, value=t["status"])
         status_cell.border = border
@@ -672,7 +797,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     all_sightings = []
     for t in teacher_detail:
         for det in t.get("dvr_sighting_details", []):
-            all_sightings.append({"name": t["name"], "category": "Teacher", **det})
+            all_sightings.append({"name": t["name"], "category": _normalize_category(t.get("category", "staff")), **det})
     all_sightings.sort(key=lambda x: x.get("time", ""))
 
     r = 4
@@ -883,6 +1008,86 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ws7.column_dimensions["A"].width = 5
     ws7.column_dimensions["B"].width = 80
 
+    # ── Sheet 8: Time Trail ──
+    ws8 = wb.create_sheet("Time Trail")
+
+    ws8.merge_cells("A1:E1")
+    ws8["A1"] = f"════════ TIME TRAIL RECONSTRUCTION — {date_str} ════════"
+    ws8["A1"].font = Font(bold=True, size=14)
+
+    trail_headers = ["#", "Name", "Category", "Time", "Source / Camera", "Event"]
+    for col, h in enumerate(trail_headers, 1):
+        cell = ws8.cell(row=3, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = border
+
+    r = 4
+    # Show time trail for detected persons only
+    detected = [t for t in teacher_detail if t.get("time_trail")]
+    for t in detected:
+        # Person header row
+        ws8.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
+        person_cell = ws8.cell(row=r, column=1,
+                               value=f"{t['name']} — {_normalize_category(t.get('category', 'staff'))}")
+        person_cell.font = Font(bold=True, size=10)
+        person_cell.fill = light_blue_fill
+        person_cell.border = border
+        r += 1
+        for idx, trail in enumerate(t["time_trail"], 1):
+            ws8.cell(row=r, column=1, value=idx).border = border
+            ws8.cell(row=r, column=2, value=t["name"]).border = border
+            ws8.cell(row=r, column=3, value=_normalize_category(t.get("category", "staff"))).border = border
+            ws8.cell(row=r, column=4, value=trail.get("time", "")).border = border
+            ws8.cell(row=r, column=5, value=trail.get("source", "")).border = border
+            ws8.cell(row=r, column=6, value=trail.get("event", "")).border = border
+            r += 1
+        r += 1  # blank row between persons
+
+    for col_letter, w in [("A", 5), ("B", 25), ("C", 20), ("D", 12),
+                           ("E", 40), ("F", 30)]:
+        ws8.column_dimensions[col_letter].width = w
+
+    # ── Sheet 9: Mismatch Alerts ──
+    alerts = recon.get("alerts", [])
+    ws9 = wb.create_sheet("Mismatch Alerts")
+
+    ws9.merge_cells("A1:E1")
+    ws9["A1"] = f"════════ MISMATCH ALERTS — {date_str} ════════"
+    ws9["A1"].font = Font(bold=True, size=14)
+
+    alert_headers = ["#", "Alert Type", "Severity", "Person", "Detail"]
+    for col, h in enumerate(alert_headers, 1):
+        cell = ws9.cell(row=3, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = border
+
+    high_fill = PatternFill("solid", fgColor="FF4444")
+    medium_fill = PatternFill("solid", fgColor="FFA500")
+    low_fill = PatternFill("solid", fgColor="FFEB9C")
+    severity_fills = {"high": high_fill, "medium": medium_fill, "low": low_fill}
+
+    r = 4
+    for idx, alert in enumerate(alerts, 1):
+        ws9.cell(row=r, column=1, value=idx).border = border
+        ws9.cell(row=r, column=2, value=alert.get("type", "")).border = border
+        sev = alert.get("severity", "medium")
+        sev_cell = ws9.cell(row=r, column=3, value=sev.upper())
+        sev_cell.border = border
+        sev_cell.fill = severity_fills.get(sev, medium_fill)
+        ws9.cell(row=r, column=4, value=alert.get("person", "—") or "—").border = border
+        detail_cell = ws9.cell(row=r, column=5, value=alert.get("detail", ""))
+        detail_cell.border = border
+        detail_cell.alignment = Alignment(wrap_text=True)
+        r += 1
+
+    if not alerts:
+        ws9.cell(row=4, column=1, value="No mismatch alerts for this period.").font = Font(italic=True)
+
+    for col_letter, w in [("A", 5), ("B", 30), ("C", 12), ("D", 25), ("E", 60)]:
+        ws9.column_dimensions[col_letter].width = w
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1036,6 +1241,14 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     key_value("TrueFace Recognized", recon["trueface_identified"], indent=1)
     key_value("DVR Cameras Only", recon.get("dvr_sighted", 0), indent=1)
     key_value("Visitors / Parents / Vendors", visitor_count, bold_val=True)
+    pdf.ln(2)
+
+    # Staff categories
+    category_counts = recon.get("category_counts", {})
+    if category_counts:
+        section_header("STAFF CATEGORY BREAKDOWN")
+        for cat_name in sorted(category_counts.keys()):
+            key_value(cat_name, category_counts[cat_name], indent=1)
     pdf.ln(3)
 
     # ── Teacher Reconciliation ──
@@ -1053,7 +1266,8 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
             cams = ", ".join(t.get("dvr_cameras", []))
             outfit = t.get("outfit_summary", "") or "-"
             pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(0, 6, f"{t['name']} - Teacher", new_x="LMARGIN", new_y="NEXT")
+            cat = _normalize_category(t.get('category', 'staff'))
+            pdf.cell(0, 6, f"{t['name']} - {cat}", new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("Helvetica", "", 9)
             pdf.cell(0, 5, f"    Entry Gate: {t.get('dvr_first_seen', '-')}  |  TrueFace: Recognized ({t.get('trueface_arrival', '-')})", new_x="LMARGIN", new_y="NEXT")
             pdf.cell(0, 5, f"    Cameras: {cams}  |  Wearing: {outfit}", new_x="LMARGIN", new_y="NEXT")
@@ -1066,7 +1280,8 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
             cams = ", ".join(t.get("dvr_cameras", []))
             outfit = t.get("outfit_summary", "") or "-"
             pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(0, 6, f"{t['name']} - Teacher", new_x="LMARGIN", new_y="NEXT")
+            cat = _normalize_category(t.get('category', 'staff'))
+            pdf.cell(0, 6, f"{t['name']} - {cat}", new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("Helvetica", "", 9)
             pdf.cell(0, 5, f"    DVR: {t.get('dvr_first_seen', '-')}  |  Cameras: {cams}  |  Wearing: {outfit}", new_x="LMARGIN", new_y="NEXT")
             pdf.set_text_color(200, 0, 0)
@@ -1147,6 +1362,53 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
             pdf.cell(60, 6, outfit, border=1, new_x="RIGHT")
             pdf.cell(20, 6, str(t.get("dvr_sighting_count", 0)), border=1, align="C", new_x="RIGHT")
             pdf.cell(0, 6, ", ".join(sorted(cam_set)) or "-", border=1, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(5)
+
+    # ── Time Trail (top 10 detected persons) ──
+    detected_with_trail = [t for t in teacher_detail if t.get("time_trail")]
+    if detected_with_trail:
+        section_header("TIME TRAIL RECONSTRUCTION")
+        for t in detected_with_trail[:15]:
+            cat = _normalize_category(t.get('category', 'staff'))
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_fill_color(217, 226, 243)
+            pdf.cell(0, 6, f"{t['name']} ({cat})", fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 8)
+            for trail in t["time_trail"]:
+                pdf.cell(25, 5, trail.get("time", ""), new_x="RIGHT")
+                pdf.cell(60, 5, trail.get("source", ""), new_x="RIGHT")
+                pdf.cell(0, 5, trail.get("event", ""), new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(2)
+        if len(detected_with_trail) > 15:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(0, 5, f"... and {len(detected_with_trail) - 15} more (see Excel for full list)",
+                     new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
+
+    # ── Mismatch Alerts ──
+    alerts = recon.get("alerts", [])
+    if alerts:
+        section_header("MISMATCH ALERTS")
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(217, 226, 243)
+        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(45, 7, "Alert Type", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(18, 7, "Severity", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Detail", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for idx, alert in enumerate(alerts, 1):
+            sev = alert.get("severity", "medium")
+            if sev == "high":
+                pdf.set_fill_color(255, 68, 68)
+            elif sev == "medium":
+                pdf.set_fill_color(255, 165, 0)
+            else:
+                pdf.set_fill_color(255, 235, 156)
+            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
+            pdf.cell(45, 6, alert.get("type", ""), border=1, new_x="RIGHT")
+            pdf.cell(18, 6, sev.upper(), border=1, align="C", fill=True, new_x="RIGHT")
+            pdf.set_fill_color(255, 255, 255)
+            pdf.cell(0, 6, alert.get("detail", ""), border=1, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(5)
 
     # ── AI Observations ──
