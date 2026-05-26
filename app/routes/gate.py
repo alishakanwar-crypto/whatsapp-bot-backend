@@ -559,24 +559,28 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ws["A2"] = f"PP International School — {date_str}"
     ws["A2"].font = Font(bold=True, size=11)
 
+    # Compute overall campus headcount
+    teachers_detected = recon["trueface_identified"] + len(dvr_only)
+    total_people = teachers_detected + visitor_count
+
     r = 4
     summary_rows = [
-        ("TOTAL REGISTERED TEACHERS", recon["total_registered_teachers"], None),
-        ("TrueFace Marked Present", recon["trueface_identified"], None),
-        ("Seen on DVR Cameras", recon.get("dvr_sighted", 0), None),
-        ("", "", None),
-        ("✓ Fully Verified (Both Systems)", len(fully_verified), green_fill),
-        ("⚠ Entry Only (DVR — Not on TrueFace)", len(dvr_only), red_fill),
-        ("⚠ TrueFace Only (No DVR Sighting)", len(trueface_only), yellow_fill),
-        ("— Absent (Neither System)", len(absent), gray_fill),
-        ("", "", None),
-        ("════════ CATEGORY BREAKDOWN ════════", "", None),
-        ("Teachers Detected", recon["trueface_identified"] + len(dvr_only), None),
-        ("Visitors / Unknown Persons", visitor_count, orange_fill),
-        ("", "", None),
-        ("════════ GATE SUMMARY ════════", "", None),
+        ("════════ OVERALL CAMPUS HEADCOUNT ════════", "", None),
+        ("Total People Detected", total_people, light_blue_fill),
         ("Gate Entries (IN)", recon["total_gate_in"], None),
         ("Gate Exits (OUT)", recon["total_gate_out"], None),
+        ("", "", None),
+        ("════════ CATEGORY BREAKDOWN ════════", "", None),
+        ("Teachers / Staff", teachers_detected, None),
+        ("  — TrueFace Recognized", recon["trueface_identified"], None),
+        ("  — DVR Cameras Only", recon.get("dvr_sighted", 0), None),
+        ("Visitors / Parents / Vendors", visitor_count, orange_fill),
+        ("", "", None),
+        ("════════ TEACHER RECONCILIATION ════════", "", None),
+        ("✓ Fully Verified (TrueFace + DVR)", len(fully_verified), green_fill),
+        ("⚠ Entry Only (DVR — Not on TrueFace)", len(dvr_only), red_fill),
+        ("⚠ TrueFace Only (No DVR Sighting)", len(trueface_only), yellow_fill),
+        ("— Not Detected", len(absent), gray_fill),
     ]
     for label, value, fill in summary_rows:
         ws.cell(row=r, column=1, value=label).font = Font(bold=True)
@@ -934,18 +938,17 @@ def _generate_ai_observations(recon: dict) -> list[str]:
             f"Peak activity at {peak_hour[0]:02d}:00 hour with {peak_hour[1]} DVR sightings."
         )
 
-    # Attendance rate
+    # Attendance summary
     total = recon.get("total_registered_teachers", 0)
     if total > 0:
         present = len(fully_verified) + len(trueface_only) + len(dvr_only)
         rate = round(present / total * 100, 1)
         observations.append(
-            f"Teacher attendance rate: {rate}% ({present} of {total} registered)."
+            f"Staff/teacher detection rate: {rate}% ({present} detected out of {total})."
         )
         if len(absent) > 10:
             observations.append(
-                f"{len(absent)} teachers absent from both systems. "
-                f"Review may be needed for large absentee count."
+                f"{len(absent)} staff not detected on any system today."
             )
 
     # Outfit tracking completeness
@@ -955,7 +958,7 @@ def _generate_ai_observations(recon: dict) -> list[str]:
     if dvr_seen > 0:
         observations.append(
             f"Outfit/clothing tracked for {outfit_tracked} of {dvr_seen} "
-            f"DVR-detected teachers."
+            f"DVR-detected staff."
         )
 
     if not observations:
@@ -999,24 +1002,27 @@ async def send_reconciliation_report():
     teacher_detail = recon.get("teacher_detail", [])
     visitor_by_camera = recon.get("visitor_by_camera", {})
 
+    teachers_detected = recon["trueface_identified"] + len(dvr_only_list)
+    total_people = teachers_detected + visitor_count
+
     body = (
         f"════════ SCHOOL HEADCOUNT RECONCILIATION ════════\n\n"
         f"DATE: {today_display}\n"
         f"TIME: {time_display} IST\n\n"
-        f"TOTAL REGISTERED TEACHERS: {recon['total_registered_teachers']}\n"
-        f"TrueFace Marked Present: {recon['trueface_identified']}\n"
-        f"Seen on DVR Cameras: {recon.get('dvr_sighted', 0)}\n\n"
-        f"✓ Fully Verified (Both): {len(fully_verified)}\n"
+        f"════════ OVERALL CAMPUS HEADCOUNT ════════\n"
+        f"Total People Detected: {total_people}\n"
+        f"Gate Entries (IN): {recon['total_gate_in']}\n"
+        f"Gate Exits (OUT): {recon['total_gate_out']}\n\n"
+        f"════════ CATEGORY BREAKDOWN ════════\n"
+        f"Teachers / Staff: {teachers_detected}\n"
+        f"  — TrueFace Recognized: {recon['trueface_identified']}\n"
+        f"  — DVR Cameras Only: {recon.get('dvr_sighted', 0)}\n"
+        f"Visitors / Parents / Vendors: {visitor_count}\n\n"
+        f"════════ TEACHER RECONCILIATION ════════\n"
+        f"✓ Fully Verified (TrueFace + DVR): {len(fully_verified)}\n"
         f"⚠ Entry Only (DVR — Not on TrueFace): {len(dvr_only_list)}\n"
         f"⚠ TrueFace Only (No DVR Sighting): {len(tf_only_list)}\n"
-        f"— Absent (Neither): {len(absent_list)}\n\n"
-    )
-
-    # Category breakdown
-    body += (
-        f"════════ CATEGORY BREAKDOWN ════════\n"
-        f"Teachers: {recon['trueface_identified'] + len(dvr_only_list)}\n"
-        f"Visitors / Unknown: {visitor_count}\n\n"
+        f"— Not Detected: {len(absent_list)}\n\n"
     )
 
     # Verified movements
@@ -1099,10 +1105,9 @@ async def send_reconciliation_report():
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
 
     logger.info(
-        "[GATE] Reconciliation report sent at %s: TrueFace=%d, DVR=%d, Both=%d, Mismatches=%d, Visitors=%d",
-        time_display,
-        recon["trueface_identified"], recon.get("dvr_sighted", 0),
-        both, dvr_only, visitor_count,
+        "[GATE] Reconciliation report sent at %s: People=%d, Teachers=%d, Visitors=%d, Verified=%d",
+        time_display, total_people, teachers_detected, visitor_count,
+        len(fully_verified),
     )
 
 
