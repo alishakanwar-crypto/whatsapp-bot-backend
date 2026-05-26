@@ -35,6 +35,113 @@ async def _get_db():
     return await get_db()
 
 
+async def _get_historical_mood(today: str, days: int = 7) -> dict[str, dict]:
+    """Fetch mood summary for each person over the last N days (excluding today).
+
+    Returns dict: person_name -> {usual_mood, avg_intensity, avg_days, deviation}
+    """
+    from datetime import datetime, timedelta
+    try:
+        today_dt = datetime.strptime(today, "%Y-%m-%d")
+    except ValueError:
+        return {}
+    start_date = (today_dt - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    db = await _get_db()
+    try:
+        cur = await db.execute(
+            "SELECT person, dominant_emotion, intensity, date "
+            "FROM chairman_mood_log "
+            "WHERE date >= ? AND date < ? ORDER BY person, date",
+            (start_date, today),
+        )
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    if not rows:
+        return {}
+
+    by_person: dict[str, list] = {}
+    for r in rows:
+        by_person.setdefault(r[0], []).append({
+            "emotion": r[1], "intensity": r[2], "date": r[3],
+        })
+
+    result: dict[str, dict] = {}
+    for pname, obs in by_person.items():
+        emotions = [o["emotion"] for o in obs]
+        intensities = [o["intensity"] for o in obs]
+        unique_dates = len(set(o["date"] for o in obs))
+        usual_mood = Counter(emotions).most_common(1)[0][0]
+        avg_intensity = round(sum(intensities) / len(intensities), 1)
+
+        result[pname] = {
+            "usual_mood": usual_mood,
+            "avg_intensity": avg_intensity,
+            "avg_days": unique_dates,
+            "deviation": None,
+        }
+
+    return result
+
+
+def _generate_mood_alerts(person_reports: dict,
+                          historical: dict) -> list[dict]:
+    """Generate mood alerts based on current report + historical comparison."""
+    alerts: list[dict] = []
+
+    for pname, pr in person_reports.items():
+        mood = pr.get("dominant_mood", "neutral")
+        intensity = pr.get("avg_intensity", 0)
+        neg_emotions = {"angry", "sad", "fear", "disgust"}
+
+        # High priority: repeated negative emotions
+        neg_pct = sum(
+            pr.get("emotion_distribution", {}).get(e, 0) for e in neg_emotions
+        )
+        if neg_pct > 60:
+            alerts.append({
+                "severity": "HIGH",
+                "person": pname,
+                "detail": f"Predominantly negative mood today ({neg_pct:.0f}% negative emotions). "
+                          f"Dominant: {mood}, Intensity: {intensity}%",
+            })
+        elif neg_pct > 30:
+            alerts.append({
+                "severity": "MEDIUM",
+                "person": pname,
+                "detail": f"Elevated negative mood ({neg_pct:.0f}% negative). "
+                          f"Dominant: {mood}",
+            })
+
+        # Historical deviation
+        hist = historical.get(pname, {})
+        if hist.get("avg_days", 0) >= 3:
+            usual = hist.get("usual_mood", "neutral")
+            if usual in {"happy", "neutral"} and mood in neg_emotions:
+                hist["deviation"] = (
+                    f"Usually {usual}, but today showing {mood}. "
+                    f"May indicate stress or mood change."
+                )
+                alerts.append({
+                    "severity": "MEDIUM",
+                    "person": pname,
+                    "detail": hist["deviation"],
+                })
+            usual_intensity = hist.get("avg_intensity", 0)
+            if intensity > 0 and usual_intensity > 0:
+                if intensity > usual_intensity * 1.5:
+                    alerts.append({
+                        "severity": "LOW",
+                        "person": pname,
+                        "detail": f"Expression intensity ({intensity}%) significantly "
+                                  f"higher than usual ({usual_intensity}%).",
+                    })
+
+    return alerts
+
+
 # ---------------------------------------------------------------------------
 # POST /api/chairman/mood — receive mood observation from campus agent
 # ---------------------------------------------------------------------------
@@ -55,18 +162,25 @@ async def receive_mood(request: Request):
     face_distance = data.get("face_distance", 0.0)
     face_confidence = data.get("face_confidence", 0.0)
     face_crop = data.get("face_crop", "")
+    mood_category = data.get("mood_category", "Neutral")
+    mood_label = data.get("mood_label", "Normal")
+    frame_count = data.get("frame_count", 1)
+    agreement = data.get("agreement", 0.0)
+    negative_ratio = data.get("negative_ratio", 0.0)
 
     db = await _get_db()
     try:
         await db.execute(
             "INSERT INTO chairman_mood_log "
             "(person, date, timestamp, camera, dominant_emotion, emotions_json, "
-            "temperament, intensity, face_distance, face_confidence, face_crop) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "temperament, intensity, face_distance, face_confidence, face_crop, "
+            "mood_category, mood_label, frame_count, agreement, negative_ratio) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 person, today, timestamp, camera, dominant_emotion,
                 json.dumps(emotions), temperament, intensity,
                 face_distance, face_confidence, face_crop,
+                mood_category, mood_label, frame_count, agreement, negative_ratio,
             ),
         )
         await db.commit()
@@ -465,6 +579,9 @@ async def send_daily_mood_report():
         f"Persons tracked: {', '.join(persons_tracked)}\n\n"
     )
 
+    # Fetch historical data for comparison (last 7 days)
+    historical_summary = await _get_historical_mood(today, 7)
+
     for pname, pr in person_reports.items():
         hourly = pr.get("hourly_summary", {})
         # Highlight current hour
@@ -487,6 +604,26 @@ async def send_daily_mood_report():
             f"  Avg Intensity: {pr['avg_intensity']}%\n"
             f"  Best Time to Approach: {pr.get('best_time_to_approach', 'N/A')}\n\n"
         )
+
+        # Historical comparison
+        hist = historical_summary.get(pname, {})
+        if hist.get("avg_days", 0) > 0:
+            body += (
+                f"Historical Comparison (last {hist['avg_days']} days):\n"
+                f"  Usual Mood: {hist.get('usual_mood', 'N/A')}\n"
+                f"  Usual Intensity: {hist.get('avg_intensity', 0)}%\n"
+            )
+            if hist.get("deviation"):
+                body += f"  ⚠ DEVIATION: {hist['deviation']}\n"
+            body += "\n"
+
+    # Alerts
+    alerts = _generate_mood_alerts(person_reports, historical_summary)
+    if alerts:
+        body += "════════ MOOD ALERTS ════════\n"
+        for a in alerts:
+            body += f"  [{a['severity']}] {a['person']}: {a['detail']}\n"
+        body += "\n"
 
     body += "— PPIS Mood & Temperament Monitor"
 

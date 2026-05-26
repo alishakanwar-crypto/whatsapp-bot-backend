@@ -524,6 +524,22 @@ async def init_db():
             except Exception:
                 pass  # column already exists
 
+        # Enhanced mood fields
+        mood_new_cols = [
+            ("mood_category", "TEXT DEFAULT 'Neutral'"),
+            ("mood_label", "TEXT DEFAULT 'Normal'"),
+            ("frame_count", "INTEGER DEFAULT 1"),
+            ("agreement", "REAL DEFAULT 0.0"),
+            ("negative_ratio", "REAL DEFAULT 0.0"),
+        ]
+        for col_name, col_def in mood_new_cols:
+            try:
+                await db.execute(
+                    f"ALTER TABLE chairman_mood_log ADD COLUMN {col_name} {col_def}"
+                )
+            except Exception:
+                pass  # column already exists
+
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()
 
