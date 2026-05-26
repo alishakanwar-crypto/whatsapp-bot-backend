@@ -687,14 +687,14 @@ async def run_homework_delivery(period: int) -> dict:
         if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
             continue
 
-        # One-time cutoff: skip grades 9-12 after 12:30 PM IST on 26-May-2026
-        if (
-            now_ist.date() == datetime(2026, 5, 26, tzinfo=IST).date()
-            and (now_ist.hour > 12 or (now_ist.hour == 12 and now_ist.minute >= 30))
-        ):
+        # Temporary blackout: skip grades 9-12 from 26-May-2026 12:30 PM
+        # through 30-Jun-2026 (inclusive).
+        _blackout_start = datetime(2026, 5, 26, 12, 30, tzinfo=IST)
+        _blackout_end = datetime(2026, 7, 1, 0, 0, tzinfo=IST)  # midnight Jul 1
+        if _blackout_start <= now_ist < _blackout_end:
             logger.info(
                 f"Skipping {grade} — CW/HW disabled for grades 9-12 "
-                f"after 12:30 PM IST on 26-May-2026"
+                f"until 30-Jun-2026"
             )
             continue
 
