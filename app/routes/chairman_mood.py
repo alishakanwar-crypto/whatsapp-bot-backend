@@ -78,6 +78,11 @@ async def receive_mood(request: Request):
         person, timestamp, camera, dominant_emotion, temperament, intensity,
     )
 
+    # Immediately send a mood report when Chairman is first detected
+    if person.lower() == "chairman":
+        import asyncio
+        asyncio.ensure_future(_send_chairman_instant_report())
+
     return {"status": "ok", "person": person, "emotion": dominant_emotion, "temperament": temperament}
 
 
@@ -328,6 +333,86 @@ def _generate_mood_excel(date: str, person_reports: dict) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# Track whether we already sent an instant report today to avoid spam
+_chairman_instant_sent: dict[str, bool] = {}
+
+
+async def _send_chairman_instant_report():
+    """Send an immediate mood report when Chairman is first detected today."""
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+
+    if _chairman_instant_sent.get(today):
+        return
+    _chairman_instant_sent[today] = True
+    # Clean old dates
+    for d in list(_chairman_instant_sent):
+        if d != today:
+            del _chairman_instant_sent[d]
+
+    # Small delay to let the observation be fully committed to DB
+    import asyncio
+    await asyncio.sleep(2)
+
+    today_display = now.strftime("%d-%m-%Y")
+    time_display = now.strftime("%I:%M %p")
+
+    db = await _get_db()
+    try:
+        cur = await db.execute(
+            "SELECT person, timestamp, camera, dominant_emotion, temperament, intensity "
+            "FROM chairman_mood_log WHERE date = ? AND person = 'Chairman' ORDER BY timestamp",
+            (today,),
+        )
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    if not rows:
+        return
+
+    observations = [
+        {"person": r[0], "timestamp": r[1], "camera": r[2],
+         "emotion": r[3], "temperament": r[4], "intensity": r[5]}
+        for r in rows
+    ]
+
+    latest = observations[-1]
+    body = (
+        f"⚡ CHAIRMAN DETECTED — Instant Mood Report\n"
+        f"{today_display} at {time_display} IST\n\n"
+        f"Chairman Rahul Gupta has been detected!\n\n"
+        f"Latest Observation:\n"
+        f"  Camera: {latest['camera']}\n"
+        f"  Time: {latest['timestamp']}\n"
+        f"  Mood: {latest['emotion']}\n"
+        f"  Temperament: {latest['temperament']}\n"
+        f"  Intensity: {latest['intensity']}%\n\n"
+    )
+
+    if len(observations) > 1:
+        body += f"Total observations today: {len(observations)}\n"
+        emotions = [o["emotion"] for o in observations]
+        dominant = Counter(emotions).most_common(1)[0][0]
+        body += f"Dominant mood today: {dominant}\n\n"
+
+    body += "Full report will follow in the next hourly mood report.\n\n"
+    body += "— PPIS Mood & Temperament Monitor"
+
+    from app.services.email_service import send_email_async
+    recipients = [r.strip() for r in REPORT_EMAIL.split(",") if r.strip()]
+    for email in recipients:
+        ok = await send_email_async(
+            email,
+            f"⚡ Chairman Detected — {today_display} {time_display} IST",
+            body,
+            "PP International School",
+        )
+        logger.info("[MOOD] Chairman instant report → %s: %s", email, "OK" if ok else "FAILED")
+
+    logger.info("[MOOD] Chairman instant mood report sent at %s", time_display)
 
 
 async def send_daily_mood_report():
