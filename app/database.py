@@ -405,6 +405,9 @@ async def init_db():
                 name TEXT NOT NULL,
                 camera TEXT NOT NULL,
                 confidence REAL DEFAULT 0.0,
+                outfit_color TEXT DEFAULT '',
+                outfit_description TEXT DEFAULT '',
+                outfit_colors_json TEXT DEFAULT '[]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -508,6 +511,18 @@ async def init_db():
             )
         except Exception:
             pass  # column already exists
+
+        for col_name, col_def in [
+            ("outfit_color", "TEXT DEFAULT ''"),
+            ("outfit_description", "TEXT DEFAULT ''"),
+            ("outfit_colors_json", "TEXT DEFAULT '[]'"),
+        ]:
+            try:
+                await db.execute(
+                    f"ALTER TABLE teacher_dvr_sightings ADD COLUMN {col_name} {col_def}"
+                )
+            except Exception:
+                pass  # column already exists
 
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -140,11 +141,18 @@ async def _store_teacher_sightings(db, sightings: list[dict]) -> int:
         if not date_part:
             date_part = datetime.now(IST).strftime("%Y-%m-%d")
 
+        outfit_color = s.get("outfit_color", "")
+        outfit_desc = s.get("outfit_description", "")
+        outfit_colors = json.dumps(s.get("outfit_colors", []))
+
         await db.execute(
-            "INSERT INTO teacher_dvr_sightings (date, timestamp, person_id, name, camera, confidence) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO teacher_dvr_sightings "
+            "(date, timestamp, person_id, name, camera, confidence, "
+            "outfit_color, outfit_description, outfit_colors_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (date_part, ts, s.get("person_id", ""), s.get("name", ""),
-             s.get("camera", ""), s.get("confidence", 0.0)),
+             s.get("camera", ""), s.get("confidence", 0.0),
+             outfit_color, outfit_desc, outfit_colors),
         )
         count += 1
     await db.commit()
@@ -154,15 +162,25 @@ async def _store_teacher_sightings(db, sightings: list[dict]) -> int:
 async def _get_teacher_sightings(db, date: str) -> list[dict]:
     """Get all DVR teacher sightings for a date."""
     cur = await db.execute(
-        "SELECT person_id, name, camera, timestamp, confidence "
+        "SELECT person_id, name, camera, timestamp, confidence, "
+        "outfit_color, outfit_description, outfit_colors_json "
         "FROM teacher_dvr_sightings WHERE date = ? ORDER BY name, timestamp",
         (date,),
     )
-    return [
-        {"person_id": r[0], "name": r[1], "camera": r[2],
-         "timestamp": r[3], "confidence": r[4]}
-        for r in await cur.fetchall()
-    ]
+    results = []
+    for r in await cur.fetchall():
+        try:
+            outfit_colors = json.loads(r[7]) if r[7] else []
+        except (json.JSONDecodeError, TypeError):
+            outfit_colors = []
+        results.append({
+            "person_id": r[0], "name": r[1], "camera": r[2],
+            "timestamp": r[3], "confidence": r[4],
+            "outfit_color": r[5] or "",
+            "outfit_description": r[6] or "",
+            "outfit_colors": outfit_colors,
+        })
+    return results
 
 
 async def _store_visitor_sightings(db, visitors: list[dict]) -> int:
@@ -234,10 +252,19 @@ async def _reconcile(db, date: str) -> dict:
     # Build DVR sightings grouped by person
     dvr_by_person: dict[str, list[dict]] = {}
     dvr_names: dict[str, str] = {}
+    dvr_outfits: dict[str, list[dict]] = {}
     for s in dvr_sightings:
         key = s["name"].upper().strip()
         dvr_by_person.setdefault(key, []).append(s)
         dvr_names[key] = s["name"]
+        if s.get("outfit_color") and s["outfit_color"] != "unknown":
+            dvr_outfits.setdefault(key, []).append({
+                "color": s["outfit_color"],
+                "description": s.get("outfit_description", ""),
+                "colors": s.get("outfit_colors", []),
+                "camera": s.get("camera", ""),
+                "timestamp": s.get("timestamp", ""),
+            })
 
     # Collect all unique teacher names from all sources
     all_names: set[str] = set()
@@ -257,6 +284,7 @@ async def _reconcile(db, date: str) -> dict:
         # DVR sighting summary
         dvr_cameras = []
         dvr_times = []
+        dvr_sighting_details = []
         for s in dvr_list:
             cam = s["camera"]
             ts = s["timestamp"]
@@ -264,8 +292,24 @@ async def _reconcile(db, date: str) -> dict:
             if cam not in dvr_cameras:
                 dvr_cameras.append(cam)
             dvr_times.append(time_part)
+            dvr_sighting_details.append({
+                "camera": cam,
+                "time": time_part,
+                "confidence": s.get("confidence", 0),
+                "outfit_color": s.get("outfit_color", ""),
+                "outfit_description": s.get("outfit_description", ""),
+                "outfit_colors": s.get("outfit_colors", []),
+            })
 
         display_name = dvr_names.get(name_upper, tf["name"] if tf else name_upper.title())
+
+        # Determine dominant outfit from all sightings
+        outfit_observations = dvr_outfits.get(name_upper, [])
+        if outfit_observations:
+            latest_outfit = outfit_observations[-1]
+            outfit_summary = latest_outfit.get("description", "unknown")
+        else:
+            outfit_summary = "—"
 
         teacher_detail.append({
             "name": display_name,
@@ -279,6 +323,9 @@ async def _reconcile(db, date: str) -> dict:
             "dvr_times": dvr_times,
             "dvr_first_seen": dvr_times[0] if dvr_times else None,
             "dvr_last_seen": dvr_times[-1] if dvr_times else None,
+            "dvr_sighting_details": dvr_sighting_details,
+            "outfit_summary": outfit_summary,
+            "outfit_observations": outfit_observations,
             "status": _reconciliation_status(tf is not None, len(dvr_list) > 0),
         })
 
@@ -453,8 +500,8 @@ async def get_reconciliation(date: str):
 # ============================================================
 
 def _generate_reconciliation_excel(recon: dict) -> bytes:
-    """Generate an Excel reconciliation report with teacher-by-teacher
-    detail and side-by-side comparison sheets."""
+    """Generate a detailed Excel reconciliation report with teacher outfit
+    tracking, complete sighting timeline, and visitor data."""
     wb = Workbook()
 
     header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -463,6 +510,8 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     red_fill = PatternFill("solid", fgColor="FFC7CE")
     yellow_fill = PatternFill("solid", fgColor="FFEB9C")
     gray_fill = PatternFill("solid", fgColor="D9D9D9")
+    light_blue_fill = PatternFill("solid", fgColor="D9E2F3")
+    orange_fill = PatternFill("solid", fgColor="FFA500")
     border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin"),
@@ -471,6 +520,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     date_str = recon["date"]
     side_by_side = recon.get("side_by_side", {})
     teacher_detail = recon.get("teacher_detail", [])
+    visitor_count = recon.get("visitor_count", 0)
 
     # --- Sheet 1: Summary ---
     ws = wb.active
@@ -479,8 +529,6 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ws.merge_cells("A1:D1")
     ws["A1"] = f"PP International School — Head Count Reconciliation — {date_str}"
     ws["A1"].font = Font(bold=True, size=14)
-
-    visitor_count = recon.get("visitor_count", 0)
 
     summary_data = [
         ("Total Registered Teachers", recon["total_registered_teachers"]),
@@ -500,6 +548,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         "TrueFace Only": yellow_fill,
         "DVR Only — Not Marked": red_fill,
         "Absent (Neither)": gray_fill,
+        "Visitors Detected": orange_fill,
     }
 
     for i, (label, value) in enumerate(summary_data, start=3):
@@ -516,21 +565,22 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ws.column_dimensions["A"].width = 35
     ws.column_dimensions["B"].width = 15
 
-    # --- Sheet 2: Teacher-by-Teacher Detail ---
+    # --- Sheet 2: Teacher Detail (Comprehensive) ---
     ws2 = wb.create_sheet("Teacher Detail")
 
     headers2 = [
-        "#", "Teacher Name", "Status",
+        "#", "Teacher Name", "Status", "Outfit / Clothing",
         "TrueFace Arrival", "TrueFace Departure",
-        "DVR Cameras Seen", "DVR First Seen", "DVR Last Seen",
-        "DVR Sighting Count",
+        "DVR First Seen", "DVR Last Seen",
+        "DVR Cameras Seen", "DVR Sighting Count",
+        "Outfit Colors (Detail)",
     ]
     for col, h in enumerate(headers2, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.font = header_font
         cell.fill = header_fill
         cell.border = border
-        cell.alignment = Alignment(horizontal="center")
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
     for i, t in enumerate(teacher_detail, start=2):
         ws2.cell(row=i, column=1, value=i - 1).border = border
@@ -547,23 +597,91 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         else:
             status_cell.fill = gray_fill
 
-        ws2.cell(row=i, column=4, value=t.get("trueface_arrival") or "—").border = border
-        ws2.cell(row=i, column=5, value=t.get("trueface_departure") or "—").border = border
-        ws2.cell(row=i, column=6, value=", ".join(t.get("dvr_cameras", [])) or "—").border = border
+        # Outfit summary
+        outfit_cell = ws2.cell(row=i, column=4, value=t.get("outfit_summary", "—"))
+        outfit_cell.border = border
+        outfit_cell.alignment = Alignment(wrap_text=True)
+
+        ws2.cell(row=i, column=5, value=t.get("trueface_arrival") or "—").border = border
+        ws2.cell(row=i, column=6, value=t.get("trueface_departure") or "—").border = border
         ws2.cell(row=i, column=7, value=t.get("dvr_first_seen") or "—").border = border
         ws2.cell(row=i, column=8, value=t.get("dvr_last_seen") or "—").border = border
-        ws2.cell(row=i, column=9, value=t.get("dvr_sighting_count", 0)).border = border
+        ws2.cell(row=i, column=9, value=", ".join(t.get("dvr_cameras", [])) or "—").border = border
+        ws2.cell(row=i, column=10, value=t.get("dvr_sighting_count", 0)).border = border
 
-    for col_letter in ["A", "B", "C", "D", "E", "F", "G", "H", "I"]:
-        ws2.column_dimensions[col_letter].width = 22
+        # Detailed outfit color breakdown
+        outfit_obs = t.get("outfit_observations", [])
+        if outfit_obs:
+            color_parts = []
+            for obs in outfit_obs:
+                colors_list = obs.get("colors", [])
+                if colors_list:
+                    parts = [f"{c['color']} ({c['percentage']}%)" for c in colors_list]
+                    color_parts.append(" / ".join(parts))
+                elif obs.get("description"):
+                    color_parts.append(obs["description"])
+            outfit_detail = "; ".join(color_parts) if color_parts else "—"
+        else:
+            outfit_detail = "—"
+        detail_cell = ws2.cell(row=i, column=11, value=outfit_detail)
+        detail_cell.border = border
+        detail_cell.alignment = Alignment(wrap_text=True)
 
-    # --- Sheet 3: Side-by-Side Comparison ---
-    ws3 = wb.create_sheet("Side-by-Side")
+    for col_letter, width in [("A", 5), ("B", 25), ("C", 20), ("D", 22),
+                               ("E", 16), ("F", 16), ("G", 14), ("H", 14),
+                               ("I", 35), ("J", 12), ("K", 40)]:
+        ws2.column_dimensions[col_letter].width = width
+
+    # --- Sheet 3: Teacher Sighting Timeline (every sighting with outfit) ---
+    ws3 = wb.create_sheet("Sighting Timeline")
+
+    ws3.merge_cells("A1:G1")
+    ws3["A1"] = f"DVR Camera Teacher Sighting Timeline — {date_str}"
+    ws3["A1"].font = Font(bold=True, size=14)
+
+    timeline_headers = ["#", "Teacher Name", "Time", "Camera Location",
+                        "Confidence", "Outfit Color", "Outfit Detail"]
+    for col, h in enumerate(timeline_headers, 1):
+        cell = ws3.cell(row=3, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = border
+        cell.alignment = Alignment(horizontal="center")
+
+    row = 4
+    idx = 0
+    for t in teacher_detail:
+        for det in t.get("dvr_sighting_details", []):
+            idx += 1
+            ws3.cell(row=row, column=1, value=idx).border = border
+            ws3.cell(row=row, column=2, value=t["name"]).border = border
+            ws3.cell(row=row, column=3, value=det.get("time", "")).border = border
+            ws3.cell(row=row, column=4, value=det.get("camera", "")).border = border
+            conf = det.get("confidence", 0)
+            ws3.cell(row=row, column=5, value=f"{conf:.1%}" if conf else "—").border = border
+            ws3.cell(row=row, column=6, value=det.get("outfit_color", "—")).border = border
+            # Detailed colors
+            colors = det.get("outfit_colors", [])
+            if colors:
+                color_str = ", ".join(f"{c['color']} ({c['percentage']}%)" for c in colors)
+            else:
+                color_str = det.get("outfit_description", "—")
+            detail_cell = ws3.cell(row=row, column=7, value=color_str)
+            detail_cell.border = border
+            detail_cell.alignment = Alignment(wrap_text=True)
+            row += 1
+
+    for col_letter, width in [("A", 5), ("B", 25), ("C", 12), ("D", 40),
+                               ("E", 12), ("F", 15), ("G", 40)]:
+        ws3.column_dimensions[col_letter].width = width
+
+    # --- Sheet 4: Side-by-Side Comparison (with outfit) ---
+    ws4 = wb.create_sheet("Side-by-Side")
 
     def _write_section(ws, start_row: int, title: str, teachers: list,
                        fill: PatternFill) -> int:
         ws.merge_cells(start_row=start_row, start_column=1,
-                       end_row=start_row, end_column=5)
+                       end_row=start_row, end_column=7)
         title_cell = ws.cell(row=start_row, column=1,
                              value=f"{title} ({len(teachers)})")
         title_cell.font = Font(bold=True, size=12, color="FFFFFF")
@@ -571,7 +689,8 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         title_cell.border = border
 
         row = start_row + 1
-        sub_headers = ["#", "Name", "TrueFace Arrival", "DVR First Seen", "DVR Cameras"]
+        sub_headers = ["#", "Name", "TrueFace Arrival", "DVR First Seen",
+                       "DVR Cameras", "Outfit / Clothing", "Sighting Count"]
         for col, h in enumerate(sub_headers, 1):
             cell = ws.cell(row=row, column=col, value=h)
             cell.font = Font(bold=True)
@@ -588,72 +707,76 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
                     value=t.get("dvr_first_seen") or "—").border = border
             ws.cell(row=row, column=5,
                     value=", ".join(t.get("dvr_cameras", [])) or "—").border = border
+            ws.cell(row=row, column=6,
+                    value=t.get("outfit_summary", "—")).border = border
+            ws.cell(row=row, column=7,
+                    value=t.get("dvr_sighting_count", 0)).border = border
 
-        return row + 2  # leave a blank row
+        return row + 2
 
     row = 1
-    ws3.merge_cells("A1:E1")
-    ws3["A1"] = f"Side-by-Side Comparison — {date_str}"
-    ws3["A1"].font = Font(bold=True, size=14)
+    ws4.merge_cells("A1:G1")
+    ws4["A1"] = f"Side-by-Side Comparison — {date_str}"
+    ws4["A1"].font = Font(bold=True, size=14)
     row = 3
 
-    row = _write_section(ws3, row, "✓ Confirmed (Both TrueFace + DVR)",
+    row = _write_section(ws4, row, "✓ Confirmed (Both TrueFace + DVR)",
                          side_by_side.get("both_present", []), green_fill)
-    row = _write_section(ws3, row, "⚠ TrueFace Only (Not seen on DVR)",
+    row = _write_section(ws4, row, "⚠ TrueFace Only (Not seen on DVR)",
                          side_by_side.get("trueface_only", []), yellow_fill)
-    row = _write_section(ws3, row, "✗ DVR Only (Seen but NOT marked present)",
+    row = _write_section(ws4, row, "✗ DVR Only (Seen but NOT marked present)",
                          side_by_side.get("dvr_only", []), red_fill)
-    row = _write_section(ws3, row, "— Absent (Neither system)",
+    row = _write_section(ws4, row, "— Absent (Neither system)",
                          side_by_side.get("neither", []), gray_fill)
 
-    for col_letter in ["A", "B", "C", "D", "E"]:
-        ws3.column_dimensions[col_letter].width = 25
+    for col_letter, width in [("A", 5), ("B", 25), ("C", 16), ("D", 14),
+                               ("E", 35), ("F", 22), ("G", 14)]:
+        ws4.column_dimensions[col_letter].width = width
 
-    # --- Sheet 4: Visitor Sightings ---
+    # --- Sheet 5: Visitor Sightings ---
     visitor_sightings = recon.get("visitor_sightings", [])
     visitor_by_camera = recon.get("visitor_by_camera", {})
-    orange_fill = PatternFill("solid", fgColor="FFA500")
 
-    ws4 = wb.create_sheet("Visitors")
+    ws5 = wb.create_sheet("Visitors")
 
-    ws4.merge_cells("A1:D1")
-    ws4["A1"] = f"Visitor Sightings — {date_str}"
-    ws4["A1"].font = Font(bold=True, size=14)
+    ws5.merge_cells("A1:D1")
+    ws5["A1"] = f"Visitor Head Count — {date_str}"
+    ws5["A1"].font = Font(bold=True, size=14)
 
-    ws4["A3"] = "Total Visitors Detected"
-    ws4["A3"].font = Font(bold=True)
-    ws4["A3"].border = border
-    ws4["A3"].fill = orange_fill
-    ws4["B3"] = visitor_count
-    ws4["B3"].font = Font(bold=True, size=12)
-    ws4["B3"].border = border
-    ws4["B3"].fill = orange_fill
+    ws5["A3"] = "Total Visitors Detected"
+    ws5["A3"].font = Font(bold=True)
+    ws5["A3"].border = border
+    ws5["A3"].fill = orange_fill
+    ws5["B3"] = visitor_count
+    ws5["B3"].font = Font(bold=True, size=12)
+    ws5["B3"].border = border
+    ws5["B3"].fill = orange_fill
 
     # Camera breakdown
     cam_row = 5
-    ws4.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=4)
-    cam_title = ws4.cell(row=cam_row, column=1, value="Visitors by Camera")
+    ws5.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=4)
+    cam_title = ws5.cell(row=cam_row, column=1, value="Visitors by Camera")
     cam_title.font = Font(bold=True, size=12, color="FFFFFF")
     cam_title.fill = header_fill
     cam_title.border = border
 
     cam_row += 1
     for col, h in enumerate(["Camera", "Count"], 1):
-        cell = ws4.cell(row=cam_row, column=col, value=h)
+        cell = ws5.cell(row=cam_row, column=col, value=h)
         cell.font = Font(bold=True)
-        cell.fill = PatternFill("solid", fgColor="D9E2F3")
+        cell.fill = light_blue_fill
         cell.border = border
 
     for cam_name in sorted(visitor_by_camera.keys()):
         cam_visitors = visitor_by_camera[cam_name]
         cam_row += 1
-        ws4.cell(row=cam_row, column=1, value=cam_name).border = border
-        ws4.cell(row=cam_row, column=2, value=len(cam_visitors)).border = border
+        ws5.cell(row=cam_row, column=1, value=cam_name).border = border
+        ws5.cell(row=cam_row, column=2, value=len(cam_visitors)).border = border
 
     # Individual visitor sightings timeline
     cam_row += 2
-    ws4.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=4)
-    timeline_title = ws4.cell(row=cam_row, column=1,
+    ws5.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=4)
+    timeline_title = ws5.cell(row=cam_row, column=1,
                               value=f"Visitor Timeline ({len(visitor_sightings)} sightings)")
     timeline_title.font = Font(bold=True, size=12, color="FFFFFF")
     timeline_title.fill = header_fill
@@ -661,23 +784,23 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     cam_row += 1
     for col, h in enumerate(["#", "Time", "Camera"], 1):
-        cell = ws4.cell(row=cam_row, column=col, value=h)
+        cell = ws5.cell(row=cam_row, column=col, value=h)
         cell.font = Font(bold=True)
-        cell.fill = PatternFill("solid", fgColor="D9E2F3")
+        cell.fill = light_blue_fill
         cell.border = border
 
     for idx, v in enumerate(visitor_sightings, 1):
         cam_row += 1
-        ws4.cell(row=cam_row, column=1, value=idx).border = border
+        ws5.cell(row=cam_row, column=1, value=idx).border = border
         ts = v.get("timestamp", "")
         time_part = ts.split(" ")[1] if " " in ts else ts
-        ws4.cell(row=cam_row, column=2, value=time_part).border = border
-        ws4.cell(row=cam_row, column=3, value=v.get("camera", "")).border = border
+        ws5.cell(row=cam_row, column=2, value=time_part).border = border
+        ws5.cell(row=cam_row, column=3, value=v.get("camera", "")).border = border
 
-    ws4.column_dimensions["A"].width = 25
-    ws4.column_dimensions["B"].width = 15
-    ws4.column_dimensions["C"].width = 40
-    ws4.column_dimensions["D"].width = 15
+    ws5.column_dimensions["A"].width = 25
+    ws5.column_dimensions["B"].width = 15
+    ws5.column_dimensions["C"].width = 40
+    ws5.column_dimensions["D"].width = 15
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -717,29 +840,55 @@ async def send_reconciliation_report():
     dvr_only = len(side_by_side.get("dvr_only", []))
     absent = len(side_by_side.get("neither", []))
 
+    teacher_detail = recon.get("teacher_detail", [])
+
     body = (
         f"Head Count Reconciliation — {today_display} at {time_display} IST\n\n"
-        f"TEACHERS\n"
+        f"═══ TEACHERS ═══\n"
         f"Registered Teachers: {recon['total_registered_teachers']}\n"
         f"TrueFace Marked Present: {recon['trueface_identified']}\n"
         f"Seen on DVR Cameras: {recon.get('dvr_sighted', 0)}\n\n"
-        f"— Confirmed (Both): {both}\n"
-        f"— TrueFace Only: {tf_only}\n"
-        f"— DVR Only (Not Marked): {dvr_only}\n"
-        f"— Absent (Neither): {absent}\n\n"
+        f"  ✓ Confirmed (Both): {both}\n"
+        f"  ⚠ TrueFace Only: {tf_only}\n"
+        f"  ✗ DVR Only (Not Marked): {dvr_only}\n"
+        f"  — Absent (Neither): {absent}\n\n"
     )
 
-    # Add DVR-only teachers to email body (important mismatches)
+    # DVR-only teachers (important mismatches)
     if dvr_only_list := side_by_side.get("dvr_only", []):
-        body += "⚠ Teachers seen on DVR but NOT marked present on TrueFace:\n"
+        body += "⚠ TEACHERS ON DVR BUT NOT MARKED ON TRUEFACE:\n"
         for t in dvr_only_list:
             cams = ", ".join(t.get("dvr_cameras", []))
-            body += f"  • {t['name']} — seen at {t.get('dvr_first_seen', '?')} on {cams}\n"
+            outfit = t.get("outfit_summary", "—")
+            body += (f"  • {t['name']} — seen at {t.get('dvr_first_seen', '?')} "
+                     f"on {cams} — wearing: {outfit}\n")
+        body += "\n"
+
+    # Confirmed teachers with outfit details
+    if both_list := side_by_side.get("both_present", []):
+        body += "✓ CONFIRMED PRESENT (Both TrueFace + DVR):\n"
+        for t in both_list:
+            cams = ", ".join(t.get("dvr_cameras", []))
+            outfit = t.get("outfit_summary", "—")
+            body += (f"  • {t['name']} — arrived: {t.get('trueface_arrival', '?')}, "
+                     f"DVR: {t.get('dvr_first_seen', '?')}, "
+                     f"wearing: {outfit}\n")
+        body += "\n"
+
+    # Teachers seen on DVR with outfits
+    dvr_seen = [t for t in teacher_detail if t["dvr_seen"]]
+    if dvr_seen:
+        body += "TEACHER OUTFIT TRACKING (DVR Camera Observations):\n"
+        for t in dvr_seen:
+            outfit = t.get("outfit_summary", "—")
+            cams = ", ".join(t.get("dvr_cameras", []))
+            body += (f"  • {t['name']} — {outfit} "
+                     f"({t.get('dvr_sighting_count', 0)} sightings on {cams})\n")
         body += "\n"
 
     # Visitor section
     body += (
-        f"VISITORS\n"
+        f"═══ VISITORS ═══\n"
         f"Total Visitors Detected: {visitor_count}\n"
     )
     visitor_by_camera = recon.get("visitor_by_camera", {})
@@ -752,7 +901,11 @@ async def send_reconciliation_report():
         body += "No visitors detected so far.\n\n"
 
     body += (
-        f"Please find the detailed reconciliation report attached.\n\n"
+        f"See attached Excel for full detailed report including:\n"
+        f"  • Teacher-by-teacher detail with outfit/clothing colors\n"
+        f"  • Complete DVR sighting timeline with camera locations\n"
+        f"  • Side-by-side TrueFace vs DVR comparison\n"
+        f"  • Visitor head count with timestamps\n\n"
         f"— PPIS Head Count Reconciliation System"
     )
 
