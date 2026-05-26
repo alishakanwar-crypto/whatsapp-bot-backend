@@ -9,7 +9,7 @@ After each period ends, the system:
   4. Sends BOTH the image + text to parents via WhatsApp template
   5. If no new content → silently skips (no message sent)
 
-Bell Timings (current timetable):
+Bell Timings (regular timetable — until 30 Jun 2026):
   Period 0: 08:00 – 08:10  → Assembly (10 min)
   Period 1: 08:10 – 08:45  → check at 08:48
   SHORT BREAK: 08:45 – 09:00
@@ -19,6 +19,21 @@ Bell Timings (current timetable):
   Period 5: 10:30 – 11:00  → check at 11:03
   Period 6: 11:00 – 11:30  → check at 11:33
   Lunch & Dispersal: 11:30 – 12:00
+
+Summer Bell Timings (from 1 Jul 2026):
+  Assembly: 07:30 – 07:40
+  Zero:     07:40 – 08:10  → check at 08:13
+  First:    08:10 – 08:50  → check at 08:53
+  SHORT BREAK: 08:50 – 09:00
+  Second:   09:00 – 09:35  → check at 09:38
+  Third:    09:35 – 10:10  → check at 10:13
+  Fourth:   10:10 – 10:45  → check at 10:48
+  Fifth:    10:45 – 11:20  → check at 11:23
+  LUNCH BREAK: 11:20 – 11:45
+  Sixth:    11:45 – 12:20  → check at 12:23
+  Seventh:  12:20 – 12:55  → check at 12:58
+  Eighth:   12:55 – 01:30  → check at 01:33
+  Dispersal: 01:30 – 01:40
 
 Google API auth uses a refresh token stored in GOOGLE_DOCS_REFRESH_TOKEN env var
 along with GOOGLE_DOCS_CLIENT_ID and GOOGLE_DOCS_CLIENT_SECRET.
@@ -39,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Period labels for parent messages
+# Period labels for parent messages (regular timetable)
 PERIOD_LABELS = {
     0: "Assembly (08:00–08:10)",
     1: "Period 1 (08:10–08:45)",
@@ -50,8 +65,33 @@ PERIOD_LABELS = {
     6: "Period 6 (11:00–11:30)",
 }
 
+# Summer timetable period labels (from 1 Jul 2026)
+_SUMMER_PERIOD_LABELS = {
+    0: "Zero Period (07:40–08:10)",
+    1: "First Period (08:10–08:50)",
+    2: "Second Period (09:00–09:35)",
+    3: "Third Period (09:35–10:10)",
+    4: "Fourth Period (10:10–10:45)",
+    5: "Fifth Period (10:45–11:20)",
+    6: "Sixth Period (11:45–12:20)",
+    7: "Seventh Period (12:20–12:55)",
+    8: "Eighth Period (12:55–01:30)",
+}
+
+# Date from which summer timetable and all-grade delivery activates
+_SUMMER_START = datetime(2026, 7, 1, 0, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+
+
+def _get_period_label(period: int) -> str:
+    """Return the period label based on current date."""
+    now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+    if now_ist >= _SUMMER_START:
+        return _SUMMER_PERIOD_LABELS.get(period, f"Period {period}")
+    return PERIOD_LABELS.get(period, f"Period {period}")
+
 # Grades eligible for automated homework delivery.
-# Phase 1 rollout: only Grade 9-12. Other grades will be added later.
+# Phase 1 (until 30 Jun 2026): only Grade 9-12.
+# Phase 2 (from 1 Jul 2026): all grades (Popsicles through Grade 12).
 _HOMEWORK_ELIGIBLE_GRADES = re.compile(r"Grade\s*(9|10|11|12)", re.IGNORECASE)
 
 # Temporary review recipients: phone numbers that also receive CW/HW
@@ -646,14 +686,14 @@ async def run_homework_delivery(period: int) -> dict:
     """Check all homework docs for new content and deliver to parents.
 
     Args:
-        period: The period number (0-6) that just ended.
+        period: The period number (0-8) that just ended.
 
     Returns:
         Summary dict with results.
     """
     now_ist = datetime.now(IST)
     date_str = now_ist.strftime("%d/%m/%Y")
-    period_label = PERIOD_LABELS.get(period, f"Period {period}")
+    period_label = _get_period_label(period)
 
     # Skip weekends — no school, no homework delivery
     if now_ist.weekday() in (5, 6):  # Saturday=5, Sunday=6
@@ -683,20 +723,21 @@ async def run_homework_delivery(period: int) -> dict:
         grade = doc_info["grade"]
         doc_id = doc_info["doc_id"]
 
-        # Phase 1: only deliver for eligible grades (Grade 9-12)
-        if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
-            continue
-
-        # Temporary blackout: skip grades 9-12 from 27-May-2026
-        # through 30-Jun-2026 (inclusive).
-        _blackout_start = datetime(2026, 5, 27, 0, 0, tzinfo=IST)
-        _blackout_end = datetime(2026, 7, 1, 0, 0, tzinfo=IST)
-        if _blackout_start <= now_ist < _blackout_end:
-            logger.info(
-                f"Skipping {grade} — CW/HW disabled for grades 9-12 "
-                f"until 30-Jun-2026"
-            )
-            continue
+        # Grade eligibility: before July 1 only Grade 9-12;
+        # from July 1 all grades are eligible.
+        if now_ist < _SUMMER_START:
+            if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
+                continue
+            # Temporary blackout: skip grades 9-12 from 27-May-2026
+            # through 30-Jun-2026 (inclusive).
+            _blackout_start = datetime(2026, 5, 27, 0, 0, tzinfo=IST)
+            _blackout_end = datetime(2026, 7, 1, 0, 0, tzinfo=IST)
+            if _blackout_start <= now_ist < _blackout_end:
+                logger.info(
+                    f"Skipping {grade} — CW/HW disabled for grades 9-12 "
+                    f"until 30-Jun-2026"
+                )
+                continue
 
         # Skip entries with no doc_id (not yet created)
         if not doc_id:
@@ -1289,9 +1330,12 @@ async def daily_clear_all_docs() -> dict:
         grade = doc_info["grade"]
         doc_id = doc_info["doc_id"]
 
-        # Phase 1: only clear eligible grades (Grade 9-12)
-        if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
-            continue
+        # Before July 1: only clear eligible grades (Grade 9-12)
+        # From July 1: clear all grades
+        now_ist = datetime.now(IST)
+        if now_ist < _SUMMER_START:
+            if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
+                continue
 
         # Skip entries with no doc_id (not yet created)
         if not doc_id:

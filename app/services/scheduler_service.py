@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 import httpx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -749,50 +749,100 @@ def start_scheduler() -> None:
     # Check homework docs after each period ends.
     # Times are offset by +3 minutes to give teachers time to update.
     # IST → UTC: subtract 5h30m
-    #
-    # Current timetable:
-    #   Period 0: 08:00-08:10  (Assembly, 10 min) — skip, too short
-    #   Period 1: 08:10-08:45  (35 min) → check 08:48 IST = 03:18 UTC
-    #   SHORT BREAK: 08:45-09:00
-    #   Period 2: 09:00-09:30  (30 min) → check 09:33 IST = 04:03 UTC
-    #   Period 3: 09:30-10:00  (30 min) → check 10:03 IST = 04:33 UTC
-    #   Period 4: 10:00-10:30  (30 min) → check 10:33 IST = 05:03 UTC
-    #   Period 5: 10:30-11:00  (30 min) → check 11:03 IST = 05:33 UTC
-    #   Period 6: 11:00-11:30  (30 min) → check 11:33 IST = 06:03 UTC
-    #   Lunch & Dispersal: 11:30-12:00
     from app.services.homework_delivery_service import (
         run_homework_delivery_sync,
         run_daily_clear_sync,
     )
 
-    _hw_schedule = [
-        # (period, hour_utc, minute_utc, description)
-        (1, 3, 18, "Period 1 ends 08:45 IST → check 08:48 IST = 03:18 UTC"),
-        (2, 4, 3,  "Period 2 ends 09:30 IST → check 09:33 IST = 04:03 UTC"),
-        (3, 4, 33, "Period 3 ends 10:00 IST → check 10:03 IST = 04:33 UTC"),
-        (4, 5, 3,  "Period 4 ends 10:30 IST → check 10:33 IST = 05:03 UTC"),
-        (5, 5, 33, "Period 5 ends 11:00 IST → check 11:03 IST = 05:33 UTC"),
-        (6, 6, 3,  "Period 6 ends 11:30 IST → check 11:33 IST = 06:03 UTC"),
+    # Regular timetable (until 30 Jun 2026):
+    #   Period 1: 08:10-08:45  → check 08:48 IST = 03:18 UTC
+    #   Period 2: 09:00-09:30  → check 09:33 IST = 04:03 UTC
+    #   Period 3: 09:30-10:00  → check 10:03 IST = 04:33 UTC
+    #   Period 4: 10:00-10:30  → check 10:33 IST = 05:03 UTC
+    #   Period 5: 10:30-11:00  → check 11:03 IST = 05:33 UTC
+    #   Period 6: 11:00-11:30  → check 11:33 IST = 06:03 UTC
+    _hw_schedule_regular = [
+        (1, 3, 18, "Period 1 ends 08:45 → check 08:48 IST"),
+        (2, 4, 3,  "Period 2 ends 09:30 → check 09:33 IST"),
+        (3, 4, 33, "Period 3 ends 10:00 → check 10:03 IST"),
+        (4, 5, 3,  "Period 4 ends 10:30 → check 10:33 IST"),
+        (5, 5, 33, "Period 5 ends 11:00 → check 11:03 IST"),
+        (6, 6, 3,  "Period 6 ends 11:30 → check 11:33 IST"),
     ]
-    for period, h_utc, m_utc, desc in _hw_schedule:
+    _regular_end = datetime(2026, 6, 30, 23, 59, tzinfo=timezone.utc)
+    for period, h_utc, m_utc, desc in _hw_schedule_regular:
         scheduler.add_job(
             run_homework_delivery_sync,
-            trigger=CronTrigger(hour=h_utc, minute=m_utc, second=0),
+            trigger=CronTrigger(
+                hour=h_utc, minute=m_utc, second=0,
+                end_date=_regular_end,
+            ),
             args=[period],
             id=f"homework_delivery_period_{period}",
             replace_existing=True,
         )
-        logger.info(f"Scheduled homework delivery: {desc}")
+        logger.info(f"Scheduled homework delivery (regular): {desc}")
 
-    # Final safety-net check at 12:35 PM IST (07:05 UTC) to catch late entries
+    # Regular safety-net at 12:35 PM IST (07:05 UTC)
     scheduler.add_job(
         run_homework_delivery_sync,
-        trigger=CronTrigger(hour=7, minute=5, second=0),
+        trigger=CronTrigger(
+            hour=7, minute=5, second=0,
+            end_date=_regular_end,
+        ),
         args=[6],
         id="homework_delivery_final_check",
         replace_existing=True,
     )
-    logger.info("Scheduled homework delivery: Final safety check 12:35 IST = 07:05 UTC")
+    logger.info("Scheduled homework delivery (regular): safety check 12:35 IST")
+
+    # Summer timetable (from 1 Jul 2026):
+    #   Zero:    07:40-08:10  → check 08:13 IST = 02:43 UTC
+    #   First:   08:10-08:50  → check 08:53 IST = 03:23 UTC
+    #   Second:  09:00-09:35  → check 09:38 IST = 04:08 UTC
+    #   Third:   09:35-10:10  → check 10:13 IST = 04:43 UTC
+    #   Fourth:  10:10-10:45  → check 10:48 IST = 05:18 UTC
+    #   Fifth:   10:45-11:20  → check 11:23 IST = 05:53 UTC
+    #   Sixth:   11:45-12:20  → check 12:23 IST = 06:53 UTC
+    #   Seventh: 12:20-12:55  → check 12:58 IST = 07:28 UTC
+    #   Eighth:  12:55-01:30  → check 01:33 IST = 08:03 UTC
+    _hw_schedule_summer = [
+        (0, 2, 43, "Zero ends 08:10 → check 08:13 IST"),
+        (1, 3, 23, "First ends 08:50 → check 08:53 IST"),
+        (2, 4, 8,  "Second ends 09:35 → check 09:38 IST"),
+        (3, 4, 43, "Third ends 10:10 → check 10:13 IST"),
+        (4, 5, 18, "Fourth ends 10:45 → check 10:48 IST"),
+        (5, 5, 53, "Fifth ends 11:20 → check 11:23 IST"),
+        (6, 6, 53, "Sixth ends 12:20 → check 12:23 IST"),
+        (7, 7, 28, "Seventh ends 12:55 → check 12:58 IST"),
+        (8, 8, 3,  "Eighth ends 01:30 → check 01:33 IST"),
+    ]
+    _summer_start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+    for period, h_utc, m_utc, desc in _hw_schedule_summer:
+        scheduler.add_job(
+            run_homework_delivery_sync,
+            trigger=CronTrigger(
+                hour=h_utc, minute=m_utc, second=0,
+                start_date=_summer_start,
+            ),
+            args=[period],
+            id=f"homework_delivery_summer_period_{period}",
+            replace_existing=True,
+        )
+        logger.info(f"Scheduled homework delivery (summer): {desc}")
+
+    # Summer safety-net at 01:38 PM IST (08:08 UTC)
+    scheduler.add_job(
+        run_homework_delivery_sync,
+        trigger=CronTrigger(
+            hour=8, minute=8, second=0,
+            start_date=_summer_start,
+        ),
+        args=[8],
+        id="homework_delivery_summer_final_check",
+        replace_existing=True,
+    )
+    logger.info("Scheduled homework delivery (summer): safety check 01:38 IST")
 
     # --- Daily Doc Clear (3:00 PM IST = 9:30 UTC) ---
     # Clears all 34 homework Google Docs at end of school day,
