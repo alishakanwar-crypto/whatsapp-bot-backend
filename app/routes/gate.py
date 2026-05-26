@@ -1,19 +1,22 @@
 """
 Gate Head Count Reconciliation
 ==============================
-Receives person-entry events and DVR teacher sightings from the campus
-agent, stores them, and generates reconciliation reports comparing:
+Receives person-entry events, DVR teacher sightings, and visitor
+sightings from the campus agent. Generates reconciliation reports
+comparing:
   1. Teacher-by-teacher list: each teacher's DVR sightings + TrueFace status
   2. Side-by-side comparison: DVR sightings vs TrueFace attendance
+  3. Visitor count: unknown faces on gate/reception cameras with timestamps
 
 Endpoints:
     POST /api/gate/entry             — receive gate entry events
     POST /api/gate/teacher-sighting  — receive DVR teacher face sightings
+    POST /api/gate/visitor-sighting  — receive DVR visitor (unknown) sightings
     GET  /api/gate/status            — today's running totals
     GET  /api/gate/reconciliation/{date} — full reconciliation data
 
 Scheduled:
-    4:30 PM IST — EOD reconciliation report emailed + WhatsApp summary
+    Hourly 7 AM – 5 PM IST — reconciliation report emailed
 
 All timestamps use IST (Asia/Kolkata, UTC+05:30).
 """
@@ -162,6 +165,40 @@ async def _get_teacher_sightings(db, date: str) -> list[dict]:
     ]
 
 
+async def _store_visitor_sightings(db, visitors: list[dict]) -> int:
+    """Store DVR visitor (unknown face) sightings in the database."""
+    count = 0
+    for v in visitors:
+        ts = v.get("timestamp", "")
+        date_part = v.get("date", "")
+        if not date_part and " " in ts:
+            date_part = ts.split(" ")[0]
+        if not date_part:
+            date_part = datetime.now(IST).strftime("%Y-%m-%d")
+
+        await db.execute(
+            "INSERT INTO visitor_dvr_sightings (date, timestamp, camera) "
+            "VALUES (?, ?, ?)",
+            (date_part, ts, v.get("camera", "")),
+        )
+        count += 1
+    await db.commit()
+    return count
+
+
+async def _get_visitor_sightings(db, date: str) -> list[dict]:
+    """Get all DVR visitor sightings for a date."""
+    cur = await db.execute(
+        "SELECT id, timestamp, camera FROM visitor_dvr_sightings "
+        "WHERE date = ? ORDER BY timestamp",
+        (date,),
+    )
+    return [
+        {"id": r[0], "timestamp": r[1], "camera": r[2]}
+        for r in await cur.fetchall()
+    ]
+
+
 # ============================================================
 # Reconciliation Logic
 # ============================================================
@@ -169,10 +206,12 @@ async def _get_teacher_sightings(db, date: str) -> list[dict]:
 async def _reconcile(db, date: str) -> dict:
     """Perform head count reconciliation for a given date.
 
-    Compares DVR teacher sightings vs TrueFace attendance records.
+    Compares DVR teacher sightings vs TrueFace attendance records,
+    and includes visitor (unknown face) sightings.
     Returns:
       - teacher_detail: per-teacher list with DVR sightings + TrueFace status
       - side_by_side: DVR sightings column vs TrueFace attendance column
+      - visitor_sightings: list of unknown-face sightings with timestamps/cameras
       - gate summary: entry/exit counts
     """
     gate_in = await _get_gate_entries(db, date, direction="IN")
@@ -181,6 +220,7 @@ async def _reconcile(db, date: str) -> dict:
     all_teachers = await _get_all_teachers(db)
     total_teachers = len(all_teachers)
     dvr_sightings = await _get_teacher_sightings(db, date)
+    visitor_sightings = await _get_visitor_sightings(db, date)
 
     total_in = len(gate_in)
     total_out = len(gate_out)
@@ -273,6 +313,12 @@ async def _reconcile(db, date: str) -> dict:
     )
     await db.commit()
 
+    # Build visitor summary grouped by camera
+    visitor_by_camera: dict[str, list[dict]] = {}
+    for v in visitor_sightings:
+        cam = v.get("camera", "Unknown")
+        visitor_by_camera.setdefault(cam, []).append(v)
+
     return {
         "date": date,
         "total_gate_in": total_in,
@@ -284,6 +330,9 @@ async def _reconcile(db, date: str) -> dict:
         "teacher_detail": teacher_detail,
         "side_by_side": side_by_side,
         "timing_trail": timing_trail,
+        "visitor_count": len(visitor_sightings),
+        "visitor_sightings": visitor_sightings,
+        "visitor_by_camera": visitor_by_camera,
     }
 
 
@@ -341,6 +390,25 @@ async def receive_teacher_sightings(request: Request):
     return {"status": "ok", "stored": count}
 
 
+@router.post("/api/gate/visitor-sighting")
+async def receive_visitor_sightings(request: Request):
+    """Receive DVR visitor (unknown face) sightings from the campus agent.
+
+    Body: [{"camera": "...", "timestamp": "...", "date": "..."}]
+    """
+    body = await request.json()
+    visitors = body if isinstance(body, list) else [body]
+
+    db = await _get_db()
+    try:
+        count = await _store_visitor_sightings(db, visitors)
+    finally:
+        await db.close()
+
+    logger.info("[GATE] Stored %d DVR visitor sighting(s)", count)
+    return {"status": "ok", "stored": count}
+
+
 @router.get("/api/gate/status")
 async def gate_status():
     """Get today's running head count totals."""
@@ -351,6 +419,7 @@ async def gate_status():
         gate_out = await _get_gate_entries(db, today, direction="OUT")
         trueface = await _get_trueface_attendance(db, today)
         dvr_sightings = await _get_teacher_sightings(db, today)
+        visitor_sightings = await _get_visitor_sightings(db, today)
     finally:
         await db.close()
 
@@ -364,6 +433,7 @@ async def gate_status():
         "trueface_identified": len(trueface),
         "dvr_teachers_sighted": dvr_unique,
         "dvr_total_sightings": len(dvr_sightings),
+        "visitors_detected": len(visitor_sightings),
     }
 
 
@@ -410,6 +480,8 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ws["A1"] = f"PP International School — Head Count Reconciliation — {date_str}"
     ws["A1"].font = Font(bold=True, size=14)
 
+    visitor_count = recon.get("visitor_count", 0)
+
     summary_data = [
         ("Total Registered Teachers", recon["total_registered_teachers"]),
         ("TrueFace Marked Present", recon["trueface_identified"]),
@@ -420,6 +492,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         ("Absent (Neither)", len(side_by_side.get("neither", []))),
         ("Gate Entries (IN)", recon["total_gate_in"]),
         ("Gate Exits (OUT)", recon["total_gate_out"]),
+        ("Visitors Detected", visitor_count),
     ]
 
     status_fills = {
@@ -536,6 +609,76 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     for col_letter in ["A", "B", "C", "D", "E"]:
         ws3.column_dimensions[col_letter].width = 25
 
+    # --- Sheet 4: Visitor Sightings ---
+    visitor_sightings = recon.get("visitor_sightings", [])
+    visitor_by_camera = recon.get("visitor_by_camera", {})
+    orange_fill = PatternFill("solid", fgColor="FFA500")
+
+    ws4 = wb.create_sheet("Visitors")
+
+    ws4.merge_cells("A1:D1")
+    ws4["A1"] = f"Visitor Sightings — {date_str}"
+    ws4["A1"].font = Font(bold=True, size=14)
+
+    ws4["A3"] = "Total Visitors Detected"
+    ws4["A3"].font = Font(bold=True)
+    ws4["A3"].border = border
+    ws4["A3"].fill = orange_fill
+    ws4["B3"] = visitor_count
+    ws4["B3"].font = Font(bold=True, size=12)
+    ws4["B3"].border = border
+    ws4["B3"].fill = orange_fill
+
+    # Camera breakdown
+    cam_row = 5
+    ws4.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=4)
+    cam_title = ws4.cell(row=cam_row, column=1, value="Visitors by Camera")
+    cam_title.font = Font(bold=True, size=12, color="FFFFFF")
+    cam_title.fill = header_fill
+    cam_title.border = border
+
+    cam_row += 1
+    for col, h in enumerate(["Camera", "Count"], 1):
+        cell = ws4.cell(row=cam_row, column=col, value=h)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="D9E2F3")
+        cell.border = border
+
+    for cam_name in sorted(visitor_by_camera.keys()):
+        cam_visitors = visitor_by_camera[cam_name]
+        cam_row += 1
+        ws4.cell(row=cam_row, column=1, value=cam_name).border = border
+        ws4.cell(row=cam_row, column=2, value=len(cam_visitors)).border = border
+
+    # Individual visitor sightings timeline
+    cam_row += 2
+    ws4.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=4)
+    timeline_title = ws4.cell(row=cam_row, column=1,
+                              value=f"Visitor Timeline ({len(visitor_sightings)} sightings)")
+    timeline_title.font = Font(bold=True, size=12, color="FFFFFF")
+    timeline_title.fill = header_fill
+    timeline_title.border = border
+
+    cam_row += 1
+    for col, h in enumerate(["#", "Time", "Camera"], 1):
+        cell = ws4.cell(row=cam_row, column=col, value=h)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="D9E2F3")
+        cell.border = border
+
+    for idx, v in enumerate(visitor_sightings, 1):
+        cam_row += 1
+        ws4.cell(row=cam_row, column=1, value=idx).border = border
+        ts = v.get("timestamp", "")
+        time_part = ts.split(" ")[1] if " " in ts else ts
+        ws4.cell(row=cam_row, column=2, value=time_part).border = border
+        ws4.cell(row=cam_row, column=3, value=v.get("camera", "")).border = border
+
+    ws4.column_dimensions["A"].width = 25
+    ws4.column_dimensions["B"].width = 15
+    ws4.column_dimensions["C"].width = 40
+    ws4.column_dimensions["D"].width = 15
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -559,8 +702,9 @@ async def send_reconciliation_report():
         await db.close()
 
     side_by_side = recon.get("side_by_side", {})
-    if recon["trueface_identified"] == 0 and recon.get("dvr_sighted", 0) == 0:
-        logger.info("[GATE] No TrueFace or DVR records for %s — skipping report", today)
+    visitor_count = recon.get("visitor_count", 0)
+    if recon["trueface_identified"] == 0 and recon.get("dvr_sighted", 0) == 0 and visitor_count == 0:
+        logger.info("[GATE] No TrueFace, DVR, or visitor records for %s — skipping report", today)
         return
 
     # Generate Excel
@@ -575,6 +719,7 @@ async def send_reconciliation_report():
 
     body = (
         f"Head Count Reconciliation — {today_display} at {time_display} IST\n\n"
+        f"TEACHERS\n"
         f"Registered Teachers: {recon['total_registered_teachers']}\n"
         f"TrueFace Marked Present: {recon['trueface_identified']}\n"
         f"Seen on DVR Cameras: {recon.get('dvr_sighted', 0)}\n\n"
@@ -591,6 +736,20 @@ async def send_reconciliation_report():
             cams = ", ".join(t.get("dvr_cameras", []))
             body += f"  • {t['name']} — seen at {t.get('dvr_first_seen', '?')} on {cams}\n"
         body += "\n"
+
+    # Visitor section
+    body += (
+        f"VISITORS\n"
+        f"Total Visitors Detected: {visitor_count}\n"
+    )
+    visitor_by_camera = recon.get("visitor_by_camera", {})
+    if visitor_by_camera:
+        body += "Visitors by Camera:\n"
+        for cam_name in sorted(visitor_by_camera.keys()):
+            body += f"  • {cam_name}: {len(visitor_by_camera[cam_name])}\n"
+        body += "\n"
+    else:
+        body += "No visitors detected so far.\n\n"
 
     body += (
         f"Please find the detailed reconciliation report attached.\n\n"
@@ -610,10 +769,10 @@ async def send_reconciliation_report():
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
 
     logger.info(
-        "[GATE] Reconciliation report sent at %s: TrueFace=%d, DVR=%d, Both=%d, Mismatches=%d",
+        "[GATE] Reconciliation report sent at %s: TrueFace=%d, DVR=%d, Both=%d, Mismatches=%d, Visitors=%d",
         time_display,
         recon["trueface_identified"], recon.get("dvr_sighted", 0),
-        both, dvr_only,
+        both, dvr_only, visitor_count,
     )
 
 
