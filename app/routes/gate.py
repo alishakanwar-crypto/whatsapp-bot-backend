@@ -968,6 +968,205 @@ def _generate_ai_observations(recon: dict) -> list[str]:
 
 
 # ============================================================
+# PDF Report Generation
+# ============================================================
+
+def _generate_reconciliation_pdf(recon: dict, date_display: str,
+                                  time_display: str) -> bytes:
+    """Generate a professionally formatted PDF reconciliation report."""
+    from fpdf import FPDF
+
+    side_by_side = recon.get("side_by_side", {})
+    teacher_detail = recon.get("teacher_detail", [])
+    visitor_count = recon.get("visitor_count", 0)
+    visitor_sightings = recon.get("visitor_sightings", [])
+    visitor_by_camera = recon.get("visitor_by_camera", {})
+
+    fully_verified = side_by_side.get("both_present", [])
+    trueface_only = side_by_side.get("trueface_only", [])
+    dvr_only = side_by_side.get("dvr_only", [])
+    absent = side_by_side.get("neither", [])
+
+    teachers_detected = recon["trueface_identified"] + len(dvr_only)
+    total_people = teachers_detected + visitor_count
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # ── Title ──
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 12, "SCHOOL HEADCOUNT RECONCILIATION", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, f"PP International School  |  {date_display}  |  {time_display} IST", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(6)
+
+    # ── Helper functions ──
+    def section_header(title: str):
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 9, f"  {title}", new_x="LMARGIN", new_y="NEXT", fill=True)
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
+
+    def key_value(key: str, value, indent: int = 0, bold_val: bool = False):
+        pdf.set_font("Helvetica", "", 10)
+        prefix = "    " * indent
+        pdf.cell(90 + indent * 10, 6, f"{prefix}{key}", new_x="RIGHT")
+        pdf.set_font("Helvetica", "B" if bold_val else "", 10)
+        pdf.cell(0, 6, str(value), new_x="LMARGIN", new_y="NEXT")
+
+    def status_row(label: str, count: int, r: int, g: int, b: int):
+        pdf.set_fill_color(r, g, b)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(120, 7, f"  {label}", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(30, 7, str(count), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+
+    # ── Overall Campus Headcount ──
+    section_header("OVERALL CAMPUS HEADCOUNT")
+    key_value("Total People Detected", total_people, bold_val=True)
+    key_value("Gate Entries (IN)", recon["total_gate_in"])
+    key_value("Gate Exits (OUT)", recon["total_gate_out"])
+    pdf.ln(3)
+
+    # ── Category Breakdown ──
+    section_header("CATEGORY BREAKDOWN")
+    key_value("Teachers / Staff", teachers_detected, bold_val=True)
+    key_value("TrueFace Recognized", recon["trueface_identified"], indent=1)
+    key_value("DVR Cameras Only", recon.get("dvr_sighted", 0), indent=1)
+    key_value("Visitors / Parents / Vendors", visitor_count, bold_val=True)
+    pdf.ln(3)
+
+    # ── Teacher Reconciliation ──
+    section_header("TEACHER RECONCILIATION")
+    status_row("Fully Verified (TrueFace + DVR)", len(fully_verified), 198, 239, 206)
+    status_row("Entry Only (DVR - Not on TrueFace)", len(dvr_only), 255, 199, 206)
+    status_row("TrueFace Only (No DVR Sighting)", len(trueface_only), 255, 235, 156)
+    status_row("Not Detected", len(absent), 217, 217, 217)
+    pdf.ln(5)
+
+    # ── Verified Movements ──
+    if fully_verified:
+        section_header("VERIFIED MOVEMENTS")
+        for t in fully_verified:
+            cams = ", ".join(t.get("dvr_cameras", []))
+            outfit = t.get("outfit_summary", "") or "-"
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(0, 6, f"{t['name']} - Teacher", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 9)
+            pdf.cell(0, 5, f"    Entry Gate: {t.get('dvr_first_seen', '-')}  |  TrueFace: Recognized ({t.get('trueface_arrival', '-')})", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, f"    Cameras: {cams}  |  Wearing: {outfit}", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(2)
+
+    # ── Entry Only (DVR but not TrueFace) ──
+    if dvr_only:
+        section_header("ENTRY ONLY (DVR - NOT MARKED ON TRUEFACE)")
+        for t in dvr_only:
+            cams = ", ".join(t.get("dvr_cameras", []))
+            outfit = t.get("outfit_summary", "") or "-"
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(0, 6, f"{t['name']} - Teacher", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 9)
+            pdf.cell(0, 5, f"    DVR: {t.get('dvr_first_seen', '-')}  |  Cameras: {cams}  |  Wearing: {outfit}", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(200, 0, 0)
+            pdf.cell(0, 5, "    NOT marked on TrueFace 3000", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(2)
+
+    # ── TrueFace Only ──
+    if trueface_only:
+        section_header("TRUEFACE ONLY (No DVR Sighting)")
+        # Table header
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(217, 226, 243)
+        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(60, 7, "Name", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(30, 7, "TrueFace Time", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Note", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+
+        pdf.set_font("Helvetica", "", 9)
+        for idx, t in enumerate(trueface_only, 1):
+            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
+            pdf.cell(60, 6, t["name"], border=1, new_x="RIGHT")
+            pdf.cell(30, 6, t.get("trueface_arrival") or "-", border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, "Not on DVR", border=1, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(5)
+
+    # ── Visitor Tracking ──
+    section_header("VISITOR TRACKING")
+    key_value("Total Visitors / Unknown Persons", visitor_count, bold_val=True)
+    if visitor_by_camera:
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(217, 226, 243)
+        pdf.cell(100, 7, "Camera", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(30, 7, "Count", border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        for cam_name in sorted(visitor_by_camera.keys()):
+            pdf.cell(100, 6, cam_name, border=1, new_x="RIGHT")
+            pdf.cell(30, 6, str(len(visitor_by_camera[cam_name])), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+
+    if visitor_sightings:
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(217, 226, 243)
+        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(30, 7, "Time", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Camera", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        for idx, v in enumerate(visitor_sightings, 1):
+            ts = v.get("timestamp", "")
+            time_part = ts.split(" ")[1] if " " in ts else ts
+            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
+            pdf.cell(30, 6, time_part, border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, v.get("camera", ""), border=1, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+
+    # ── Outfit Reconciliation ──
+    dvr_with_outfits = [t for t in teacher_detail
+                        if t.get("dvr_seen") and t.get("outfit_observations")]
+    if dvr_with_outfits:
+        section_header("OUTFIT RECONCILIATION")
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(217, 226, 243)
+        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(50, 7, "Name", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(60, 7, "Outfit / Clothing", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(20, 7, "Sightings", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Cameras", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        for idx, t in enumerate(dvr_with_outfits, 1):
+            outfit = t.get("outfit_summary", "-")
+            cam_set = set()
+            for obs in t.get("outfit_observations", []):
+                if obs.get("camera"):
+                    cam_set.add(obs["camera"])
+            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
+            pdf.cell(50, 6, t["name"], border=1, new_x="RIGHT")
+            pdf.cell(60, 6, outfit, border=1, new_x="RIGHT")
+            pdf.cell(20, 6, str(t.get("dvr_sighting_count", 0)), border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, ", ".join(sorted(cam_set)) or "-", border=1, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(5)
+
+    # ── AI Observations ──
+    ai_obs = _generate_ai_observations(recon)
+    section_header("AI OBSERVATIONS")
+    pdf.set_font("Helvetica", "", 10)
+    for obs in ai_obs:
+        pdf.multi_cell(0, 6, f"  * {obs}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+
+    # ── Footer ──
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.cell(0, 5, "PPIS Headcount Reconciliation & Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
+
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
+# ============================================================
 # Hourly Reconciliation Report (7 AM - 5 PM IST)
 # ============================================================
 
@@ -994,103 +1193,33 @@ async def send_reconciliation_report():
     xlsx_bytes = _generate_reconciliation_excel(recon)
     filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.xlsx"
 
-    # Email report
+    # Build counts
     fully_verified = side_by_side.get("both_present", [])
     tf_only_list = side_by_side.get("trueface_only", [])
     dvr_only_list = side_by_side.get("dvr_only", [])
     absent_list = side_by_side.get("neither", [])
     teacher_detail = recon.get("teacher_detail", [])
-    visitor_by_camera = recon.get("visitor_by_camera", {})
 
     teachers_detected = recon["trueface_identified"] + len(dvr_only_list)
     total_people = teachers_detected + visitor_count
 
+    # Generate PDF report
+    pdf_bytes = _generate_reconciliation_pdf(recon, today_display, time_display)
+    pdf_filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.pdf"
+
+    # Brief email body (full report is in the PDF)
     body = (
-        f"════════ SCHOOL HEADCOUNT RECONCILIATION ════════\n\n"
-        f"DATE: {today_display}\n"
-        f"TIME: {time_display} IST\n\n"
-        f"════════ OVERALL CAMPUS HEADCOUNT ════════\n"
+        f"School Headcount Reconciliation — {today_display} at {time_display} IST\n\n"
         f"Total People Detected: {total_people}\n"
-        f"Gate Entries (IN): {recon['total_gate_in']}\n"
-        f"Gate Exits (OUT): {recon['total_gate_out']}\n\n"
-        f"════════ CATEGORY BREAKDOWN ════════\n"
         f"Teachers / Staff: {teachers_detected}\n"
-        f"  — TrueFace Recognized: {recon['trueface_identified']}\n"
-        f"  — DVR Cameras Only: {recon.get('dvr_sighted', 0)}\n"
         f"Visitors / Parents / Vendors: {visitor_count}\n\n"
-        f"════════ TEACHER RECONCILIATION ════════\n"
-        f"✓ Fully Verified (TrueFace + DVR): {len(fully_verified)}\n"
-        f"⚠ Entry Only (DVR — Not on TrueFace): {len(dvr_only_list)}\n"
-        f"⚠ TrueFace Only (No DVR Sighting): {len(tf_only_list)}\n"
-        f"— Not Detected: {len(absent_list)}\n\n"
+        f"Fully Verified: {len(fully_verified)} | "
+        f"TrueFace Only: {len(tf_only_list)} | "
+        f"DVR Only: {len(dvr_only_list)} | "
+        f"Not Detected: {len(absent_list)}\n\n"
+        f"See attached PDF for the full detailed report.\n\n"
+        f"— PPIS Headcount Reconciliation & Entry Monitoring System"
     )
-
-    # Verified movements
-    if fully_verified:
-        body += "════════ VERIFIED MOVEMENTS ════════\n"
-        for t in fully_verified:
-            cams = ", ".join(t.get("dvr_cameras", []))
-            outfit = t.get("outfit_summary", "—")
-            body += (
-                f"• {t['name']} — Teacher\n"
-                f"  Entry Gate: {t.get('dvr_first_seen', '—')}\n"
-                f"  TrueFace: Recognized ({t.get('trueface_arrival', '—')})\n"
-                f"  Cameras: {cams}\n"
-                f"  Wearing: {outfit}\n\n"
-            )
-
-    # Entry only (DVR but not TrueFace)
-    if dvr_only_list:
-        body += "════════ ENTRY ONLY (DVR — NOT MARKED) ════════\n"
-        for t in dvr_only_list:
-            cams = ", ".join(t.get("dvr_cameras", []))
-            outfit = t.get("outfit_summary", "—")
-            body += (
-                f"• {t['name']} — Teacher\n"
-                f"  DVR: {t.get('dvr_first_seen', '—')}\n"
-                f"  Cameras: {cams}\n"
-                f"  Wearing: {outfit}\n"
-                f"  ⚠ NOT marked on TrueFace 3000\n\n"
-            )
-
-    # TrueFace only
-    if tf_only_list:
-        body += "════════ TRUEFACE ONLY (No DVR Sighting) ════════\n"
-        for t in tf_only_list:
-            body += (
-                f"• {t['name']} — Teacher\n"
-                f"  TrueFace: {t.get('trueface_arrival', '—')}\n"
-                f"  ⚠ Not spotted on any DVR camera\n\n"
-            )
-
-    # Visitor tracking
-    body += (
-        f"════════ VISITOR TRACKING ════════\n"
-        f"Total Visitors / Unknown: {visitor_count}\n"
-    )
-    if visitor_by_camera:
-        for cam_name in sorted(visitor_by_camera.keys()):
-            body += f"  • {cam_name}: {len(visitor_by_camera[cam_name])}\n"
-    body += "\n"
-
-    # Outfit reconciliation
-    dvr_seen = [t for t in teacher_detail if t["dvr_seen"] and t.get("outfit_observations")]
-    if dvr_seen:
-        body += "════════ OUTFIT RECONCILIATION ════════\n"
-        for t in dvr_seen:
-            outfit = t.get("outfit_summary", "—")
-            count = t.get("dvr_sighting_count", 0)
-            body += f"• {t['name']} — {outfit} ({count} sightings)\n"
-        body += "\n"
-
-    # AI observations
-    ai_obs = _generate_ai_observations(recon)
-    body += "════════ AI OBSERVATIONS ════════\n"
-    for obs in ai_obs:
-        body += f"• {obs}\n"
-    body += "\n"
-
-    body += "— PPIS Headcount Reconciliation & Entry Monitoring System"
 
     from app.services.email_service import send_email_async
     recipients = [r.strip() for r in REPORT_RECIPIENTS.split(",") if r.strip()]
@@ -1100,7 +1229,10 @@ async def send_reconciliation_report():
             f"Hourly Head Count Reconciliation — {today_display} {time_display} IST",
             body,
             "PP International School",
-            attachments=[(filename, xlsx_bytes)],
+            attachments=[
+                (pdf_filename, pdf_bytes),
+                (filename, xlsx_bytes),
+            ],
         )
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
 
