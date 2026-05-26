@@ -6,6 +6,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.services.whatsapp_service import send_whatsapp_message
@@ -855,8 +856,111 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled daily homework doc clear at 3:00 PM IST (9:30 UTC)")
 
+    # --- One-time Teacher CW/HW Reminder (29 Jun 2026, 09:00 AM IST = 03:30 UTC) ---
+    scheduler.add_job(
+        _send_teacher_cwhw_reminder_sync,
+        trigger=DateTrigger(run_date=datetime(2026, 6, 29, 3, 30, tzinfo=timezone.utc)),
+        id="teacher_cwhw_reminder_29jun",
+        replace_existing=True,
+    )
+    logger.info("Scheduled one-time teacher CW/HW reminder for 29-Jun-2026 09:00 AM IST")
+
     scheduler.start()
     logger.info("Scheduler started successfully")
+
+
+def _send_teacher_cwhw_reminder_sync() -> None:
+    """Send CW/HW Google Docs reminder to all class teachers (one-time)."""
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_send_teacher_cwhw_reminder())
+    finally:
+        loop.close()
+
+
+async def _send_teacher_cwhw_reminder() -> None:
+    """Send the approved reminder message to all 36 class teachers via WhatsApp."""
+    from app.services.whatsapp_service import send_cloud_template_message, _send_cloud_text
+
+    _TEACHER_PHONES = [
+        # (Grade, Teacher Name, Phone Numbers)
+        ("Popsicles", "Sanya Mehra / Anu", ["9289234655"]),
+        ("Nursery 1", "Jasleen Kaur / Simrita", ["9289234654", "8448141634"]),
+        ("Nursery 2", "Priyanka Budhiraja / Geet", ["9289234657", "8448141271"]),
+        ("Nursery 3", "Nashra / Deepti", ["9289236042", "8448141374"]),
+        ("Prep 1", "Meenal Harjika / Suchi", ["9289234656"]),
+        ("Prep 2", "Amita Sachdeva / Anjali", ["9289234658"]),
+        ("Prep 3", "Mahak Jain / Pooja", ["9289236056"]),
+        ("Grade 1A", "Pallavi Kumar", ["9289234652"]),
+        ("Grade 1B", "Muskan Motwani", ["9289234660"]),
+        ("Grade 2A", "Gargi Arora", ["9289234661"]),
+        ("Grade 2B", "Tanvi Goyal", ["9289234662"]),
+        ("Grade 3A", "Shreya Sikka", ["9289236072"]),
+        ("Grade 3B", "Seema Bakshi", ["9289234664"]),
+        ("Grade 3C", "Harnoor Kaur", ["9289234659"]),
+        ("Grade 4A", "Prabhjot Kaur", ["9289234663"]),
+        ("Grade 4B", "Damanpreet Kaur", ["9289236041"]),
+        ("Grade 5A", "Poshika Narula", ["9289236045"]),
+        ("Grade 5B", "Aastha Khattar", ["9289234653"]),
+        ("Grade 6A", "Kaninika Jain", ["9289234665"]),
+        ("Grade 6B", "Shikha Singh", ["9289236043"]),
+        ("Grade 7A", "Shyam Manohar", ["9289236049"]),
+        ("Grade 7B", "Twinkle Tandon", ["9289236044"]),
+        ("Grade 8A", "Tarun Dhall", ["9289236057"]),
+        ("Grade 8B", "Rashmi", ["9289236048"]),
+        ("Grade 8C", "Nikita Chawla", ["9289236046"]),
+        ("Grade 9A", "Mansi Gupta", ["9289236058"]),
+        ("Grade 9B", "Vaishali Arora", ["9289236047"]),
+        ("Grade 9C", "Harjeet Kaur", ["9289236052"]),
+        ("Grade 10A", "Riya Arora", ["9289236050"]),
+        ("Grade 10B", "Avneet Kaur", ["9289236051"]),
+        ("Grade 11(Science)", "Mridul Pilani", ["9289236055"]),
+        ("Grade 11(Commerce)", "Christy Joseph", ["9289236054"]),
+        ("Grade 11(Humanities)", "Christy Joseph", ["9289236054"]),
+        ("Grade 12(Science)", "Pooja Arora", ["9289236053"]),
+        ("Grade 12(Commerce)", "Sucheta Sinha", ["9289236059"]),
+        ("Grade 12(Humanities)", "Sucheta Sinha", ["9289236059"]),
+    ]
+
+    message = (
+        "Dear Teacher,\n\n"
+        "This is a reminder from PP International School.\n\n"
+        "Starting from 1st July 2026, the Classwork and Homework (CW/HW) "
+        "updates for all grades will be shared with parents automatically "
+        "through the Google Docs (that were previously shared with you on "
+        "your respective email IDs.)\n\n"
+        "Kindly ensure that you update the CW/HW in your assigned Google Doc "
+        "after each period so that parents receive timely updates.\n\n"
+        "Thank you for your cooperation.\n\n"
+        "Regards,\nPP International School"
+    )
+
+    sent_phones: set[str] = set()
+    sent = 0
+    failed = 0
+
+    for grade, teacher, phones in _TEACHER_PHONES:
+        for phone in phones:
+            if phone in sent_phones:
+                continue
+            sent_phones.add(phone)
+
+            ok = await _send_cloud_text(phone, message)
+            if ok:
+                sent += 1
+                logger.info(
+                    f"[TEACHER REMINDER] Sent to {teacher} ({grade}) — {phone}"
+                )
+            else:
+                failed += 1
+                logger.warning(
+                    f"[TEACHER REMINDER] Failed for {teacher} ({grade}) — {phone}"
+                )
+            await asyncio.sleep(2)
+
+    logger.info(
+        f"=== TEACHER CW/HW REMINDER COMPLETE: {sent} sent, {failed} failed ==="
+    )
 
 
 def stop_scheduler() -> None:
