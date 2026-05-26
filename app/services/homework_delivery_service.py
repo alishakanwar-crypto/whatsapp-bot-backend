@@ -687,6 +687,17 @@ async def run_homework_delivery(period: int) -> dict:
         if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
             continue
 
+        # One-time cutoff: skip grades 9-12 after 12:30 PM IST on 26-May-2026
+        if (
+            now_ist.date() == datetime(2026, 5, 26, tzinfo=IST).date()
+            and (now_ist.hour > 12 or (now_ist.hour == 12 and now_ist.minute >= 30))
+        ):
+            logger.info(
+                f"Skipping {grade} — CW/HW disabled for grades 9-12 "
+                f"after 12:30 PM IST on 26-May-2026"
+            )
+            continue
+
         # Skip entries with no doc_id (not yet created)
         if not doc_id:
             continue
