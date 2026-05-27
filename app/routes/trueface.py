@@ -419,6 +419,41 @@ async def _notify_chairman_arrival(
 
 
 # ============================================================
+# Gate entry + teacher sighting from TrueFace events
+# ============================================================
+
+async def _log_trueface_to_gate_and_sighting(
+    name: str, pin: str, timestamp: str, date: str,
+):
+    """Log a TrueFace detection as both a gate entry and a teacher sighting
+    so the head count reconciliation report includes TrueFace data."""
+    ts = timestamp or datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    db = await _get_db()
+    try:
+        await db.execute(
+            "INSERT INTO gate_entries "
+            "(date, timestamp, camera, direction, attire_color, person_crop) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (date, ts, "TrueFace 3000", "IN", "", ""),
+        )
+        person_id = f"TEACHER_{name.upper().replace(' ', '_')}"
+        await db.execute(
+            "INSERT INTO teacher_dvr_sightings "
+            "(date, timestamp, person_id, name, camera, confidence, "
+            "outfit_color, outfit_description, outfit_colors_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (date, ts, person_id, name, "TrueFace 3000", 1.0,
+             "", "identified by TrueFace biometric", "[]"),
+        )
+        await db.commit()
+        logger.info("[TRUEFACE] Logged gate entry + teacher sighting for %s", name)
+    except Exception as e:
+        logger.warning("[TRUEFACE] Failed to log gate/sighting for %s: %s", name, e)
+    finally:
+        await db.close()
+
+
+# ============================================================
 # Mood logging from TrueFace photos
 # ============================================================
 
@@ -597,6 +632,11 @@ async def receive_trueface_event(request: Request):
             # Log mood observation for Chairman/Alisha from TrueFace photo
             asyncio.ensure_future(
                 _log_mood_from_trueface(name, timestamp, photo_b64)
+            )
+
+            # Also log as gate entry + teacher sighting for reconciliation
+            asyncio.ensure_future(
+                _log_trueface_to_gate_and_sighting(name, pin, timestamp, today)
             )
 
             # Determine current IST hour from the event timestamp
