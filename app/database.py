@@ -363,6 +363,19 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_gate_entries_date_dir
                 ON gate_entries (date, direction);
 
+            CREATE TABLE IF NOT EXISTS vehicle_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                direction TEXT NOT NULL DEFAULT 'IN',
+                vehicle_type TEXT NOT NULL DEFAULT 'car',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_vehicle_entries_date
+                ON vehicle_entries (date);
+
             CREATE TABLE IF NOT EXISTS gate_daily_summary (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT UNIQUE NOT NULL,

@@ -238,6 +238,40 @@ async def _get_visitor_sightings(db, date: str) -> list[dict]:
     ]
 
 
+async def _store_vehicle_entries(db, entries: list[dict]) -> int:
+    """Store vehicle entry events in the database. Returns count stored."""
+    count = 0
+    for entry in entries:
+        ts = entry.get("timestamp", "")
+        date_part = ts.split(" ")[0] if " " in ts else datetime.now(IST).strftime("%Y-%m-%d")
+        camera = entry.get("camera", "")
+        direction = entry.get("direction", "IN")
+        vehicle_type = entry.get("vehicle_type", "car")
+
+        await db.execute(
+            "INSERT INTO vehicle_entries (date, timestamp, camera, direction, vehicle_type) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (date_part, ts, camera, direction, vehicle_type),
+        )
+        count += 1
+    await db.commit()
+    return count
+
+
+async def _get_vehicle_entries(db, date: str) -> list[dict]:
+    """Get all vehicle entries for a date."""
+    cur = await db.execute(
+        "SELECT id, timestamp, camera, direction, vehicle_type "
+        "FROM vehicle_entries WHERE date = ? ORDER BY timestamp",
+        (date,),
+    )
+    return [
+        {"id": r[0], "timestamp": r[1], "camera": r[2],
+         "direction": r[3], "vehicle_type": r[4]}
+        for r in await cur.fetchall()
+    ]
+
+
 # ============================================================
 # Reconciliation Logic
 # ============================================================
@@ -260,6 +294,7 @@ async def _reconcile(db, date: str) -> dict:
     total_teachers = len(all_teachers)
     dvr_sightings = await _get_teacher_sightings(db, date)
     visitor_sightings = await _get_visitor_sightings(db, date)
+    vehicle_entries = await _get_vehicle_entries(db, date)
     contact_categories = await _get_contact_categories(db)
 
     total_in = len(gate_in)
@@ -464,6 +499,11 @@ async def _reconcile(db, date: str) -> dict:
             cat = _normalize_category(t.get("category", "staff"))
             category_counts[cat] += 1
 
+    # Vehicle summary
+    vehicles_in = [v for v in vehicle_entries if v["direction"] == "IN"]
+    vehicles_out = [v for v in vehicle_entries if v["direction"] == "OUT"]
+    vehicle_type_counts = dict(Counter(v["vehicle_type"] for v in vehicles_in))
+
     return {
         "date": date,
         "total_gate_in": total_in,
@@ -480,6 +520,10 @@ async def _reconcile(db, date: str) -> dict:
         "visitor_by_camera": visitor_by_camera,
         "alerts": alerts,
         "category_counts": dict(category_counts),
+        "vehicles_in": len(vehicles_in),
+        "vehicles_out": len(vehicles_out),
+        "vehicle_types": vehicle_type_counts,
+        "vehicle_entries": vehicle_entries,
     }
 
 
@@ -578,6 +622,25 @@ async def receive_visitor_sightings(request: Request):
     return {"status": "ok", "stored": count}
 
 
+@router.post("/api/gate/vehicle-entry")
+async def receive_vehicle_entries(request: Request):
+    """Receive vehicle entry events from the campus agent gate counter.
+
+    Body: [{"timestamp": "...", "camera": "...", "direction": "IN", "vehicle_type": "car"}]
+    """
+    body = await request.json()
+    entries = body if isinstance(body, list) else [body]
+
+    db = await _get_db()
+    try:
+        count = await _store_vehicle_entries(db, entries)
+    finally:
+        await db.close()
+
+    logger.info("[GATE] Stored %d vehicle entry event(s)", count)
+    return {"status": "ok", "stored": count}
+
+
 @router.get("/api/gate/status")
 async def gate_status():
     """Get today's running head count totals."""
@@ -589,11 +652,18 @@ async def gate_status():
         trueface = await _get_trueface_attendance(db, today)
         dvr_sightings = await _get_teacher_sightings(db, today)
         visitor_sightings = await _get_visitor_sightings(db, today)
+        vehicle_entries = await _get_vehicle_entries(db, today)
     finally:
         await db.close()
 
     # Count unique teachers seen on DVR
     dvr_unique = len({s["person_id"] for s in dvr_sightings})
+
+    # Vehicle counts by type
+    vehicles_in = [v for v in vehicle_entries if v["direction"] == "IN"]
+    vehicles_out = [v for v in vehicle_entries if v["direction"] == "OUT"]
+    from collections import Counter
+    vehicle_types = dict(Counter(v["vehicle_type"] for v in vehicles_in))
 
     return {
         "date": today,
@@ -603,6 +673,9 @@ async def gate_status():
         "dvr_teachers_sighted": dvr_unique,
         "dvr_total_sightings": len(dvr_sightings),
         "visitors_detected": len(visitor_sightings),
+        "vehicles_in": len(vehicles_in),
+        "vehicles_out": len(vehicles_out),
+        "vehicle_types": vehicle_types,
     }
 
 
@@ -693,6 +766,14 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         ("  — TrueFace Recognized", recon["trueface_identified"], None),
         ("  — DVR Cameras Only", recon.get("dvr_sighted", 0), None),
         ("Visitors / Parents / Vendors", visitor_count, orange_fill),
+        ("", "", None),
+        ("════════ VEHICLE COUNT ════════", "", None),
+        ("Vehicles IN", recon.get("vehicles_in", 0), light_blue_fill),
+        ("Vehicles OUT", recon.get("vehicles_out", 0), None),
+    ]
+    for vtype, vcount in sorted(recon.get("vehicle_types", {}).items()):
+        summary_rows.append((f"  — {vtype.title()}", vcount, None))
+    summary_rows += [
         ("", "", None),
         ("════════ STAFF CATEGORY BREAKDOWN ════════", "", None),
     ]
@@ -1243,6 +1324,18 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     key_value("Visitors / Parents / Vendors", visitor_count, bold_val=True)
     pdf.ln(2)
 
+    # Vehicle count
+    vehicles_in = recon.get("vehicles_in", 0)
+    vehicles_out = recon.get("vehicles_out", 0)
+    vehicle_types = recon.get("vehicle_types", {})
+    if vehicles_in > 0 or vehicles_out > 0:
+        section_header("VEHICLE COUNT")
+        key_value("Vehicles IN", vehicles_in, bold_val=True)
+        key_value("Vehicles OUT", vehicles_out)
+        for vtype, vcount in sorted(vehicle_types.items()):
+            key_value(vtype.title(), vcount, indent=1)
+        pdf.ln(2)
+
     # Staff categories
     category_counts = recon.get("category_counts", {})
     if category_counts:
@@ -1469,12 +1562,25 @@ async def send_reconciliation_report():
     pdf_bytes = _generate_reconciliation_pdf(recon, today_display, time_display)
     pdf_filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.pdf"
 
+    # Vehicle summary for body
+    v_in = recon.get("vehicles_in", 0)
+    v_out = recon.get("vehicles_out", 0)
+    v_types = recon.get("vehicle_types", {})
+    vehicle_line = ""
+    if v_in > 0 or v_out > 0:
+        type_parts = ", ".join(f"{vt.title()}: {vc}" for vt, vc in sorted(v_types.items()))
+        vehicle_line = f"\nVehicles IN: {v_in} | OUT: {v_out}"
+        if type_parts:
+            vehicle_line += f" ({type_parts})"
+        vehicle_line += "\n"
+
     # Brief email body (full report is in the PDF)
     body = (
         f"School Headcount Reconciliation — {today_display} at {time_display} IST\n\n"
         f"Total People Detected: {total_people}\n"
         f"Teachers / Staff: {teachers_detected}\n"
-        f"Visitors / Parents / Vendors: {visitor_count}\n\n"
+        f"Visitors / Parents / Vendors: {visitor_count}\n"
+        f"{vehicle_line}\n"
         f"Fully Verified: {len(fully_verified)} | "
         f"TrueFace Only: {len(tf_only_list)} | "
         f"DVR Only: {len(dvr_only_list)} | "
