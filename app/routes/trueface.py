@@ -531,26 +531,30 @@ async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
     emotions = mood.get("emotions", {"neutral": 1.0})
     temperament = mood.get("temperament", "calm")
     intensity = float(mood.get("intensity", 30.0))
+    description = mood.get("description", "")
 
     db = await _get_db()
     try:
         await db.execute(
             "INSERT INTO chairman_mood_log "
             "(person, date, timestamp, camera, dominant_emotion, emotions_json, "
-            "temperament, intensity, face_distance, face_confidence, face_crop) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "temperament, intensity, face_distance, face_confidence, face_crop, "
+            "description) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 person_label, today, timestamp or now.strftime("%Y-%m-%d %H:%M:%S"),
                 "TrueFace 3000", dominant_emotion, json.dumps(emotions),
                 temperament, intensity, 0.0, 1.0, photo_b64[:200] if photo_b64 else "",
+                description,
             ),
         )
         await db.commit()
     finally:
         await db.close()
 
-    logger.info("[TRUEFACE] Mood logged for %s (%s) at %s: %s / %s / %.0f%%",
-                name, person_label, timestamp, dominant_emotion, temperament, intensity)
+    logger.info("[TRUEFACE] Mood logged for %s (%s) at %s: %s / %s / %.0f%% — %s",
+                name, person_label, timestamp, dominant_emotion, temperament, intensity,
+                description[:80] if description else "no description")
 
     # Trigger immediate mood report for Chairman
     if person_label == "Chairman":

@@ -9,6 +9,7 @@ Supports multiple tracked persons (Chairman, Alisha, etc.).
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -167,6 +168,27 @@ async def receive_mood(request: Request):
     frame_count = data.get("frame_count", 1)
     agreement = data.get("agreement", 0.0)
     negative_ratio = data.get("negative_ratio", 0.0)
+    description = data.get("description", "")
+
+    # If face_crop is provided and emotion is generic, re-analyze with GPT-4o
+    generic_emotions = {"detected", "unknown", "neutral", ""}
+    if face_crop and len(face_crop) > 100 and dominant_emotion in generic_emotions:
+        try:
+            from app.routes.trueface import _analyze_face_mood
+            mood = await _analyze_face_mood(face_crop)
+            dominant_emotion = mood.get("dominant_emotion", dominant_emotion)
+            emotions = mood.get("emotions", emotions)
+            temperament = mood.get("temperament", temperament)
+            intensity = float(mood.get("intensity", intensity))
+            description = mood.get("description", "")
+            mood_category = {
+                "happy": "Positive", "confident": "Positive", "cheerful": "Positive",
+                "sad": "Negative", "angry": "Negative", "anxious": "Negative",
+                "fearful": "Negative", "stressed": "Negative",
+            }.get(dominant_emotion, "Neutral")
+            mood_label = dominant_emotion.title()
+        except Exception as e:
+            logger.warning("[MOOD] GPT-4o re-analysis failed: %s", e)
 
     db = await _get_db()
     try:
@@ -174,13 +196,15 @@ async def receive_mood(request: Request):
             "INSERT INTO chairman_mood_log "
             "(person, date, timestamp, camera, dominant_emotion, emotions_json, "
             "temperament, intensity, face_distance, face_confidence, face_crop, "
-            "mood_category, mood_label, frame_count, agreement, negative_ratio) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "mood_category, mood_label, frame_count, agreement, negative_ratio, "
+            "description) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 person, today, timestamp, camera, dominant_emotion,
                 json.dumps(emotions), temperament, intensity,
                 face_distance, face_confidence, face_crop,
                 mood_category, mood_label, frame_count, agreement, negative_ratio,
+                description,
             ),
         )
         await db.commit()
@@ -194,7 +218,6 @@ async def receive_mood(request: Request):
 
     # Immediately send a mood report when Chairman is first detected
     if person.lower() == "chairman":
-        import asyncio
         asyncio.ensure_future(_send_chairman_instant_report())
 
     return {"status": "ok", "person": person, "emotion": dominant_emotion, "temperament": temperament}
@@ -277,18 +300,18 @@ async def today_mood(person: str | None = None):
 async def mood_report(date: str, person: str | None = None):
     db = await _get_db()
     try:
+        _cols = ("person, timestamp, camera, dominant_emotion, emotions_json, "
+                 "temperament, intensity, face_confidence, description")
         if person:
             cur = await db.execute(
-                "SELECT person, timestamp, camera, dominant_emotion, emotions_json, "
-                "temperament, intensity, face_confidence "
-                "FROM chairman_mood_log WHERE date = ? AND person = ? ORDER BY timestamp",
+                f"SELECT {_cols} FROM chairman_mood_log "
+                "WHERE date = ? AND person = ? ORDER BY timestamp",
                 (date, person),
             )
         else:
             cur = await db.execute(
-                "SELECT person, timestamp, camera, dominant_emotion, emotions_json, "
-                "temperament, intensity, face_confidence "
-                "FROM chairman_mood_log WHERE date = ? ORDER BY timestamp",
+                f"SELECT {_cols} FROM chairman_mood_log "
+                "WHERE date = ? ORDER BY timestamp",
                 (date,),
             )
         rows = await cur.fetchall()
@@ -307,6 +330,7 @@ async def mood_report(date: str, person: str | None = None):
             "temperament": r[5],
             "intensity": r[6],
             "face_confidence": r[7],
+            "description": r[8] if len(r) > 8 else "",
         })
 
     if not observations:
@@ -362,6 +386,17 @@ async def mood_report(date: str, person: str | None = None):
             },
             "hourly_summary": hourly_summary,
             "best_time_to_approach": best_hour,
+            "observations": [
+                {
+                    "time": o["timestamp"].split(" ")[1] if " " in o.get("timestamp", "") else o.get("timestamp", ""),
+                    "camera": o["camera"],
+                    "emotion": o["dominant_emotion"],
+                    "temperament": o["temperament"],
+                    "intensity": o["intensity"],
+                    "description": o.get("description", ""),
+                }
+                for o in obs_list
+            ],
         }
 
     return {
@@ -443,6 +478,35 @@ def _generate_mood_excel(date: str, person_reports: dict) -> bytes:
             ws.cell(row=row, column=3, value=data["dominant_emotion"]).border = border
             ws.cell(row=row, column=4, value=data["dominant_temperament"]).border = border
             ws.cell(row=row, column=5, value=f"{data['avg_intensity']}%").border = border
+
+        # Individual observations detail
+        obs_list = report.get("observations", [])
+        if obs_list:
+            row += 2
+            ws.cell(row=row, column=1, value="Observation Details").font = Font(bold=True, size=12)
+            row += 1
+            detail_headers = ["#", "Time", "Camera", "Emotion", "Temperament", "Intensity", "Description"]
+            for col, h in enumerate(detail_headers, 1):
+                cell = ws.cell(row=row, column=col, value=h)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = border
+
+            for idx, obs in enumerate(obs_list, 1):
+                row += 1
+                ws.cell(row=row, column=1, value=idx).border = border
+                ws.cell(row=row, column=2, value=obs.get("time", "")).border = border
+                ws.cell(row=row, column=3, value=obs.get("camera", "")).border = border
+                ws.cell(row=row, column=4, value=obs.get("emotion", "")).border = border
+                ws.cell(row=row, column=5, value=obs.get("temperament", "")).border = border
+                ws.cell(row=row, column=6, value=f"{obs.get('intensity', 0)}%").border = border
+                ws.cell(row=row, column=7, value=obs.get("description", "")).border = border
+
+            ws.column_dimensions["C"].width = 20
+            ws.column_dimensions["D"].width = 15
+            ws.column_dimensions["E"].width = 15
+            ws.column_dimensions["F"].width = 12
+            ws.column_dimensions["G"].width = 50
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -604,6 +668,22 @@ async def send_daily_mood_report():
             f"  Avg Intensity: {pr['avg_intensity']}%\n"
             f"  Best Time to Approach: {pr.get('best_time_to_approach', 'N/A')}\n\n"
         )
+
+        # Include recent observation details (last 10)
+        obs_list = pr.get("observations", [])
+        if obs_list:
+            body += "Recent Observations:\n"
+            for obs in obs_list[-10:]:
+                desc = obs.get("description", "")
+                desc_str = f" — {desc}" if desc else ""
+                body += (
+                    f"  {obs.get('time', '?')} | "
+                    f"{obs.get('emotion', '?')} | "
+                    f"{obs.get('temperament', '?')} | "
+                    f"{obs.get('intensity', 0)}%"
+                    f"{desc_str}\n"
+                )
+            body += "\n"
 
         # Historical comparison
         hist = historical_summary.get(pname, {})
