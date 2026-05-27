@@ -422,6 +422,65 @@ async def _notify_chairman_arrival(
 # Mood logging from TrueFace photos
 # ============================================================
 
+async def _analyze_face_mood(photo_b64: str) -> dict:
+    """Use OpenAI Vision to analyze facial expression and return mood data."""
+    if not photo_b64:
+        return {
+            "dominant_emotion": "neutral",
+            "emotions": {"neutral": 1.0},
+            "temperament": "calm",
+            "intensity": 30.0,
+        }
+    try:
+        from app.services.openai_service import get_client
+        ai_client = get_client()
+        if ai_client is None:
+            return {
+                "dominant_emotion": "neutral",
+                "emotions": {"neutral": 1.0},
+                "temperament": "calm",
+                "intensity": 30.0,
+            }
+
+        data_uri = f"data:image/jpeg;base64,{photo_b64}"
+        response = await ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": (
+                        "Analyze this person's facial expression. Respond ONLY with a JSON object, no markdown:\n"
+                        '{"dominant_emotion": "<one of: happy, neutral, sad, angry, surprised, fearful, disgusted, contemplative, tired, confident, anxious>",\n'
+                        ' "emotions": {"<emotion>": <0.0-1.0>, ...},\n'
+                        ' "temperament": "<one of: cheerful, calm, composed, tense, irritable, melancholic, energetic, withdrawn, focused, relaxed, stressed, warm>",\n'
+                        ' "intensity": <1-100 how strong the expression is>,\n'
+                        ' "description": "<one sentence describing their apparent mood and demeanor>"}'
+                    )},
+                    {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
+                ],
+            }],
+            max_tokens=200,
+            temperature=0.3,
+        )
+        text = response.choices[0].message.content.strip()
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        result = json.loads(text)
+        # Validate required fields
+        if "dominant_emotion" not in result or "temperament" not in result:
+            raise ValueError("Missing required fields")
+        return result
+    except Exception as e:
+        logger.warning("[TRUEFACE] Mood analysis failed: %s", e)
+        return {
+            "dominant_emotion": "neutral",
+            "emotions": {"neutral": 1.0},
+            "temperament": "calm",
+            "intensity": 30.0,
+        }
+
+
 async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
     """If the person is Chairman or Alisha, log a mood observation from their
     TrueFace recognition photo. Uses the same chairman_mood_log table."""
@@ -432,6 +491,12 @@ async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
 
+    mood = await _analyze_face_mood(photo_b64)
+    dominant_emotion = mood.get("dominant_emotion", "neutral")
+    emotions = mood.get("emotions", {"neutral": 1.0})
+    temperament = mood.get("temperament", "calm")
+    intensity = float(mood.get("intensity", 30.0))
+
     db = await _get_db()
     try:
         await db.execute(
@@ -441,22 +506,21 @@ async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 person_label, today, timestamp or now.strftime("%Y-%m-%d %H:%M:%S"),
-                "TrueFace 3000", "detected", json.dumps({"detected": 1.0}),
-                "present", 1.0, 0.0, 1.0, photo_b64[:200] if photo_b64 else "",
+                "TrueFace 3000", dominant_emotion, json.dumps(emotions),
+                temperament, intensity, 0.0, 1.0, photo_b64[:200] if photo_b64 else "",
             ),
         )
         await db.commit()
     finally:
         await db.close()
 
-    logger.info("[TRUEFACE] Mood logged for %s (%s) at %s via TrueFace camera",
-                name, person_label, timestamp)
+    logger.info("[TRUEFACE] Mood logged for %s (%s) at %s: %s / %s / %.0f%%",
+                name, person_label, timestamp, dominant_emotion, temperament, intensity)
 
     # Trigger immediate mood report for Chairman
     if person_label == "Chairman":
         try:
             from app.routes.chairman_mood import _send_chairman_instant_report
-            import asyncio
             asyncio.ensure_future(_send_chairman_instant_report())
         except Exception as e:
             logger.warning("[TRUEFACE] Failed to trigger chairman instant report: %s", e)
