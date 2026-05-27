@@ -531,6 +531,7 @@ async def init_db():
             ("frame_count", "INTEGER DEFAULT 1"),
             ("agreement", "REAL DEFAULT 0.0"),
             ("negative_ratio", "REAL DEFAULT 0.0"),
+            ("description", "TEXT DEFAULT ''"),
         ]
         for col_name, col_def in mood_new_cols:
             try:
