@@ -38,6 +38,14 @@ SEED_DVRS = [
         "username": "admin",
         "password": _DVR_PASSWORD,
         "channels": 64
+    },
+    {
+        "name": "DVR 4",
+        "ip": "192.168.0.13",
+        "port": 80,
+        "username": "admin",
+        "password": _DVR_PASSWORD,
+        "channels": 64
     }
 ]
 
@@ -994,6 +1002,162 @@ SEED_CAMERA_MAPPING = {
         "dvr_index": 2,
         "channel": 23,
         "description": "Administration",
+        "cam_type": ""
+    },
+    "Front Gallery": {
+        "dvr_index": 3,
+        "channel": 1,
+        "description": "Front Gallery",
+        "cam_type": ""
+    },
+    "Basement R/W Middle Strs": {
+        "dvr_index": 3,
+        "channel": 6,
+        "description": "Basement R/W Middle Strs",
+        "cam_type": ""
+    },
+    "G Floor R/W Gall C1": {
+        "dvr_index": 3,
+        "channel": 9,
+        "description": "G Floor R/W Gall C1",
+        "cam_type": ""
+    },
+    "Basement Cam 8": {
+        "dvr_index": 3,
+        "channel": 10,
+        "description": "Basement Cam 8",
+        "cam_type": ""
+    },
+    "Basement Electricity": {
+        "dvr_index": 3,
+        "channel": 11,
+        "description": "Basement Electricity",
+        "cam_type": ""
+    },
+    "Basement Main Gate": {
+        "dvr_index": 3,
+        "channel": 12,
+        "description": "Basement Main Gate",
+        "cam_type": ""
+    },
+    "G Floor Recpt Back Gall C1": {
+        "dvr_index": 3,
+        "channel": 13,
+        "description": "G Floor Recpt Back Gall C1",
+        "cam_type": ""
+    },
+    "TRANSPORT ROOM": {
+        "dvr_index": 3,
+        "channel": 15,
+        "description": "TRANSPORT ROOM",
+        "cam_type": ""
+    },
+    "IT Room": {
+        "dvr_index": 3,
+        "channel": 16,
+        "description": "IT Room",
+        "cam_type": ""
+    },
+    "Kitchen Room": {
+        "dvr_index": 3,
+        "channel": 18,
+        "description": "Kitchen Room",
+        "cam_type": ""
+    },
+    "Basement Cam 10": {
+        "dvr_index": 3,
+        "channel": 19,
+        "description": "Basement Cam 10",
+        "cam_type": ""
+    },
+    "Basement L/W Middle Strs": {
+        "dvr_index": 3,
+        "channel": 20,
+        "description": "Basement L/W Middle Strs",
+        "cam_type": ""
+    },
+    "Basement Cam 2": {
+        "dvr_index": 3,
+        "channel": 21,
+        "description": "Basement Cam 2",
+        "cam_type": ""
+    },
+    "Orchestra Basement": {
+        "dvr_index": 3,
+        "channel": 23,
+        "description": "Orchestra Basement",
+        "cam_type": ""
+    },
+    "Basement Generator Right Exit": {
+        "dvr_index": 3,
+        "channel": 25,
+        "description": "Basement Generator Right Exit",
+        "cam_type": ""
+    },
+    "Admin Gallery": {
+        "dvr_index": 3,
+        "channel": 26,
+        "description": "Admin Gallery",
+        "cam_type": ""
+    },
+    "Medical Room": {
+        "dvr_index": 3,
+        "channel": 27,
+        "description": "Medical Room",
+        "cam_type": ""
+    },
+    "IMN A/C 2": {
+        "dvr_index": 3,
+        "channel": 29,
+        "description": "IMN A/C 2",
+        "cam_type": ""
+    },
+    "G Floor R/W Bus Parking": {
+        "dvr_index": 3,
+        "channel": 30,
+        "description": "G Floor R/W Bus Parking",
+        "cam_type": ""
+    },
+    "OUTDOOR CAM 1": {
+        "dvr_index": 3,
+        "channel": 33,
+        "description": "OUTDOOR CAM 1",
+        "cam_type": ""
+    },
+    "DVR4 SPORTS ROOM": {
+        "dvr_index": 3,
+        "channel": 34,
+        "description": "SPORTS ROOM",
+        "cam_type": ""
+    },
+    "YOGA ROOM": {
+        "dvr_index": 3,
+        "channel": 36,
+        "description": "YOGA ROOM",
+        "cam_type": ""
+    },
+    "Basement Cam 5": {
+        "dvr_index": 3,
+        "channel": 37,
+        "description": "Basement Cam 5",
+        "cam_type": ""
+    },
+    "DVR4 ASSEMBLY AREA": {
+        "dvr_index": 3,
+        "channel": 40,
+        "description": "ASSEMBLY AREA",
+        "cam_type": ""
+    },
+    "IMN A/C 1": {
+        "dvr_index": 3,
+        "channel": 41,
+        "description": "IMN A/C 1",
+        "cam_type": ""
+    },
+    "Basement R/W First Strs": {
+        "dvr_index": 3,
+        "channel": 42,
+        "description": "Basement R/W First Strs",
         "cam_type": ""
     },
 }
