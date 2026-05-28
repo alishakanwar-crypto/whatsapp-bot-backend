@@ -524,12 +524,6 @@ async def _reconcile(db, date: str) -> dict:
     }
 
     # ── CATEGORY 2: UNKNOWN / UNREGISTERED PEOPLE ──
-    # Deduplicated gate crossings minus verified staff = estimated unknown count
-    unique_staff_detected = len(staff_present)
-    estimated_unknown_in = max(0, unique_gate_in - unique_staff_detected)
-    estimated_unknown_out = max(0, unique_gate_out - len(staff_exited))
-    estimated_unknown_inside = max(0, estimated_unknown_in - estimated_unknown_out)
-
     # Build unknown person list from visitor sightings + unmatched gate entries
     unknown_persons: list[dict] = []
     for idx, v in enumerate(visitor_sightings, 1):
@@ -561,6 +555,16 @@ async def _reconcile(db, date: str) -> dict:
                 "status": "INSIDE" if g.get("direction") == "IN" else "EXITED",
                 "person_crop": g.get("person_crop", ""),
             })
+
+    # Count unknown entries/exits from the actual unknown person list
+    unknown_in_list = [u for u in unknown_persons if u["direction"] == "IN"]
+    unknown_out_list = [u for u in unknown_persons if u["direction"] == "OUT"]
+    estimated_unknown_in = len(unknown_in_list)
+    estimated_unknown_out = len(unknown_out_list)
+    estimated_unknown_inside = max(0, estimated_unknown_in - estimated_unknown_out)
+    # Also keep the gate-based estimate as a fallback reference
+    unique_staff_detected = len(staff_present)
+    gate_based_unknown = max(0, unique_gate_in - unique_staff_detected)
 
     # Visitor/unknown grouped by camera
     visitor_by_camera: dict[str, list[dict]] = {}
