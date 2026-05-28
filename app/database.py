@@ -619,44 +619,43 @@ async def init_db():
         mapping_count = row[0] if row else 0
         logger.info(f"agent_camera_mapping count on startup: {mapping_count}")
 
-        if mapping_count == 0 and SEED_CAMERA_MAPPING:
-            logger.info(
-                f"agent_camera_mapping table is empty — auto-seeding "
-                f"{len(SEED_CAMERA_MAPPING)} camera mappings"
+        if SEED_CAMERA_MAPPING:
+            cursor3 = await db.execute(
+                "SELECT location FROM agent_camera_mapping"
             )
-            try:
-                seeded = 0
-                for location, data in SEED_CAMERA_MAPPING.items():
-                    all_cameras = data.get("all_cameras")
-                    await db.execute(
-                        "INSERT OR REPLACE INTO agent_camera_mapping "
-                        "(location, dvr_index, channel, description, cam_type, all_cameras) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            location,
-                            data.get("dvr_index", 0),
-                            data.get("channel", 1),
-                            data.get("description", ""),
-                            data.get("cam_type", ""),
-                            json.dumps(all_cameras) if all_cameras else None,
-                        ),
-                    )
-                    seeded += 1
-                await db.commit()
-                # Verify the seed worked
-                cursor2 = await db.execute(
-                    "SELECT COUNT(*) FROM agent_camera_mapping"
-                )
-                verify_row = await cursor2.fetchone()
-                verify_count = verify_row[0] if verify_row else 0
+            existing_locations = {r[0] for r in await cursor3.fetchall()}
+            missing_cams = {
+                k: v for k, v in SEED_CAMERA_MAPPING.items()
+                if k not in existing_locations
+            }
+            if missing_cams:
                 logger.info(
-                    f"Auto-seeded camera mappings: inserted {seeded}, "
-                    f"verified {verify_count} in DB"
+                    "Seeding %d missing camera mapping(s)", len(missing_cams)
                 )
-            except Exception as e:
-                logger.error(
-                    f"Auto-seed camera mappings failed: {e}", exc_info=True
-                )
+                try:
+                    seeded = 0
+                    for location, data in missing_cams.items():
+                        all_cameras = data.get("all_cameras")
+                        await db.execute(
+                            "INSERT OR REPLACE INTO agent_camera_mapping "
+                            "(location, dvr_index, channel, description, cam_type, all_cameras) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                location,
+                                data.get("dvr_index", 0),
+                                data.get("channel", 1),
+                                data.get("description", ""),
+                                data.get("cam_type", ""),
+                                json.dumps(all_cameras) if all_cameras else None,
+                            ),
+                        )
+                        seeded += 1
+                    await db.commit()
+                    logger.info("Seeded %d camera mapping(s) OK", seeded)
+                except Exception as e:
+                    logger.error(
+                        f"Auto-seed camera mappings failed: {e}", exc_info=True
+                    )
 
         # --- Auto-seed homework docs ---
         try:
