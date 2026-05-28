@@ -296,30 +296,38 @@ async def _get_vehicle_entries(db, date: str) -> list[dict]:
 async def _reconcile(db, date: str) -> dict:
     """Perform head count reconciliation for a given date.
 
-    Compares DVR teacher sightings vs TrueFace attendance records,
-    and includes visitor (unknown face) sightings.
-    Returns:
-      - teacher_detail: per-teacher list with DVR sightings + TrueFace status
-      - side_by_side: DVR sightings column vs TrueFace attendance column
-      - visitor_sightings: list of unknown-face sightings with timestamps/cameras
-      - gate summary: entry/exit counts
+    Architecture:
+      CATEGORY 1 — VERIFIED STAFF (registered in TrueFace/face DB)
+        Teachers, Admin, Security, Support — each tracked individually.
+        Source of truth: TrueFace attendance + DVR face sightings.
+
+      CATEGORY 2 — UNKNOWN / UNREGISTERED PEOPLE
+        Parents, visitors, vendors, delivery agents, etc.
+        Tagged as UNKNOWN-001, UNKNOWN-002, etc.
+        Tracked with snapshots, timestamps, camera source.
+
+      OCCUPANCY — unique people currently INSIDE (not raw detections).
+        Staff with arrival but no departure = INSIDE.
+        Unknown entries without matching exits = INSIDE.
     """
+    from collections import Counter
+
     gate_in = await _get_gate_entries(db, date, direction="IN")
     gate_out = await _get_gate_entries(db, date, direction="OUT")
     trueface = await _get_trueface_attendance(db, date)
     all_teachers = await _get_all_teachers(db)
-    total_teachers = len(all_teachers)
+    total_registered = len(all_teachers)
     dvr_sightings = await _get_teacher_sightings(db, date)
     visitor_sightings = await _get_visitor_sightings(db, date)
     vehicle_entries = await _get_vehicle_entries(db, date)
     contact_categories = await _get_contact_categories(db)
     gate_entries_with_crops = await _get_gate_entries_with_crops(db, date)
 
-    total_in = len(gate_in)
-    total_out = len(gate_out)
-    trueface_count = len(trueface)
+    raw_gate_in = len(gate_in)
+    raw_gate_out = len(gate_out)
 
-    # Build TrueFace lookup by name (case-insensitive)
+    # ── CATEGORY 1: VERIFIED STAFF ──
+    # Build TrueFace lookup by name
     tf_by_name: dict[str, dict] = {}
     for t in trueface:
         tf_by_name[t["name"].upper().strip()] = t
@@ -341,7 +349,7 @@ async def _reconcile(db, date: str) -> dict:
                 "timestamp": s.get("timestamp", ""),
             })
 
-    # Collect all unique teacher names from all sources
+    # All unique registered staff names
     all_names: set[str] = set()
     for t in all_teachers:
         all_names.add(t["name"].upper().strip())
@@ -350,13 +358,12 @@ async def _reconcile(db, date: str) -> dict:
     for key in dvr_by_person:
         all_names.add(key)
 
-    # --- Teacher-by-teacher detail ---
-    teacher_detail = []
+    # Per-person detail with proper category separation
+    staff_detail = []
     for name_upper in sorted(all_names):
         tf = tf_by_name.get(name_upper)
         dvr_list = dvr_by_person.get(name_upper, [])
 
-        # DVR sighting summary
         dvr_cameras = []
         dvr_times = []
         dvr_sighting_details = []
@@ -368,52 +375,44 @@ async def _reconcile(db, date: str) -> dict:
                 dvr_cameras.append(cam)
             dvr_times.append(time_part)
             dvr_sighting_details.append({
-                "camera": cam,
-                "time": time_part,
+                "camera": cam, "time": time_part,
                 "confidence": s.get("confidence", 0),
                 "outfit_color": s.get("outfit_color", ""),
                 "outfit_description": s.get("outfit_description", ""),
-                "outfit_colors": s.get("outfit_colors", []),
             })
 
         display_name = dvr_names.get(name_upper, tf["name"] if tf else name_upper.title())
 
-        # Determine dominant outfit from all sightings
         outfit_observations = dvr_outfits.get(name_upper, [])
-        if outfit_observations:
-            latest_outfit = outfit_observations[-1]
-            outfit_summary = latest_outfit.get("description", "unknown")
+        outfit_summary = outfit_observations[-1].get("description", "unknown") if outfit_observations else "-"
+
+        raw_category = contact_categories.get(name_upper, "staff")
+        category = _normalize_category(raw_category)
+
+        # Determine presence status
+        is_present = tf is not None or len(dvr_list) > 0
+        has_departed = tf is not None and tf.get("departure_time") is not None
+        if is_present and not has_departed:
+            occupancy_status = "INSIDE"
+        elif is_present and has_departed:
+            occupancy_status = "EXITED"
         else:
-            outfit_summary = "—"
+            occupancy_status = "ABSENT"
 
-        # Category from trueface_contacts
-        category = contact_categories.get(name_upper, "staff")
-
-        # Build time trail — chronological sequence of detections across systems
+        # Time trail
         time_trail: list[dict] = []
         if tf and tf.get("arrival_time"):
-            time_trail.append({
-                "time": tf["arrival_time"],
-                "source": "TrueFace 3000",
-                "event": "Attendance Marked",
-            })
+            time_trail.append({"time": tf["arrival_time"], "source": "TrueFace 3000", "event": "Arrival"})
         for det in dvr_sighting_details:
-            time_trail.append({
-                "time": det["time"],
-                "source": det["camera"],
-                "event": f"DVR Sighting ({det.get('outfit_color', '')})" if det.get("outfit_color") else "DVR Sighting",
-            })
+            time_trail.append({"time": det["time"], "source": det["camera"], "event": "DVR Sighting"})
         if tf and tf.get("departure_time"):
-            time_trail.append({
-                "time": tf["departure_time"],
-                "source": "TrueFace 3000",
-                "event": "Departure Marked",
-            })
+            time_trail.append({"time": tf["departure_time"], "source": "TrueFace 3000", "event": "Departure"})
         time_trail.sort(key=lambda x: x["time"])
 
-        teacher_detail.append({
+        staff_detail.append({
             "name": display_name,
             "category": category,
+            "raw_category": raw_category,
             "trueface_present": tf is not None,
             "trueface_arrival": tf["arrival_time"] if tf else None,
             "trueface_departure": tf["departure_time"] if tf else None,
@@ -428,49 +427,94 @@ async def _reconcile(db, date: str) -> dict:
             "outfit_summary": outfit_summary,
             "outfit_observations": outfit_observations,
             "time_trail": time_trail,
+            "occupancy_status": occupancy_status,
             "status": _reconciliation_status(tf is not None, len(dvr_list) > 0),
         })
 
-    # --- Side-by-side comparison ---
+    # Staff presence counts
+    staff_present = [s for s in staff_detail if s["occupancy_status"] in ("INSIDE", "EXITED")]
+    staff_inside = [s for s in staff_detail if s["occupancy_status"] == "INSIDE"]
+    staff_exited = [s for s in staff_detail if s["occupancy_status"] == "EXITED"]
+    staff_absent = [s for s in staff_detail if s["occupancy_status"] == "ABSENT"]
+
+    # Category breakdown for staff INSIDE
+    staff_category_inside: Counter = Counter()
+    for s in staff_inside:
+        staff_category_inside[s["category"]] += 1
+
+    # Category breakdown for all present staff
+    staff_category_present: Counter = Counter()
+    for s in staff_present:
+        staff_category_present[s["category"]] += 1
+
+    # Side-by-side (kept for compatibility)
     side_by_side = {
-        "both_present": [t for t in teacher_detail if t["trueface_present"] and t["dvr_seen"]],
-        "trueface_only": [t for t in teacher_detail if t["trueface_present"] and not t["dvr_seen"]],
-        "dvr_only": [t for t in teacher_detail if not t["trueface_present"] and t["dvr_seen"]],
-        "neither": [t for t in teacher_detail if not t["trueface_present"] and not t["dvr_seen"]],
+        "both_present": [t for t in staff_detail if t["trueface_present"] and t["dvr_seen"]],
+        "trueface_only": [t for t in staff_detail if t["trueface_present"] and not t["dvr_seen"]],
+        "dvr_only": [t for t in staff_detail if not t["trueface_present"] and t["dvr_seen"]],
+        "neither": [t for t in staff_detail if not t["trueface_present"] and not t["dvr_seen"]],
     }
 
-    # Gate timing trail (legacy format)
-    timing_trail = []
-    for entry in gate_in:
-        time_part = entry["timestamp"].split(" ")[1] if " " in entry["timestamp"] else entry["timestamp"]
-        timing_trail.append({
+    # ── CATEGORY 2: UNKNOWN / UNREGISTERED PEOPLE ──
+    # Each unique unknown person gets a persistent ID (UNKNOWN-001, etc.)
+    # Raw gate detections minus verified staff = estimated unknown count
+    unique_staff_detected = len(staff_present)
+    estimated_unknown_in = max(0, raw_gate_in - unique_staff_detected)
+    estimated_unknown_out = max(0, raw_gate_out - len(staff_exited))
+    estimated_unknown_inside = max(0, estimated_unknown_in - estimated_unknown_out)
+
+    # Build unknown person list from visitor sightings + unmatched gate entries
+    unknown_persons: list[dict] = []
+    for idx, v in enumerate(visitor_sightings, 1):
+        unknown_id = f"UNKNOWN-{idx:03d}"
+        ts = v.get("timestamp", "")
+        time_part = ts.split(" ")[1] if " " in ts else ts
+        unknown_persons.append({
+            "id": unknown_id,
+            "timestamp": ts,
             "time": time_part,
-            "camera": entry["camera"],
-            "attire_color": entry["attire_color"],
-            "reconciled": entry["reconciled"],
-            "matched_pin": entry["matched_pin"],
+            "camera": v.get("camera", "Unknown"),
+            "direction": "IN",
+            "status": "INSIDE",
+            "person_crop": v.get("snapshot", ""),
         })
 
-    # Update daily summary
-    dvr_seen_count = len([t for t in teacher_detail if t["dvr_seen"]])
-    unreconciled = abs(trueface_count - dvr_seen_count)
-    await db.execute(
-        "INSERT OR REPLACE INTO gate_daily_summary "
-        "(date, total_in, total_out, trueface_matched, unreconciled) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (date, total_in, total_out, trueface_count, unreconciled),
-    )
-    await db.commit()
+    # Add crops from gate entries that are unmatched
+    for g in gate_entries_with_crops:
+        if g.get("person_crop"):
+            idx = len(unknown_persons) + 1
+            ts = g.get("timestamp", "")
+            time_part = ts.split(" ")[1] if " " in ts else ts
+            unknown_persons.append({
+                "id": f"UNKNOWN-{idx:03d}",
+                "timestamp": ts,
+                "time": time_part,
+                "camera": g.get("camera", "Unknown"),
+                "direction": g.get("direction", "IN"),
+                "status": "INSIDE" if g.get("direction") == "IN" else "EXITED",
+                "person_crop": g.get("person_crop", ""),
+            })
 
-    # Build visitor summary grouped by camera
+    # Visitor/unknown grouped by camera
     visitor_by_camera: dict[str, list[dict]] = {}
     for v in visitor_sightings:
         cam = v.get("camera", "Unknown")
         visitor_by_camera.setdefault(cam, []).append(v)
 
-    # --- Mismatch Alerts ---
+    # ── VEHICLES ──
+    vehicles_in = [v for v in vehicle_entries if v["direction"] == "IN"]
+    vehicles_out = [v for v in vehicle_entries if v["direction"] == "OUT"]
+    vehicle_type_counts = dict(Counter(v["vehicle_type"] for v in vehicles_in))
+
+    # ── OCCUPANCY SUMMARY ──
+    total_staff_inside = len(staff_inside)
+    total_unknown_inside = estimated_unknown_inside
+    total_inside = total_staff_inside + total_unknown_inside
+    total_staff_exited = len(staff_exited)
+    total_unknown_exited = estimated_unknown_out
+
+    # ── ALERTS ──
     alerts: list[dict] = []
-    # Attendance marked but no gate/DVR entry
     for t in side_by_side["trueface_only"]:
         alerts.append({
             "type": "ATTENDANCE_WITHOUT_ENTRY",
@@ -479,7 +523,6 @@ async def _reconcile(db, date: str) -> dict:
             "category": t.get("category", "staff"),
             "detail": f"TrueFace at {t.get('trueface_arrival', '?')} but not seen on any DVR camera.",
         })
-    # DVR entry but attendance NOT marked
     for t in side_by_side["dvr_only"]:
         alerts.append({
             "type": "ENTRY_WITHOUT_ATTENDANCE",
@@ -488,67 +531,70 @@ async def _reconcile(db, date: str) -> dict:
             "category": t.get("category", "staff"),
             "detail": f"Seen on DVR ({', '.join(t.get('dvr_cameras', []))}) at {t.get('dvr_first_seen', '?')} but NOT marked on TrueFace.",
         })
-    # Visitors still inside (entered but no exit event — compare gate in vs out)
-    visitors_in = len([v for v in visitor_sightings
-                       if any(kw in (v.get("camera", "").lower()) for kw in ("gate", "entry", "reception"))])
-    if visitors_in > 0 and total_out < total_in:
+    if total_unknown_inside > 0:
         alerts.append({
-            "type": "VISITORS_POSSIBLY_INSIDE",
-            "severity": "low",
-            "person": "",
-            "category": "visitor",
-            "detail": f"{visitors_in} visitor detection(s) at gate/reception. Gate IN={total_in}, OUT={total_out}.",
-        })
-    # Unknown/unrecognized at gate
-    if len(visitor_sightings) > 0:
-        alerts.append({
-            "type": "UNKNOWN_PERSONS",
+            "type": "UNKNOWN_PERSONS_INSIDE",
             "severity": "medium",
             "person": "",
             "category": "unknown",
-            "detail": f"{len(visitor_sightings)} unknown/unidentified person(s) detected on gate/reception cameras.",
+            "detail": f"{total_unknown_inside} unregistered/unknown person(s) estimated inside campus.",
         })
 
-    # --- Category breakdown ---
-    from collections import Counter
-    category_counts: Counter = Counter()
-    for t in teacher_detail:
-        if t["trueface_present"] or t["dvr_seen"]:
-            cat = _normalize_category(t.get("category", "staff"))
-            category_counts[cat] += 1
-
-    # Vehicle summary
-    vehicles_in = [v for v in vehicle_entries if v["direction"] == "IN"]
-    vehicles_out = [v for v in vehicle_entries if v["direction"] == "OUT"]
-    vehicle_type_counts = dict(Counter(v["vehicle_type"] for v in vehicles_in))
-
-    # Estimate visitors: gate entries minus unique staff/teachers detected
-    staff_detected = len([t for t in teacher_detail if t["trueface_present"] or t["dvr_seen"]])
-    estimated_visitors = max(0, total_in - staff_detected)
-    # Use the higher of DVR face-based visitors vs gate-based estimate
-    final_visitor_count = max(len(visitor_sightings), estimated_visitors)
+    # Update daily summary
+    await db.execute(
+        "INSERT OR REPLACE INTO gate_daily_summary "
+        "(date, total_in, total_out, trueface_matched, unreconciled) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (date, raw_gate_in, raw_gate_out, len(trueface), abs(len(trueface) - len([s for s in staff_detail if s["dvr_seen"]]))),
+    )
+    await db.commit()
 
     return {
         "date": date,
-        "total_gate_in": total_in,
-        "total_gate_out": total_out,
-        "trueface_identified": trueface_count,
-        "dvr_sighted": dvr_seen_count,
-        "total_registered_teachers": total_teachers,
-        "unreconciled_count": unreconciled,
-        "teacher_detail": teacher_detail,
+        # Raw gate detections (for reference — NOT unique people)
+        "raw_gate_in": raw_gate_in,
+        "raw_gate_out": raw_gate_out,
+        # Legacy keys for backward compat
+        "total_gate_in": raw_gate_in,
+        "total_gate_out": raw_gate_out,
+        # Verified staff
+        "total_registered": total_registered,
+        "trueface_identified": len(trueface),
+        "dvr_sighted": len([s for s in staff_detail if s["dvr_seen"]]),
+        "staff_detail": staff_detail,
+        "teacher_detail": staff_detail,  # backward compat
         "side_by_side": side_by_side,
-        "timing_trail": timing_trail,
-        "visitor_count": final_visitor_count,
+        # Staff occupancy
+        "staff_inside": total_staff_inside,
+        "staff_exited": total_staff_exited,
+        "staff_absent": len(staff_absent),
+        "staff_category_inside": dict(staff_category_inside),
+        "staff_category_present": dict(staff_category_present),
+        "category_counts": dict(staff_category_present),  # backward compat
+        # Unknown / unregistered
+        "unknown_persons": unknown_persons,
+        "estimated_unknown_in": estimated_unknown_in,
+        "estimated_unknown_out": estimated_unknown_out,
+        "estimated_unknown_inside": estimated_unknown_inside,
+        "visitor_count": estimated_unknown_in,  # backward compat
         "visitor_sightings": visitor_sightings,
         "visitor_by_camera": visitor_by_camera,
-        "alerts": alerts,
-        "category_counts": dict(category_counts),
+        # Occupancy totals
+        "total_inside": total_inside,
+        "total_exited": total_staff_exited + total_unknown_exited,
+        # Vehicles
         "vehicles_in": len(vehicles_in),
         "vehicles_out": len(vehicles_out),
         "vehicle_types": vehicle_type_counts,
         "vehicle_entries": vehicle_entries,
+        # Snapshots
         "gate_entries_with_crops": gate_entries_with_crops,
+        # Alerts
+        "alerts": alerts,
+        # Legacy
+        "total_registered_teachers": total_registered,
+        "unreconciled_count": abs(len(trueface) - len([s for s in staff_detail if s["dvr_seen"]])),
+        "timing_trail": [],
     }
 
 
@@ -760,65 +806,72 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     date_str = recon["date"]
     side_by_side = recon.get("side_by_side", {})
-    teacher_detail = recon.get("teacher_detail", [])
-    visitor_count = recon.get("visitor_count", 0)
+    staff_detail = recon.get("staff_detail", recon.get("teacher_detail", []))
     visitor_sightings = recon.get("visitor_sightings", [])
     visitor_by_camera = recon.get("visitor_by_camera", {})
+    unknown_persons = recon.get("unknown_persons", [])
+
+    staff_inside = [s for s in staff_detail if s.get("occupancy_status") == "INSIDE"]
+    staff_exited = [s for s in staff_detail if s.get("occupancy_status") == "EXITED"]
+    staff_absent = [s for s in staff_detail if s.get("occupancy_status") == "ABSENT"]
 
     fully_verified = side_by_side.get("both_present", [])
     trueface_only = side_by_side.get("trueface_only", [])
     dvr_only = side_by_side.get("dvr_only", [])
     absent = side_by_side.get("neither", [])
 
-    # ── Sheet 1: Summary ──
+    total_inside = recon.get("total_inside", 0)
+    estimated_unknown_inside = recon.get("estimated_unknown_inside", 0)
+
+    # ── Sheet 1: Summary (Occupancy-Based) ──
     ws = wb.active
-    ws.title = "Summary"
+    ws.title = "Live Occupancy"
 
     ws.merge_cells("A1:D1")
-    ws["A1"] = "════════ SCHOOL HEADCOUNT RECONCILIATION ════════"
+    ws["A1"] = "SCHOOL HEADCOUNT RECONCILIATION"
     ws["A1"].font = Font(bold=True, size=14)
 
     ws.merge_cells("A2:D2")
-    ws["A2"] = f"PP International School — {date_str}"
+    ws["A2"] = f"PP International School - {date_str}"
     ws["A2"].font = Font(bold=True, size=11)
-
-    # Compute overall campus headcount
-    teachers_detected = recon["trueface_identified"] + len(dvr_only)
-    total_people = teachers_detected + visitor_count
 
     r = 4
     summary_rows = [
-        ("════════ OVERALL CAMPUS HEADCOUNT ════════", "", None),
-        ("Total People Detected", total_people, light_blue_fill),
-        ("Gate Entries (IN)", recon["total_gate_in"], None),
-        ("Gate Exits (OUT)", recon["total_gate_out"], None),
+        ("LIVE OCCUPANCY (Unique People Inside)", "", None),
+        ("TOTAL INSIDE", total_inside, green_fill),
+        ("  Verified Staff Inside", len(staff_inside), light_blue_fill),
+        ("  Unknown / Visitors Inside", estimated_unknown_inside, orange_fill),
         ("", "", None),
-        ("════════ CATEGORY BREAKDOWN ════════", "", None),
-        ("Teachers / Staff", teachers_detected, None),
-        ("  — TrueFace Recognized", recon["trueface_identified"], None),
-        ("  — DVR Cameras Only", recon.get("dvr_sighted", 0), None),
-        ("Visitors / Parents / Vendors", visitor_count, orange_fill),
-        ("", "", None),
-        ("════════ VEHICLE COUNT ════════", "", None),
-        ("Vehicles IN", recon.get("vehicles_in", 0), light_blue_fill),
-        ("Vehicles OUT", recon.get("vehicles_out", 0), None),
+        ("VERIFIED STAFF INSIDE BY CATEGORY", "", None),
     ]
-    for vtype, vcount in sorted(recon.get("vehicle_types", {}).items()):
-        summary_rows.append((f"  — {vtype.title()}", vcount, None))
-    summary_rows += [
-        ("", "", None),
-        ("════════ STAFF CATEGORY BREAKDOWN ════════", "", None),
-    ]
-    # Insert category counts
-    for cat_name, cat_count in sorted(recon.get("category_counts", {}).items()):
+    for cat_name, cat_count in sorted(recon.get("staff_category_inside", {}).items()):
         summary_rows.append((f"  {cat_name}", cat_count, None))
     summary_rows += [
         ("", "", None),
-        ("════════ RECONCILIATION STATUS ════════", "", None),
-        ("✓ Fully Verified (TrueFace + DVR)", len(fully_verified), green_fill),
-        ("⚠ Entry Only (DVR — Not on TrueFace)", len(dvr_only), red_fill),
-        ("⚠ TrueFace Only (No DVR Sighting)", len(trueface_only), yellow_fill),
-        ("— Not Detected", len(absent), gray_fill),
+        ("EXITED", "", None),
+        ("  Verified Staff Exited", len(staff_exited), None),
+        ("  Unknown Exited", recon.get("estimated_unknown_out", 0), None),
+        ("", "", None),
+        ("ABSENT (Not Detected)", len(staff_absent), gray_fill),
+        ("", "", None),
+        ("RAW GATE DETECTIONS (not unique people)", "", None),
+        ("  Gate Detections IN", recon.get("raw_gate_in", 0), None),
+        ("  Gate Detections OUT", recon.get("raw_gate_out", 0), None),
+        ("  (Same person detected multiple times)", "", None),
+        ("", "", None),
+        ("VEHICLE COUNT", "", None),
+        ("  Vehicles IN", recon.get("vehicles_in", 0), light_blue_fill),
+        ("  Vehicles OUT", recon.get("vehicles_out", 0), None),
+    ]
+    for vtype, vcount in sorted(recon.get("vehicle_types", {}).items()):
+        summary_rows.append((f"    {vtype.title()}", vcount, None))
+    summary_rows += [
+        ("", "", None),
+        ("STAFF RECONCILIATION", "", None),
+        ("  Fully Verified (TrueFace + DVR)", len(fully_verified), green_fill),
+        ("  Entry Only (DVR - Not on TrueFace)", len(dvr_only), red_fill),
+        ("  TrueFace Only (No DVR Sighting)", len(trueface_only), yellow_fill),
+        ("  Not Detected", len(absent), gray_fill),
     ]
     for label, value, fill in summary_rows:
         ws.cell(row=r, column=1, value=label).font = Font(bold=True)
@@ -833,17 +886,16 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ws.column_dimensions["A"].width = 42
     ws.column_dimensions["B"].width = 15
 
-    # ── Sheet 2: Verified Movements ──
-    ws2 = wb.create_sheet("Verified Movements")
+    # ── Sheet 2: Staff Detail (with occupancy status) ──
+    ws2 = wb.create_sheet("Staff Detail")
 
-    ws2.merge_cells("A1:H1")
-    ws2["A1"] = f"════════ VERIFIED MOVEMENTS — {date_str} ════════"
+    ws2.merge_cells("A1:I1")
+    ws2["A1"] = f"STAFF DETAIL - {date_str}"
     ws2["A1"].font = Font(bold=True, size=14)
 
     headers2 = [
-        "#", "Name", "Category", "Status",
-        "Entry Gate (DVR)", "TrueFace 3000", "Cameras Seen",
-        "Wearing",
+        "#", "Name", "Category", "Status", "Occupancy",
+        "Arrived", "Departed", "Cameras Seen", "Wearing",
     ]
     for col, h in enumerate(headers2, 1):
         cell = ws2.cell(row=3, column=col, value=h)
@@ -853,10 +905,10 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
     r = 4
-    for i, t in enumerate(teacher_detail, 1):
+    for i, t in enumerate(staff_detail, 1):
         ws2.cell(row=r, column=1, value=i).border = border
         ws2.cell(row=r, column=2, value=t["name"]).border = border
-        ws2.cell(row=r, column=3, value=_normalize_category(t.get("category", "staff"))).border = border
+        ws2.cell(row=r, column=3, value=t.get("category", "Staff")).border = border
 
         status_cell = ws2.cell(row=r, column=4, value=t["status"])
         status_cell.border = border
@@ -869,26 +921,30 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         else:
             status_cell.fill = gray_fill
 
-        dvr_info = t.get("dvr_first_seen", "—") or "—"
-        if t.get("dvr_last_seen") and t["dvr_last_seen"] != t.get("dvr_first_seen"):
-            dvr_info += f" → {t['dvr_last_seen']}"
-        ws2.cell(row=r, column=5, value=dvr_info).border = border
+        occ = t.get("occupancy_status", "ABSENT")
+        occ_cell = ws2.cell(row=r, column=5, value=occ)
+        occ_cell.border = border
+        if occ == "INSIDE":
+            occ_cell.fill = green_fill
+        elif occ == "EXITED":
+            occ_cell.fill = light_blue_fill
+        else:
+            occ_cell.fill = gray_fill
 
-        tf_info = "Recognized" if t["trueface_present"] else "Not Marked"
-        if t.get("trueface_arrival"):
-            tf_info = f"Recognized ({t['trueface_arrival']})"
-        ws2.cell(row=r, column=6, value=tf_info).border = border
-
+        ws2.cell(row=r, column=6,
+                 value=t.get("trueface_arrival") or t.get("dvr_first_seen") or "-").border = border
         ws2.cell(row=r, column=7,
-                 value=", ".join(t.get("dvr_cameras", [])) or "—").border = border
+                 value=t.get("trueface_departure") or "-").border = border
+        ws2.cell(row=r, column=8,
+                 value=", ".join(t.get("dvr_cameras", [])) or "-").border = border
 
-        outfit_cell = ws2.cell(row=r, column=8, value=t.get("outfit_summary", "—"))
+        outfit_cell = ws2.cell(row=r, column=9, value=t.get("outfit_summary", "-"))
         outfit_cell.border = border
         outfit_cell.alignment = Alignment(wrap_text=True)
         r += 1
 
-    for col_letter, w in [("A", 5), ("B", 25), ("C", 10), ("D", 22),
-                           ("E", 20), ("F", 22), ("G", 35), ("H", 30)]:
+    for col_letter, w in [("A", 5), ("B", 25), ("C", 18), ("D", 22),
+                           ("E", 12), ("F", 14), ("G", 14), ("H", 35), ("I", 30)]:
         ws2.column_dimensions[col_letter].width = w
 
     # ── Sheet 3: Sighting Timeline ──
@@ -908,9 +964,9 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     # Collect all sightings and sort chronologically
     all_sightings = []
-    for t in teacher_detail:
+    for t in staff_detail:
         for det in t.get("dvr_sighting_details", []):
-            all_sightings.append({"name": t["name"], "category": _normalize_category(t.get("category", "staff")), **det})
+            all_sightings.append({"name": t["name"], "category": t.get("category", "Staff"), **det})
     all_sightings.sort(key=lambda x: x.get("time", ""))
 
     r = 4
@@ -996,70 +1052,91 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
                            ("E", 14), ("F", 14), ("G", 25), ("H", 14)]:
         ws4.column_dimensions[col_letter].width = w
 
-    # ── Sheet 5: Visitors ──
-    ws5 = wb.create_sheet("Visitors")
+    # ── Sheet 5: Unknown / Unregistered People ──
+    ws5 = wb.create_sheet("Unknown Persons")
 
-    ws5.merge_cells("A1:D1")
-    ws5["A1"] = f"════════ VISITOR TRACKING — {date_str} ════════"
+    ws5.merge_cells("A1:F1")
+    ws5["A1"] = f"UNKNOWN / UNREGISTERED PEOPLE - {date_str}"
     ws5["A1"].font = Font(bold=True, size=14)
 
-    ws5["A3"] = "Total Visitors / Unknown Persons"
+    ws5["A3"] = "Estimated Unknown Entered"
     ws5["A3"].font = Font(bold=True)
     ws5["A3"].border = border
-    ws5["A3"].fill = orange_fill
-    ws5["B3"] = visitor_count
+    ws5["B3"] = recon.get("estimated_unknown_in", 0)
     ws5["B3"].font = Font(bold=True, size=14)
     ws5["B3"].border = border
     ws5["B3"].fill = orange_fill
 
+    ws5["A4"] = "Estimated Unknown Exited"
+    ws5["A4"].font = Font(bold=True)
+    ws5["A4"].border = border
+    ws5["B4"] = recon.get("estimated_unknown_out", 0)
+    ws5["B4"].font = Font(bold=True, size=12)
+    ws5["B4"].border = border
+
+    ws5["A5"] = "Estimated Unknown INSIDE"
+    ws5["A5"].font = Font(bold=True)
+    ws5["A5"].border = border
+    ws5["A5"].fill = orange_fill
+    ws5["B5"] = estimated_unknown_inside
+    ws5["B5"].font = Font(bold=True, size=14)
+    ws5["B5"].border = border
+    ws5["B5"].fill = orange_fill
+
+    # Unknown person detail table
+    r = 7
+    ws5.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
+    title_cell = ws5.cell(row=r, column=1, value=f"Unknown Person Log ({len(unknown_persons)} entries)")
+    title_cell.font = Font(bold=True, size=12, color="FFFFFF")
+    title_cell.fill = header_fill
+    title_cell.border = border
+
+    r += 1
+    for col, h in enumerate(["ID", "Time", "Camera", "Direction", "Status"], 1):
+        cell = ws5.cell(row=r, column=col, value=h)
+        cell.font = Font(bold=True)
+        cell.fill = light_blue_fill
+        cell.border = border
+
+    for u in unknown_persons[:50]:
+        r += 1
+        ws5.cell(row=r, column=1, value=u["id"]).border = border
+        ws5.cell(row=r, column=2, value=u.get("time", "-")).border = border
+        ws5.cell(row=r, column=3, value=u.get("camera", "-")).border = border
+        ws5.cell(row=r, column=4, value=u.get("direction", "IN")).border = border
+        status_cell = ws5.cell(row=r, column=5, value=u.get("status", "INSIDE"))
+        status_cell.border = border
+        if u.get("status") == "INSIDE":
+            status_cell.fill = orange_fill
+        elif u.get("status") == "EXITED":
+            status_cell.fill = light_blue_fill
+
     # Camera breakdown
-    cam_row = 5
-    ws5.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=3)
-    cam_title = ws5.cell(row=cam_row, column=1, value="Visitors by Camera")
+    r += 2
+    ws5.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+    cam_title = ws5.cell(row=r, column=1, value="Detections by Camera")
     cam_title.font = Font(bold=True, size=12, color="FFFFFF")
     cam_title.fill = header_fill
     cam_title.border = border
 
-    cam_row += 1
+    r += 1
     for col, h in enumerate(["Camera", "Count"], 1):
-        cell = ws5.cell(row=cam_row, column=col, value=h)
+        cell = ws5.cell(row=r, column=col, value=h)
         cell.font = Font(bold=True)
         cell.fill = light_blue_fill
         cell.border = border
 
     for cam_name in sorted(visitor_by_camera.keys()):
         cam_visitors = visitor_by_camera[cam_name]
-        cam_row += 1
-        ws5.cell(row=cam_row, column=1, value=cam_name).border = border
-        ws5.cell(row=cam_row, column=2, value=len(cam_visitors)).border = border
-
-    # Visitor timeline
-    cam_row += 2
-    ws5.merge_cells(start_row=cam_row, start_column=1, end_row=cam_row, end_column=3)
-    tl = ws5.cell(row=cam_row, column=1,
-                  value=f"Visitor Timeline ({len(visitor_sightings)} sightings)")
-    tl.font = Font(bold=True, size=12, color="FFFFFF")
-    tl.fill = header_fill
-    tl.border = border
-
-    cam_row += 1
-    for col, h in enumerate(["#", "Time", "Camera"], 1):
-        cell = ws5.cell(row=cam_row, column=col, value=h)
-        cell.font = Font(bold=True)
-        cell.fill = light_blue_fill
-        cell.border = border
-
-    for idx, v in enumerate(visitor_sightings, 1):
-        cam_row += 1
-        ws5.cell(row=cam_row, column=1, value=idx).border = border
-        ts = v.get("timestamp", "")
-        time_part = ts.split(" ")[1] if " " in ts else ts
-        ws5.cell(row=cam_row, column=2, value=time_part).border = border
-        ws5.cell(row=cam_row, column=3, value=v.get("camera", "")).border = border
+        r += 1
+        ws5.cell(row=r, column=1, value=cam_name).border = border
+        ws5.cell(row=r, column=2, value=len(cam_visitors)).border = border
 
     ws5.column_dimensions["A"].width = 30
     ws5.column_dimensions["B"].width = 15
     ws5.column_dimensions["C"].width = 40
+    ws5.column_dimensions["D"].width = 12
+    ws5.column_dimensions["E"].width = 12
 
     # ── Sheet 6: Outfit Reconciliation ──
     ws6 = wb.create_sheet("Outfit Reconciliation")
@@ -1078,13 +1155,12 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     r = 4
     idx = 0
-    for t in teacher_detail:
+    for t in staff_detail:
         outfit_obs = t.get("outfit_observations", [])
         if not outfit_obs:
             continue
         idx += 1
-        # Aggregate outfits
-        outfit_desc = t.get("outfit_summary", "—")
+        outfit_desc = t.get("outfit_summary", "-")
         cam_set = set()
         for obs in outfit_obs:
             if obs.get("camera"):
@@ -1137,12 +1213,12 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     r = 4
     # Show time trail for detected persons only
-    detected = [t for t in teacher_detail if t.get("time_trail")]
+    detected = [t for t in staff_detail if t.get("time_trail")]
     for t in detected:
         # Person header row
         ws8.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
         person_cell = ws8.cell(row=r, column=1,
-                               value=f"{t['name']} — {_normalize_category(t.get('category', 'staff'))}")
+                               value=f"{t['name']} - {t.get('category', 'Staff')}")
         person_cell.font = Font(bold=True, size=10)
         person_cell.fill = light_blue_fill
         person_cell.border = border
@@ -1150,7 +1226,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         for idx, trail in enumerate(t["time_trail"], 1):
             ws8.cell(row=r, column=1, value=idx).border = border
             ws8.cell(row=r, column=2, value=t["name"]).border = border
-            ws8.cell(row=r, column=3, value=_normalize_category(t.get("category", "staff"))).border = border
+            ws8.cell(row=r, column=3, value=t.get("category", "Staff")).border = border
             ws8.cell(row=r, column=4, value=trail.get("time", "")).border = border
             ws8.cell(row=r, column=5, value=trail.get("source", "")).border = border
             ws8.cell(row=r, column=6, value=trail.get("event", "")).border = border
@@ -1298,37 +1374,44 @@ def _generate_ai_observations(recon: dict) -> list[str]:
     """Generate AI-powered observations from the reconciliation data."""
     observations = []
     side_by_side = recon.get("side_by_side", {})
-    teacher_detail = recon.get("teacher_detail", [])
-    visitor_count = recon.get("visitor_count", 0)
-    visitor_sightings = recon.get("visitor_sightings", [])
+    staff_detail = recon.get("staff_detail", recon.get("teacher_detail", []))
+    unknown_inside = recon.get("estimated_unknown_inside", 0)
 
     dvr_only = side_by_side.get("dvr_only", [])
     trueface_only = side_by_side.get("trueface_only", [])
     fully_verified = side_by_side.get("both_present", [])
     absent = side_by_side.get("neither", [])
 
-    # Unrecognized / mismatched alerts
+    total_inside = recon.get("total_inside", 0)
+    staff_inside = recon.get("staff_inside", 0)
+
+    # Occupancy summary
+    observations.append(
+        f"LIVE OCCUPANCY: {total_inside} unique people inside campus "
+        f"({staff_inside} verified staff + {unknown_inside} unknown/visitors)."
+    )
+
     if dvr_only:
         observations.append(
-            f"{len(dvr_only)} teacher(s) seen on DVR cameras but NOT marked "
+            f"{len(dvr_only)} staff seen on DVR cameras but NOT marked "
             f"on TrueFace 3000. They may have bypassed facial recognition."
         )
     if trueface_only:
         observations.append(
-            f"{len(trueface_only)} teacher(s) marked on TrueFace but NOT spotted "
+            f"{len(trueface_only)} staff marked on TrueFace but NOT spotted "
             f"on any DVR camera. Possible camera blind spot or delayed sync."
         )
 
-    # Visitor alerts
-    if visitor_count > 0:
+    if unknown_inside > 0:
         observations.append(
-            f"{visitor_count} unknown person(s) / visitor(s) detected on gate/reception cameras."
+            f"{unknown_inside} unregistered/unknown person(s) estimated inside campus. "
+            f"These could be parents, vendors, or visitors."
         )
 
-    # Crowd density analysis from sighting timeline
+    # Peak activity
     from collections import Counter
     hourly_counts: Counter = Counter()
-    for t in teacher_detail:
+    for t in staff_detail:
         for det in t.get("dvr_sighting_details", []):
             time_str = det.get("time", "")
             if time_str and len(time_str) >= 2:
@@ -1341,30 +1424,24 @@ def _generate_ai_observations(recon: dict) -> list[str]:
     if hourly_counts:
         peak_hour = hourly_counts.most_common(1)[0]
         observations.append(
-            f"Peak activity at {peak_hour[0]:02d}:00 hour with {peak_hour[1]} DVR sightings."
+            f"Peak DVR activity at {peak_hour[0]:02d}:00 hour with {peak_hour[1]} sightings."
         )
 
-    # Attendance summary
-    total = recon.get("total_registered_teachers", 0)
+    # Staff detection rate
+    total = recon.get("total_registered", recon.get("total_registered_teachers", 0))
     if total > 0:
         present = len(fully_verified) + len(trueface_only) + len(dvr_only)
         rate = round(present / total * 100, 1)
         observations.append(
-            f"Staff/teacher detection rate: {rate}% ({present} detected out of {total})."
+            f"Staff detection rate: {rate}% ({present} detected out of {total} registered)."
         )
-        if len(absent) > 10:
-            observations.append(
-                f"{len(absent)} staff not detected on any system today."
-            )
 
-    # Outfit tracking completeness
-    outfit_tracked = sum(1 for t in teacher_detail
-                         if t.get("outfit_observations"))
-    dvr_seen = sum(1 for t in teacher_detail if t.get("dvr_seen"))
-    if dvr_seen > 0:
+    # Raw vs unique clarification
+    raw_in = recon.get("raw_gate_in", 0)
+    if raw_in > 0:
         observations.append(
-            f"Outfit/clothing tracked for {outfit_tracked} of {dvr_seen} "
-            f"DVR-detected staff."
+            f"Raw gate detections: {raw_in} IN, {recon.get('raw_gate_out', 0)} OUT. "
+            f"These are NOT unique people counts - same person can trigger multiple detections."
         )
 
     if not observations:
@@ -1486,22 +1563,31 @@ def _add_snapshot_gallery(pdf, recon: dict, section_header):
 
 def _generate_reconciliation_pdf(recon: dict, date_display: str,
                                   time_display: str) -> bytes:
-    """Generate a professionally formatted PDF reconciliation report."""
+    """Generate a professionally formatted PDF reconciliation report.
+
+    New architecture:
+      - LIVE OCCUPANCY (unique people inside, not raw detections)
+      - VERIFIED STAFF INSIDE (by category: Teachers, Admin, Security, Support)
+      - UNKNOWN / VISITOR INSIDE (with UNKNOWN-001 IDs and snapshots)
+      - Staff & unknown exited counts
+    """
     from fpdf import FPDF
 
+    staff_detail = recon.get("staff_detail", recon.get("teacher_detail", []))
     side_by_side = recon.get("side_by_side", {})
-    teacher_detail = recon.get("teacher_detail", [])
-    visitor_count = recon.get("visitor_count", 0)
-    visitor_sightings = recon.get("visitor_sightings", [])
-    visitor_by_camera = recon.get("visitor_by_camera", {})
+    unknown_persons = recon.get("unknown_persons", [])
+
+    staff_inside = [s for s in staff_detail if s.get("occupancy_status") == "INSIDE"]
+    staff_exited = [s for s in staff_detail if s.get("occupancy_status") == "EXITED"]
+    staff_absent = [s for s in staff_detail if s.get("occupancy_status") == "ABSENT"]
+    staff_present = [s for s in staff_detail if s.get("occupancy_status") in ("INSIDE", "EXITED")]
 
     fully_verified = side_by_side.get("both_present", [])
     trueface_only = side_by_side.get("trueface_only", [])
     dvr_only = side_by_side.get("dvr_only", [])
-    absent = side_by_side.get("neither", [])
 
-    teachers_detected = recon["trueface_identified"] + len(dvr_only)
-    total_people = teachers_detected + visitor_count
+    total_inside = recon.get("total_inside", 0)
+    estimated_unknown_inside = recon.get("estimated_unknown_inside", 0)
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -1510,7 +1596,6 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     _orig_cell = pdf.cell
 
     def _safe_cell(*args, **kwargs):
-        """Auto-sanitize text for Helvetica (latin-1) compatibility."""
         new_args = list(args)
         for i, a in enumerate(new_args):
             if isinstance(a, str):
@@ -1551,22 +1636,109 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
         pdf.cell(120, 7, f"  {label}", border=1, fill=True, new_x="RIGHT")
         pdf.cell(30, 7, str(count), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
 
-    # ── Overall Campus Headcount ──
-    section_header("OVERALL CAMPUS HEADCOUNT")
-    key_value("Total People Detected", total_people, bold_val=True)
-    key_value("Gate Entries (IN)", recon["total_gate_in"])
-    key_value("Gate Exits (OUT)", recon["total_gate_out"])
+    # ══════════════════════════════════════════════
+    # SECTION 1: LIVE OCCUPANCY (unique people inside)
+    # ══════════════════════════════════════════════
+    section_header("LIVE OCCUPANCY (Unique People Currently Inside)")
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(0, 100, 0)
+    pdf.cell(0, 10, f"TOTAL INSIDE: {total_inside}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(2)
+    key_value("Verified Staff Inside", len(staff_inside), bold_val=True)
+    key_value("Unknown / Visitors Inside", estimated_unknown_inside, bold_val=True)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5, f"Note: Raw gate detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)} (same person may be detected multiple times across cameras)", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
-    # ── Category Breakdown ──
-    section_header("CATEGORY BREAKDOWN")
-    key_value("Teachers / Staff", teachers_detected, bold_val=True)
-    key_value("TrueFace Recognized", recon["trueface_identified"], indent=1)
-    key_value("DVR Cameras Only", recon.get("dvr_sighted", 0), indent=1)
-    key_value("Visitors / Parents / Vendors", visitor_count, bold_val=True)
+    # ══════════════════════════════════════════════
+    # SECTION 2: VERIFIED STAFF INSIDE (by category)
+    # ══════════════════════════════════════════════
+    section_header("VERIFIED STAFF INSIDE")
+    staff_cat_inside = recon.get("staff_category_inside", {})
+    if staff_cat_inside:
+        for cat_name in sorted(staff_cat_inside.keys()):
+            key_value(cat_name, staff_cat_inside[cat_name], indent=1)
+    key_value("Total Verified Staff Inside", len(staff_inside), bold_val=True)
     pdf.ln(2)
 
-    # Vehicle count
+    # Staff inside table
+    if staff_inside:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(198, 239, 206)
+        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(55, 7, "Name", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(35, 7, "Category", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(25, 7, "Arrived", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(25, 7, "Status", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Cameras", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for idx, s in enumerate(staff_inside, 1):
+            arrival = s.get("trueface_arrival") or s.get("dvr_first_seen") or "-"
+            cams = ", ".join(s.get("dvr_cameras", [])[:3]) or "-"
+            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
+            pdf.cell(55, 6, s["name"], border=1, new_x="RIGHT")
+            pdf.cell(35, 6, s["category"], border=1, new_x="RIGHT")
+            pdf.cell(25, 6, arrival, border=1, align="C", new_x="RIGHT")
+            pdf.cell(25, 6, "INSIDE", border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, cams, border=1, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 3: VERIFIED STAFF EXITED
+    # ══════════════════════════════════════════════
+    if staff_exited:
+        section_header("VERIFIED STAFF EXITED")
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(217, 226, 243)
+        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(55, 7, "Name", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(35, 7, "Category", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(25, 7, "Arrived", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(25, 7, "Departed", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Status", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for idx, s in enumerate(staff_exited, 1):
+            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
+            pdf.cell(55, 6, s["name"], border=1, new_x="RIGHT")
+            pdf.cell(35, 6, s["category"], border=1, new_x="RIGHT")
+            pdf.cell(25, 6, s.get("trueface_arrival") or "-", border=1, align="C", new_x="RIGHT")
+            pdf.cell(25, 6, s.get("trueface_departure") or "-", border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, "EXITED", border=1, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 4: UNKNOWN / UNREGISTERED PEOPLE
+    # ══════════════════════════════════════════════
+    section_header("UNKNOWN / UNREGISTERED PEOPLE")
+    key_value("Estimated Unknown Entered", recon.get("estimated_unknown_in", 0), bold_val=True)
+    key_value("Estimated Unknown Exited", recon.get("estimated_unknown_out", 0))
+    key_value("Estimated Unknown Inside", estimated_unknown_inside, bold_val=True)
+    pdf.ln(2)
+
+    if unknown_persons:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(255, 235, 156)
+        pdf.cell(28, 7, "ID", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(25, 7, "Time", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(50, 7, "Camera", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(20, 7, "Dir", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Status", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for u in unknown_persons[:30]:
+            pdf.cell(28, 6, u["id"], border=1, new_x="RIGHT")
+            pdf.cell(25, 6, u.get("time", "-"), border=1, align="C", new_x="RIGHT")
+            pdf.cell(50, 6, u.get("camera", "-"), border=1, new_x="RIGHT")
+            pdf.cell(20, 6, u.get("direction", "IN"), border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, u.get("status", "INSIDE"), border=1, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 5: VEHICLE COUNT
+    # ══════════════════════════════════════════════
     vehicles_in = recon.get("vehicles_in", 0)
     vehicles_out = recon.get("vehicles_out", 0)
     vehicle_types = recon.get("vehicle_types", {})
@@ -1578,103 +1750,44 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
             key_value(vtype.title(), vcount, indent=1)
         pdf.ln(2)
 
-    # Staff categories
-    category_counts = recon.get("category_counts", {})
-    if category_counts:
-        section_header("STAFF CATEGORY BREAKDOWN")
-        for cat_name in sorted(category_counts.keys()):
-            key_value(cat_name, category_counts[cat_name], indent=1)
-    pdf.ln(3)
-
-    # ── Teacher Reconciliation ──
-    section_header("TEACHER RECONCILIATION")
+    # ══════════════════════════════════════════════
+    # SECTION 6: STAFF RECONCILIATION
+    # ══════════════════════════════════════════════
+    section_header("STAFF RECONCILIATION")
     status_row("Fully Verified (TrueFace + DVR)", len(fully_verified), 198, 239, 206)
     status_row("Entry Only (DVR - Not on TrueFace)", len(dvr_only), 255, 199, 206)
     status_row("TrueFace Only (No DVR Sighting)", len(trueface_only), 255, 235, 156)
-    status_row("Not Detected", len(absent), 217, 217, 217)
-    pdf.ln(5)
+    status_row("Not Detected / Absent", len(staff_absent), 217, 217, 217)
+    pdf.ln(3)
 
-    # ── Verified Movements ──
-    if fully_verified:
-        section_header("VERIFIED MOVEMENTS")
-        for t in fully_verified:
-            cams = ", ".join(t.get("dvr_cameras", []))
-            outfit = t.get("outfit_summary", "") or "-"
-            pdf.set_font("Helvetica", "B", 10)
-            cat = _normalize_category(t.get('category', 'staff'))
-            pdf.cell(0, 6, f"{t['name']} - {cat}", new_x="LMARGIN", new_y="NEXT")
-            pdf.set_font("Helvetica", "", 9)
-            pdf.cell(0, 5, f"    Entry Gate: {t.get('dvr_first_seen', '-')}  |  TrueFace: Recognized ({t.get('trueface_arrival', '-')})", new_x="LMARGIN", new_y="NEXT")
-            pdf.cell(0, 5, f"    Cameras: {cams}  |  Wearing: {outfit}", new_x="LMARGIN", new_y="NEXT")
-            pdf.ln(2)
+    # Staff category breakdown
+    staff_cat_present = recon.get("staff_category_present", {})
+    if staff_cat_present:
+        section_header("STAFF CATEGORY BREAKDOWN (Present)")
+        for cat_name in sorted(staff_cat_present.keys()):
+            key_value(cat_name, staff_cat_present[cat_name], indent=1)
+        pdf.ln(3)
 
-    # ── Entry Only (DVR but not TrueFace) ──
+    # ══════════════════════════════════════════════
+    # SECTION 7: ENTRY WITHOUT ATTENDANCE (alerts)
+    # ══════════════════════════════════════════════
     if dvr_only:
         section_header("ENTRY ONLY (DVR - NOT MARKED ON TRUEFACE)")
         for t in dvr_only:
             cams = ", ".join(t.get("dvr_cameras", []))
-            outfit = t.get("outfit_summary", "") or "-"
             pdf.set_font("Helvetica", "B", 10)
-            cat = _normalize_category(t.get('category', 'staff'))
-            pdf.cell(0, 6, f"{t['name']} - {cat}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 6, f"{t['name']} - {t.get('category', 'Staff')}", new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("Helvetica", "", 9)
-            pdf.cell(0, 5, f"    DVR: {t.get('dvr_first_seen', '-')}  |  Cameras: {cams}  |  Wearing: {outfit}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, f"    DVR: {t.get('dvr_first_seen', '-')}  |  Cameras: {cams}", new_x="LMARGIN", new_y="NEXT")
             pdf.set_text_color(200, 0, 0)
             pdf.cell(0, 5, "    NOT marked on TrueFace 3000", new_x="LMARGIN", new_y="NEXT")
             pdf.set_text_color(0, 0, 0)
             pdf.ln(2)
 
-    # ── TrueFace Only ──
-    if trueface_only:
-        section_header("TRUEFACE ONLY (No DVR Sighting)")
-        # Table header
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(217, 226, 243)
-        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(60, 7, "Name", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(30, 7, "TrueFace Time", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Note", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-
-        pdf.set_font("Helvetica", "", 9)
-        for idx, t in enumerate(trueface_only, 1):
-            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
-            pdf.cell(60, 6, t["name"], border=1, new_x="RIGHT")
-            pdf.cell(30, 6, t.get("trueface_arrival") or "-", border=1, align="C", new_x="RIGHT")
-            pdf.cell(0, 6, "Not on DVR", border=1, new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(5)
-
-    # ── Visitor Tracking ──
-    section_header("VISITOR TRACKING")
-    key_value("Total Visitors / Unknown Persons", visitor_count, bold_val=True)
-    if visitor_by_camera:
-        pdf.ln(2)
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(217, 226, 243)
-        pdf.cell(100, 7, "Camera", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(30, 7, "Count", border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 9)
-        for cam_name in sorted(visitor_by_camera.keys()):
-            pdf.cell(100, 6, cam_name, border=1, new_x="RIGHT")
-            pdf.cell(30, 6, str(len(visitor_by_camera[cam_name])), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
-
-    if visitor_sightings:
-        pdf.ln(3)
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(217, 226, 243)
-        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(30, 7, "Time", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Camera", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 9)
-        for idx, v in enumerate(visitor_sightings, 1):
-            ts = v.get("timestamp", "")
-            time_part = ts.split(" ")[1] if " " in ts else ts
-            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
-            pdf.cell(30, 6, time_part, border=1, align="C", new_x="RIGHT")
-            pdf.cell(0, 6, v.get("camera", ""), border=1, new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(5)
-
-    # ── Outfit Reconciliation ──
-    dvr_with_outfits = [t for t in teacher_detail
+    # ══════════════════════════════════════════════
+    # SECTION 8: OUTFIT RECONCILIATION
+    # ══════════════════════════════════════════════
+    dvr_with_outfits = [t for t in staff_detail
                         if t.get("dvr_seen") and t.get("outfit_observations")]
     if dvr_with_outfits:
         section_header("OUTFIT RECONCILIATION")
@@ -1700,11 +1813,11 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
         pdf.ln(5)
 
     # ── Time Trail (top 10 detected persons) ──
-    detected_with_trail = [t for t in teacher_detail if t.get("time_trail")]
+    detected_with_trail = [t for t in staff_detail if t.get("time_trail")]
     if detected_with_trail:
         section_header("TIME TRAIL RECONSTRUCTION")
         for t in detected_with_trail[:15]:
-            cat = _normalize_category(t.get('category', 'staff'))
+            cat = t.get('category', 'Staff')
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_fill_color(217, 226, 243)
             pdf.cell(0, 6, f"{t['name']} ({cat})", fill=True, new_x="LMARGIN", new_y="NEXT")
@@ -1792,24 +1905,24 @@ async def send_reconciliation_report():
         await db.close()
 
     side_by_side = recon.get("side_by_side", {})
-    visitor_count = recon.get("visitor_count", 0)
-    if recon["trueface_identified"] == 0 and recon.get("dvr_sighted", 0) == 0 and visitor_count == 0:
-        logger.info("[GATE] No TrueFace, DVR, or visitor records for %s — skipping report", today)
+    if recon["trueface_identified"] == 0 and recon.get("dvr_sighted", 0) == 0 and recon.get("raw_gate_in", 0) == 0:
+        logger.info("[GATE] No TrueFace, DVR, or gate records for %s — skipping report", today)
         return
 
     # Generate Excel
     xlsx_bytes = _generate_reconciliation_excel(recon)
     filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.xlsx"
 
-    # Build counts
+    # Build counts from new architecture
+    total_inside = recon.get("total_inside", 0)
+    staff_inside_count = recon.get("staff_inside", 0)
+    unknown_inside = recon.get("estimated_unknown_inside", 0)
+    staff_exited_count = recon.get("staff_exited", 0)
+
     fully_verified = side_by_side.get("both_present", [])
     tf_only_list = side_by_side.get("trueface_only", [])
     dvr_only_list = side_by_side.get("dvr_only", [])
     absent_list = side_by_side.get("neither", [])
-    teacher_detail = recon.get("teacher_detail", [])
-
-    teachers_detected = recon["trueface_identified"] + len(dvr_only_list)
-    total_people = teachers_detected + visitor_count
 
     # Generate PDF report
     pdf_bytes = _generate_reconciliation_pdf(recon, today_display, time_display)
@@ -1827,19 +1940,29 @@ async def send_reconciliation_report():
             vehicle_line += f" ({type_parts})"
         vehicle_line += "\n"
 
-    # Brief email body (full report is in the PDF)
+    # Staff category breakdown for email
+    staff_cat = recon.get("staff_category_inside", {})
+    cat_lines = "\n".join(f"  {cat}: {cnt}" for cat, cnt in sorted(staff_cat.items()))
+    if cat_lines:
+        cat_lines = f"\n{cat_lines}\n"
+
+    # Brief email body using occupancy-based architecture
     body = (
         f"School Headcount Reconciliation — {today_display} at {time_display} IST\n\n"
-        f"Total People Detected: {total_people}\n"
-        f"Teachers / Staff: {teachers_detected}\n"
-        f"Visitors / Parents / Vendors: {visitor_count}\n"
+        f"LIVE OCCUPANCY (Unique People Inside): {total_inside}\n"
+        f"  Verified Staff Inside: {staff_inside_count}\n"
+        f"  Unknown / Visitors Inside: {unknown_inside}\n"
+        f"{cat_lines}"
+        f"\nVerified Staff Exited: {staff_exited_count}\n"
+        f"Raw Gate Detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)}\n"
+        f"(Note: raw detections != unique people — same person detected multiple times)\n"
         f"{vehicle_line}\n"
-        f"Fully Verified: {len(fully_verified)} | "
-        f"TrueFace Only: {len(tf_only_list)} | "
-        f"DVR Only: {len(dvr_only_list)} | "
-        f"Not Detected: {len(absent_list)}\n\n"
+        f"Staff Reconciliation: Verified={len(fully_verified)} | "
+        f"TrueFace Only={len(tf_only_list)} | "
+        f"DVR Only={len(dvr_only_list)} | "
+        f"Absent={len(absent_list)}\n\n"
         f"See attached PDF for the full detailed report.\n\n"
-        f"— PPIS Headcount Reconciliation & Entry Monitoring System"
+        f"-- PPIS Headcount Reconciliation & Entry Monitoring System"
     )
 
     from app.services.email_service import send_email_async
@@ -1858,8 +1981,8 @@ async def send_reconciliation_report():
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
 
     logger.info(
-        "[GATE] Reconciliation report sent at %s: People=%d, Teachers=%d, Visitors=%d, Verified=%d",
-        time_display, total_people, teachers_detected, visitor_count,
+        "[GATE] Reconciliation report sent at %s: Inside=%d, Staff=%d, Unknown=%d, Verified=%d",
+        time_display, total_inside, staff_inside_count, unknown_inside,
         len(fully_verified),
     )
 
