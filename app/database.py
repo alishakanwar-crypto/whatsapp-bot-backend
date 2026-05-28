@@ -587,26 +587,31 @@ async def init_db():
         dvr_count = row[0] if row else 0
         logger.info(f"agent_dvrs count on startup: {dvr_count}")
 
-        if dvr_count == 0 and SEED_DVRS:
-            logger.info("agent_dvrs table is empty — auto-seeding DVRs")
-            try:
-                for dvr in SEED_DVRS:
-                    await db.execute(
-                        "INSERT INTO agent_dvrs (name, ip, port, username, password, channels) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            dvr.get("name", ""),
-                            dvr.get("ip", ""),
-                            dvr.get("port", 80),
-                            dvr.get("username", "admin"),
-                            dvr.get("password", ""),
-                            dvr.get("channels", 64),
-                        ),
-                    )
-                await db.commit()
-                logger.info(f"Auto-seeded {len(SEED_DVRS)} DVRs OK")
-            except Exception as e:
-                logger.error(f"Auto-seed DVRs failed: {e}", exc_info=True)
+        if SEED_DVRS:
+            cursor2 = await db.execute("SELECT ip FROM agent_dvrs")
+            existing_ips = {r[0] for r in await cursor2.fetchall()}
+            missing = [d for d in SEED_DVRS if d.get("ip", "") not in existing_ips]
+            if missing:
+                logger.info("Seeding %d missing DVR(s): %s",
+                            len(missing), [d["ip"] for d in missing])
+                try:
+                    for dvr in missing:
+                        await db.execute(
+                            "INSERT INTO agent_dvrs (name, ip, port, username, password, channels) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                dvr.get("name", ""),
+                                dvr.get("ip", ""),
+                                dvr.get("port", 80),
+                                dvr.get("username", "admin"),
+                                dvr.get("password", ""),
+                                dvr.get("channels", 64),
+                            ),
+                        )
+                    await db.commit()
+                    logger.info("Seeded %d DVR(s) OK", len(missing))
+                except Exception as e:
+                    logger.error(f"Auto-seed DVRs failed: {e}", exc_info=True)
 
         # --- Auto-seed camera mappings ---
         cursor = await db.execute("SELECT COUNT(*) FROM agent_camera_mapping")
