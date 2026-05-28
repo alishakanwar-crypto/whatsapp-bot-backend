@@ -30,6 +30,7 @@ All timestamps use IST (Asia/Kolkata, UTC+05:30).
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import logging
@@ -704,11 +705,34 @@ def _reconciliation_status(trueface_present: bool, dvr_seen: bool) -> str:
 # Unknown Person WhatsApp Alert
 # ============================================================
 
+def _generate_placeholder_image() -> str:
+    """Generate a small placeholder PNG as base64 for alerts without a snapshot."""
+    import struct
+    import zlib
+
+    width, height = 200, 200
+    raw = b""
+    for y in range(height):
+        raw += b"\x00"  # filter byte
+        for x in range(width):
+            raw += b"\xcc\xcc\xcc"  # light gray
+    compressed = zlib.compress(raw)
+
+    def _chunk(ctype: bytes, data: bytes) -> bytes:
+        c = ctype + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", compressed) + _chunk(b"IEND", b"")
+    return base64.b64encode(png).decode()
+
+
 async def _send_unknown_person_alert(entry: dict):
     """Send WhatsApp template alert with snapshot for an unrecognized person.
 
     Uses the 'unknown_person_detected' template (IMAGE header + body params)
     so alerts work outside the 24-hour conversation window.
+    Template requires an IMAGE header — uses placeholder if no crop available.
     Deduplicates by camera to avoid spam (one alert per camera per 60s).
     """
     import time
@@ -732,11 +756,11 @@ async def _send_unknown_person_alert(entry: dict):
             send_cloud_template_message,
         )
 
-        header_image_id = None
-        if person_crop:
-            header_image_id = await upload_base64_image_cloud(person_crop)
-            if not header_image_id:
-                logger.warning("[GATE] Failed to upload person crop for alert (camera=%s)", camera)
+        image_data = person_crop if person_crop else _generate_placeholder_image()
+        header_image_id = await upload_base64_image_cloud(image_data)
+        if not header_image_id:
+            logger.warning("[GATE] Failed to upload image for alert (camera=%s)", camera)
+            return
 
         sent = await send_cloud_template_message(
             to=UNKNOWN_ALERT_PHONE,
@@ -748,7 +772,7 @@ async def _send_unknown_person_alert(entry: dict):
 
         logger.info("[GATE] Unknown person alert → %s: %s (camera=%s, image=%s)",
                     UNKNOWN_ALERT_PHONE, "OK" if sent else "FAILED", camera,
-                    "yes" if header_image_id else "no")
+                    "yes" if person_crop else "placeholder")
     except Exception as e:
         logger.error("[GATE] Unknown person alert failed: %s (camera=%s)", e, camera)
 
