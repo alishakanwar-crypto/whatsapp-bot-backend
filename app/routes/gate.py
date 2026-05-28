@@ -1204,6 +1204,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     # ── Sheet 10: Snapshots ──
     import base64
     import tempfile
+    import os
     from openpyxl.drawing.image import Image as XlImage
 
     vehicle_entries = recon.get("vehicle_entries", [])
@@ -1211,9 +1212,11 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     vehicle_snaps = [v for v in vehicle_entries if v.get("snapshot")]
     person_snaps = [g for g in gate_crops if g.get("person_crop")]
 
+    # Keep temp files alive until after wb.save()
+    _tmp_files: list[str] = []
+
     if vehicle_snaps or person_snaps:
         ws10 = wb.create_sheet("Snapshots")
-        # Vehicle snapshots header
         r = 1
         for col, val in enumerate(["#", "Type", "Direction", "Time", "Camera", "Snapshot"], 1):
             c = ws10.cell(row=r, column=col, value=val)
@@ -1233,19 +1236,17 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
             time_part = ts.split(" ")[1] if " " in ts else ts
             ws10.cell(row=r, column=4, value=time_part).border = border
             ws10.cell(row=r, column=5, value=v.get("camera", "")).border = border
-            # Embed image
             try:
                 img_bytes = base64.b64decode(v["snapshot"])
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
+                _tmp_files.append(tmp_path)
                 img = XlImage(tmp_path)
                 img.width = 200
                 img.height = 130
                 ws10.add_image(img, f"F{r}")
                 ws10.row_dimensions[r].height = 100
-                import os
-                os.unlink(tmp_path)
             except Exception:
                 pass
             r += 1
@@ -1267,13 +1268,12 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
+                _tmp_files.append(tmp_path)
                 img = XlImage(tmp_path)
                 img.width = 120
                 img.height = 160
                 ws10.add_image(img, f"F{r}")
                 ws10.row_dimensions[r].height = 125
-                import os
-                os.unlink(tmp_path)
             except Exception:
                 pass
             r += 1
@@ -1283,6 +1283,14 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     buf = io.BytesIO()
     wb.save(buf)
+
+    # Clean up temp files after save
+    for tmp_path in _tmp_files:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
     return buf.getvalue()
 
 
