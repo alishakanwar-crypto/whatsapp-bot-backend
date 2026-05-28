@@ -52,6 +52,7 @@ REPORT_RECIPIENTS = os.environ.get(
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
+UNKNOWN_ALERT_TEMPLATE = "unknown_person_detected"
 
 # Dedup: max one unknown person alert per camera per 60-second window
 _unknown_alert_last: dict[str, float] = {}
@@ -704,9 +705,10 @@ def _reconciliation_status(trueface_present: bool, dvr_seen: bool) -> str:
 # ============================================================
 
 async def _send_unknown_person_alert(entry: dict):
-    """Send WhatsApp alert with snapshot for an unrecognized person.
+    """Send WhatsApp template alert with snapshot for an unrecognized person.
 
-    Includes: face/body crop image, camera source, timestamp, direction.
+    Uses the 'unknown_person_detected' template (IMAGE header + body params)
+    so alerts work outside the 24-hour conversation window.
     Deduplicates by camera to avoid spam (one alert per camera per 60s).
     """
     import time
@@ -724,33 +726,29 @@ async def _send_unknown_person_alert(entry: dict):
     direction = entry.get("direction", "IN")
     person_crop = entry.get("person_crop", "")
 
-    caption = (
-        f"⚠️ UNKNOWN PERSON DETECTED\n\n"
-        f"📍 Camera: {camera}\n"
-        f"🕐 Time: {ts}\n"
-        f"➡️ Direction: {direction}\n\n"
-        f"This person is NOT registered in the face database.\n"
-        f"Please verify identity."
-    )
-
     try:
-        from app.services.whatsapp_service import upload_base64_image_cloud, send_cloud_media, send_whatsapp_message
-        sent = False
+        from app.services.whatsapp_service import (
+            upload_base64_image_cloud,
+            send_cloud_template_message,
+        )
+
+        header_image_id = None
         if person_crop:
-            media_id = await upload_base64_image_cloud(person_crop)
-            if media_id:
-                sent = await send_cloud_media(
-                    UNKNOWN_ALERT_PHONE, "image",
-                    media_id=media_id, caption=caption,
-                )
-            else:
-                logger.warning("[GATE] Failed to upload person crop image for alert (camera=%s)", camera)
+            header_image_id = await upload_base64_image_cloud(person_crop)
+            if not header_image_id:
+                logger.warning("[GATE] Failed to upload person crop for alert (camera=%s)", camera)
 
-        if not sent:
-            sent = await send_whatsapp_message(UNKNOWN_ALERT_PHONE, caption)
+        sent = await send_cloud_template_message(
+            to=UNKNOWN_ALERT_PHONE,
+            template_name=UNKNOWN_ALERT_TEMPLATE,
+            language_code="en",
+            body_params=[camera, ts, direction],
+            header_image_id=header_image_id,
+        )
 
-        logger.info("[GATE] Unknown person alert → %s: %s (camera=%s)",
-                    UNKNOWN_ALERT_PHONE, "OK" if sent else "FAILED", camera)
+        logger.info("[GATE] Unknown person alert → %s: %s (camera=%s, image=%s)",
+                    UNKNOWN_ALERT_PHONE, "OK" if sent else "FAILED", camera,
+                    "yes" if header_image_id else "no")
     except Exception as e:
         logger.error("[GATE] Unknown person alert failed: %s (camera=%s)", e, camera)
 
@@ -2033,7 +2031,7 @@ async def trigger_reconciliation_report():
 
 @router.post("/api/gate/test-alert")
 async def test_unknown_person_alert():
-    """Send a test WhatsApp alert to verify the unknown person alert pipeline."""
+    """Send a test WhatsApp template alert to verify the unknown person alert pipeline."""
     test_entry = {
         "camera": "ENTRY GATE-1",
         "timestamp": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
@@ -2043,7 +2041,7 @@ async def test_unknown_person_alert():
     # Clear cooldown so the test alert always sends
     _unknown_alert_last.pop("ENTRY GATE-1", None)
     await _send_unknown_person_alert(test_entry)
-    return {"status": "sent", "phone": UNKNOWN_ALERT_PHONE}
+    return {"status": "sent", "phone": UNKNOWN_ALERT_PHONE, "template": UNKNOWN_ALERT_TEMPLATE}
 
 
 async def send_reconciliation_report():
