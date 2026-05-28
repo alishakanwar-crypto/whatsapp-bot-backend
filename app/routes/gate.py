@@ -100,7 +100,7 @@ def _deduplicate_gate_entries(entries: list[dict]) -> list[dict]:
                 is_dup = True
                 break
             # Different camera but same attire within window → likely same person
-            if prev.get("attire_color", "unknown") == attire and attire != "unknown":
+            if attire and attire != "unknown" and prev.get("attire_color", "unknown") == attire:
                 is_dup = True
                 break
 
@@ -774,12 +774,18 @@ async def receive_gate_entries(request: Request):
     finally:
         await db.close()
 
-    # Send WhatsApp alerts for entries at actual entry points with person crops
+    # Send WhatsApp alerts for unknown persons at entry points
+    alert_count = 0
     for entry in entries:
         cam_upper = entry.get("camera", "").upper()
         is_entry_cam = any(k in cam_upper for k in _ENTRY_CAMERA_KEYWORDS)
-        if entry.get("person_crop") and entry.get("direction", "IN") == "IN" and is_entry_cam:
+        has_crop = bool(entry.get("person_crop"))
+        is_inbound = entry.get("direction", "IN") == "IN"
+        if has_crop and is_inbound and is_entry_cam:
+            alert_count += 1
             asyncio.create_task(_send_unknown_person_alert(entry))
+    if alert_count:
+        logger.info("[GATE] Queued %d unknown person alert(s)", alert_count)
 
     logger.info("[GATE] Stored %d gate entry event(s)", count)
     return {"status": "ok", "stored": count}
@@ -2023,6 +2029,21 @@ async def trigger_reconciliation_report():
     """Manual trigger to send the reconciliation report immediately."""
     await send_reconciliation_report()
     return {"status": "sent"}
+
+
+@router.post("/api/gate/test-alert")
+async def test_unknown_person_alert():
+    """Send a test WhatsApp alert to verify the unknown person alert pipeline."""
+    test_entry = {
+        "camera": "ENTRY GATE-1",
+        "timestamp": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+        "direction": "IN",
+        "person_crop": "",
+    }
+    # Clear cooldown so the test alert always sends
+    _unknown_alert_last.pop("ENTRY GATE-1", None)
+    await _send_unknown_person_alert(test_entry)
+    return {"status": "sent", "phone": UNKNOWN_ALERT_PHONE}
 
 
 async def send_reconciliation_report():
