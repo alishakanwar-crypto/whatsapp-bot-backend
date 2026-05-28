@@ -1280,6 +1280,21 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
+    _orig_cell = pdf.cell
+
+    def _safe_cell(*args, **kwargs):
+        """Auto-sanitize text for Helvetica (latin-1) compatibility."""
+        new_args = list(args)
+        for i, a in enumerate(new_args):
+            if isinstance(a, str):
+                new_args[i] = a.replace("\u2014", "-").replace("\u2013", "-").replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
+        for k, v in kwargs.items():
+            if isinstance(v, str):
+                kwargs[k] = v.replace("\u2014", "-").replace("\u2013", "-").replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
+        return _orig_cell(*new_args, **kwargs)
+
+    pdf.cell = _safe_cell
+
     # ── Title ──
     pdf.set_font("Helvetica", "B", 18)
     pdf.cell(0, 12, "SCHOOL HEADCOUNT RECONCILIATION", new_x="LMARGIN", new_y="NEXT", align="C")
