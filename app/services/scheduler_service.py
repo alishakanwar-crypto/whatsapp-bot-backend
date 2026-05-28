@@ -618,14 +618,15 @@ def start_scheduler() -> None:
     logger.info("Scheduled initial email homework poll in 300 seconds (5 min)")
 
     # --- Daily Message History Report ---
-    # Send daily report to alisha.kanwar@ppischool.in at 11:30 PM IST (18:00 UTC)
-    scheduler.add_job(
-        _send_daily_message_report_sync,
-        trigger=CronTrigger(hour=18, minute=0, second=0),
-        id="daily_message_report",
-        replace_existing=True,
-    )
-    logger.info("Scheduled daily message report at 11:30 PM IST (18:00 UTC) to alisha.kanwar@ppischool.in")
+    # DISABLED per user request (Alisha Kanwar, 2026-05-28)
+    # Previously sent daily report to alisha.kanwar@ppischool.in at 11:30 PM IST
+    # scheduler.add_job(
+    #     _send_daily_message_report_sync,
+    #     trigger=CronTrigger(hour=18, minute=0, second=0),
+    #     id="daily_message_report",
+    #     replace_existing=True,
+    # )
+    logger.info("Daily message report DISABLED per user request")
 
     # --- Always-Active Health Monitor ---
     # Check agent connection health every 60 seconds.
