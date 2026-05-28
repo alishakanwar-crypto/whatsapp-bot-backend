@@ -516,15 +516,38 @@ async def _analyze_face_mood(photo_b64: str) -> dict:
         }
 
 
+_mood_dedup_last: dict[str, str] = {}  # person_label -> last logged timestamp
+_MOOD_DEDUP_WINDOW = 300  # 5 minutes — skip duplicate TrueFace mood entries
+
+
 async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
     """If the person is Chairman or Alisha, log a mood observation from their
-    TrueFace recognition photo. Uses the same chairman_mood_log table."""
+    TrueFace recognition photo. Uses the same chairman_mood_log table.
+
+    Deduplicates: only one mood entry per person per 5-minute window.
+    """
     person_label = MOOD_TRACKED_NAMES.get(name.upper().strip())
     if not person_label:
         return
 
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
+    ts = timestamp or now.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Deduplicate: skip if same person was logged within the window
+    last_ts = _mood_dedup_last.get(person_label, "")
+    if last_ts:
+        try:
+            t_prev = datetime.strptime(last_ts, "%Y-%m-%d %H:%M:%S")
+            t_curr = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+            if abs((t_curr - t_prev).total_seconds()) < _MOOD_DEDUP_WINDOW:
+                logger.debug("[TRUEFACE] Mood dedup skip for %s (last=%s, now=%s)",
+                             person_label, last_ts, ts)
+                return
+        except (ValueError, TypeError):
+            pass
+
+    _mood_dedup_last[person_label] = ts
 
     mood = await _analyze_face_mood(photo_b64)
     dominant_emotion = mood.get("dominant_emotion", "neutral")
@@ -542,7 +565,7 @@ async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
             "description) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                person_label, today, timestamp or now.strftime("%Y-%m-%d %H:%M:%S"),
+                person_label, today, ts,
                 "TrueFace 3000", dominant_emotion, json.dumps(emotions),
                 temperament, intensity, 0.0, 1.0, photo_b64[:200] if photo_b64 else "",
                 description,
@@ -553,7 +576,7 @@ async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
         await db.close()
 
     logger.info("[TRUEFACE] Mood logged for %s (%s) at %s: %s / %s / %.0f%% — %s",
-                name, person_label, timestamp, dominant_emotion, temperament, intensity,
+                name, person_label, ts, dominant_emotion, temperament, intensity,
                 description[:80] if description else "no description")
 
     # Trigger immediate mood report for Chairman
