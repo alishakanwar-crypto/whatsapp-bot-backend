@@ -57,6 +57,9 @@ UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
 _unknown_alert_last: dict[str, float] = {}
 _UNKNOWN_ALERT_COOLDOWN = 60  # seconds
 
+# Cameras at actual entry/exit points (for accurate visitor counting)
+_ENTRY_CAMERA_KEYWORDS = ("ENTRY GATE", "DISPERSAL")
+
 
 # ============================================================
 # Database helpers
@@ -317,8 +320,8 @@ async def _reconcile(db, date: str) -> dict:
     """
     from collections import Counter
 
-    gate_in = await _get_gate_entries(db, date, direction="IN")
-    gate_out = await _get_gate_entries(db, date, direction="OUT")
+    gate_in_all = await _get_gate_entries(db, date, direction="IN")
+    gate_out_all = await _get_gate_entries(db, date, direction="OUT")
     trueface = await _get_trueface_attendance(db, date)
     all_teachers = await _get_all_teachers(db)
     total_registered = len(all_teachers)
@@ -328,6 +331,9 @@ async def _reconcile(db, date: str) -> dict:
     contact_categories = await _get_contact_categories(db)
     gate_entries_with_crops = await _get_gate_entries_with_crops(db, date)
 
+    # Only count entry/exit cameras for gate totals (not internal cameras)
+    gate_in = [e for e in gate_in_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
+    gate_out = [e for e in gate_out_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
     raw_gate_in = len(gate_in)
     raw_gate_out = len(gate_out)
 
@@ -653,7 +659,6 @@ async def _send_unknown_person_alert(entry: dict):
     cache_key = camera
     last_sent = _unknown_alert_last.get(cache_key, 0)
     if now - last_sent < _UNKNOWN_ALERT_COOLDOWN:
-        logger.debug("[GATE] Skipping unknown alert for %s (cooldown)", camera)
         return
 
     _unknown_alert_last[cache_key] = now
@@ -663,30 +668,34 @@ async def _send_unknown_person_alert(entry: dict):
     person_crop = entry.get("person_crop", "")
 
     caption = (
-        f"UNKNOWN PERSON DETECTED\n\n"
-        f"Camera: {camera}\n"
-        f"Time: {ts}\n"
-        f"Direction: {direction}\n\n"
+        f"⚠️ UNKNOWN PERSON DETECTED\n\n"
+        f"📍 Camera: {camera}\n"
+        f"🕐 Time: {ts}\n"
+        f"➡️ Direction: {direction}\n\n"
         f"This person is NOT registered in the face database.\n"
         f"Please verify identity."
     )
 
-    if person_crop:
-        from app.services.whatsapp_service import upload_base64_image_cloud, send_cloud_media
-        media_id = await upload_base64_image_cloud(person_crop)
-        if media_id:
-            ok = await send_cloud_media(
-                UNKNOWN_ALERT_PHONE, "image",
-                media_id=media_id, caption=caption,
-            )
-            logger.info("[GATE] Unknown person alert → %s: %s (camera=%s)",
-                        UNKNOWN_ALERT_PHONE, "OK" if ok else "FAILED", camera)
-            return
+    try:
+        from app.services.whatsapp_service import upload_base64_image_cloud, send_cloud_media, send_whatsapp_message
+        sent = False
+        if person_crop:
+            media_id = await upload_base64_image_cloud(person_crop)
+            if media_id:
+                sent = await send_cloud_media(
+                    UNKNOWN_ALERT_PHONE, "image",
+                    media_id=media_id, caption=caption,
+                )
+            else:
+                logger.warning("[GATE] Failed to upload person crop image for alert (camera=%s)", camera)
 
-    from app.services.whatsapp_service import send_whatsapp_message
-    await send_whatsapp_message(UNKNOWN_ALERT_PHONE, caption)
-    logger.info("[GATE] Unknown person text alert → %s (camera=%s, no image)",
-                UNKNOWN_ALERT_PHONE, camera)
+        if not sent:
+            sent = await send_whatsapp_message(UNKNOWN_ALERT_PHONE, caption)
+
+        logger.info("[GATE] Unknown person alert → %s: %s (camera=%s)",
+                    UNKNOWN_ALERT_PHONE, "OK" if sent else "FAILED", camera)
+    except Exception as e:
+        logger.error("[GATE] Unknown person alert failed: %s (camera=%s)", e, camera)
 
 
 # ============================================================
@@ -708,9 +717,11 @@ async def receive_gate_entries(request: Request):
     finally:
         await db.close()
 
-    # Send WhatsApp alerts for entries with person crops (unidentified persons)
+    # Send WhatsApp alerts for entries at actual entry points with person crops
     for entry in entries:
-        if entry.get("person_crop") and entry.get("direction", "IN") == "IN":
+        cam_upper = entry.get("camera", "").upper()
+        is_entry_cam = any(k in cam_upper for k in _ENTRY_CAMERA_KEYWORDS)
+        if entry.get("person_crop") and entry.get("direction", "IN") == "IN" and is_entry_cam:
             asyncio.create_task(_send_unknown_person_alert(entry))
 
     logger.info("[GATE] Stored %d gate entry event(s)", count)
