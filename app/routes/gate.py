@@ -1525,6 +1525,14 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
 # Hourly Reconciliation Report (7 AM - 5 PM IST)
 # ============================================================
 
+
+@router.post("/api/gate/send-report")
+async def trigger_reconciliation_report():
+    """Manual trigger to send the reconciliation report immediately."""
+    await send_reconciliation_report()
+    return {"status": "sent"}
+
+
 async def send_reconciliation_report():
     """Generate and send the hourly head count reconciliation report."""
     now = datetime.now(IST)
