@@ -504,6 +504,12 @@ async def _reconcile(db, date: str) -> dict:
     vehicles_out = [v for v in vehicle_entries if v["direction"] == "OUT"]
     vehicle_type_counts = dict(Counter(v["vehicle_type"] for v in vehicles_in))
 
+    # Estimate visitors: gate entries minus unique staff/teachers detected
+    staff_detected = len([t for t in teacher_detail if t["trueface_present"] or t["dvr_seen"]])
+    estimated_visitors = max(0, total_in - staff_detected)
+    # Use the higher of DVR face-based visitors vs gate-based estimate
+    final_visitor_count = max(len(visitor_sightings), estimated_visitors)
+
     return {
         "date": date,
         "total_gate_in": total_in,
@@ -515,7 +521,7 @@ async def _reconcile(db, date: str) -> dict:
         "teacher_detail": teacher_detail,
         "side_by_side": side_by_side,
         "timing_trail": timing_trail,
-        "visitor_count": len(visitor_sightings),
+        "visitor_count": final_visitor_count,
         "visitor_sightings": visitor_sightings,
         "visitor_by_camera": visitor_by_camera,
         "alerts": alerts,
@@ -659,6 +665,13 @@ async def gate_status():
     # Count unique teachers seen on DVR
     dvr_unique = len({s["person_id"] for s in dvr_sightings})
 
+    # Estimate visitors: gate entries minus identified staff
+    staff_detected = len(trueface) + len({s["person_id"] for s in dvr_sightings
+                                          if s["name"].upper().strip() not in
+                                          {t["name"].upper().strip() for t in trueface}})
+    estimated_visitors = max(0, len(gate_in) - staff_detected)
+    final_visitors = max(len(visitor_sightings), estimated_visitors)
+
     # Vehicle counts by type
     vehicles_in = [v for v in vehicle_entries if v["direction"] == "IN"]
     vehicles_out = [v for v in vehicle_entries if v["direction"] == "OUT"]
@@ -672,7 +685,7 @@ async def gate_status():
         "trueface_identified": len(trueface),
         "dvr_teachers_sighted": dvr_unique,
         "dvr_total_sightings": len(dvr_sightings),
-        "visitors_detected": len(visitor_sightings),
+        "visitors_detected": final_visitors,
         "vehicles_in": len(vehicles_in),
         "vehicles_out": len(vehicles_out),
         "vehicle_types": vehicle_types,
