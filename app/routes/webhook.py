@@ -3021,6 +3021,31 @@ def _extract_location_from_message(message_text: str) -> str | None:
         ("R3 M", "r3 m"),
         ("L 3 M", "l 3 m"),
         ("POPSICLES", "Popsicles"),
+        # DVR 4 cameras
+        ("BASEMENT GENERATOR RIGHT EXIT", "Basement Generator Right Exit"),
+        ("BASEMENT R/W FIRST STRS", "Basement R/W First Strs"),
+        ("BASEMENT R/W MIDDLE STRS", "Basement R/W Middle Strs"),
+        ("BASEMENT L/W MIDDLE STRS", "Basement L/W Middle Strs"),
+        ("BASEMENT MAIN GATE", "Basement Main Gate"),
+        ("BASEMENT ELECTRICITY", "Basement Electricity"),
+        ("BASEMENT CAM 10", "Basement Cam 10"),
+        ("BASEMENT CAM 8", "Basement Cam 8"),
+        ("BASEMENT CAM 5", "Basement Cam 5"),
+        ("BASEMENT CAM 2", "Basement Cam 2"),
+        ("G FLOOR R/W BUS PARKING", "G Floor R/W Bus Parking"),
+        ("G FLOOR RECPT BACK GALL C1", "G Floor Recpt Back Gall C1"),
+        ("G FLOOR R/W GALL C1", "G Floor R/W Gall C1"),
+        ("ORCHESTRA BASEMENT", "Orchestra Basement"),
+        ("TRANSPORT ROOM", "TRANSPORT ROOM"),
+        ("ADMIN GALLERY", "Admin Gallery"),
+        ("FRONT GALLERY", "Front Gallery"),
+        ("OUTDOOR CAM 1", "OUTDOOR CAM 1"),
+        ("MEDICAL ROOM", "Medical Room"),
+        ("KITCHEN ROOM", "Kitchen Room"),
+        ("YOGA ROOM", "YOGA ROOM"),
+        ("IT ROOM", "IT Room"),
+        ("IMN A/C 2", "IMN A/C 2"),
+        ("IMN A/C 1", "IMN A/C 1"),
     ]
     for search_key, db_key in location_keywords:
         if search_key in msg_upper:
@@ -3070,6 +3095,15 @@ def _extract_location_from_message(message_text: str) -> str | None:
         ("NURSERY", "NUR-1"),
         ("NUR", "NUR-1"),
         ("PREP", "PREP-1"),
+        # DVR 4 short names
+        ("BASEMENT", "Basement Main Gate"),
+        ("ORCHESTRA", "Orchestra Basement"),
+        ("TRANSPORT", "TRANSPORT ROOM"),
+        ("MEDICAL", "Medical Room"),
+        ("KITCHEN", "Kitchen Room"),
+        ("YOGA", "YOGA ROOM"),
+        ("OUTDOOR", "OUTDOOR CAM 1"),
+        ("IMN", "IMN A/C 1"),
     ]
     for keyword, location in short_map:
         if re.search(r'\b' + re.escape(keyword) + r'\b', msg_upper):
