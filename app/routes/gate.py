@@ -60,6 +60,55 @@ _UNKNOWN_ALERT_COOLDOWN = 60  # seconds
 # Cameras at actual entry/exit points (for accurate visitor counting)
 _ENTRY_CAMERA_KEYWORDS = ("ENTRY GATE", "DISPERSAL")
 
+# Deduplication: entries within this window from same/nearby cameras = same person
+_DEDUP_WINDOW_SECONDS = 120  # 2 minutes
+
+
+def _deduplicate_gate_entries(entries: list[dict]) -> list[dict]:
+    """Collapse raw gate detections into estimated unique crossings.
+
+    Same-camera re-detections within the time window are dropped.
+    Cross-camera detections with matching attire within the window
+    are treated as the same person.
+    """
+    if not entries:
+        return []
+
+    sorted_entries = sorted(entries, key=lambda e: e.get("timestamp", ""))
+    unique: list[dict] = []
+
+    for entry in sorted_entries:
+        ts_str = entry.get("timestamp", "")
+        attire = entry.get("attire_color", "unknown")
+        direction = entry.get("direction", "IN")
+
+        is_dup = False
+        for prev in reversed(unique):
+            prev_ts = prev.get("timestamp", "")
+            try:
+                t1 = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                t2 = datetime.strptime(prev_ts, "%Y-%m-%d %H:%M:%S")
+                diff = abs((t1 - t2).total_seconds())
+            except (ValueError, TypeError):
+                break
+            if diff > _DEDUP_WINDOW_SECONDS:
+                break
+            if prev.get("direction") != direction:
+                continue
+            # Same camera within window → definitely same person
+            if prev.get("camera") == entry.get("camera"):
+                is_dup = True
+                break
+            # Different camera but same attire within window → likely same person
+            if prev.get("attire_color", "unknown") == attire and attire != "unknown":
+                is_dup = True
+                break
+
+        if not is_dup:
+            unique.append(entry)
+
+    return unique
+
 
 # ============================================================
 # Database helpers
@@ -332,10 +381,16 @@ async def _reconcile(db, date: str) -> dict:
     gate_entries_with_crops = await _get_gate_entries_with_crops(db, date)
 
     # Only count entry/exit cameras for gate totals (not internal cameras)
-    gate_in = [e for e in gate_in_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
-    gate_out = [e for e in gate_out_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
-    raw_gate_in = len(gate_in)
-    raw_gate_out = len(gate_out)
+    gate_in_entry = [e for e in gate_in_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
+    gate_out_entry = [e for e in gate_out_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
+    raw_gate_in = len(gate_in_entry)
+    raw_gate_out = len(gate_out_entry)
+
+    # Deduplicate: collapse same-person detections across cameras/scans
+    gate_in = _deduplicate_gate_entries(gate_in_entry)
+    gate_out = _deduplicate_gate_entries(gate_out_entry)
+    unique_gate_in = len(gate_in)
+    unique_gate_out = len(gate_out)
 
     # ── CATEGORY 1: VERIFIED STAFF ──
     # Build TrueFace lookup by name
@@ -467,11 +522,10 @@ async def _reconcile(db, date: str) -> dict:
     }
 
     # ── CATEGORY 2: UNKNOWN / UNREGISTERED PEOPLE ──
-    # Each unique unknown person gets a persistent ID (UNKNOWN-001, etc.)
-    # Raw gate detections minus verified staff = estimated unknown count
+    # Deduplicated gate crossings minus verified staff = estimated unknown count
     unique_staff_detected = len(staff_present)
-    estimated_unknown_in = max(0, raw_gate_in - unique_staff_detected)
-    estimated_unknown_out = max(0, raw_gate_out - len(staff_exited))
+    estimated_unknown_in = max(0, unique_gate_in - unique_staff_detected)
+    estimated_unknown_out = max(0, unique_gate_out - len(staff_exited))
     estimated_unknown_inside = max(0, estimated_unknown_in - estimated_unknown_out)
 
     # Build unknown person list from visitor sightings + unmatched gate entries
@@ -565,9 +619,12 @@ async def _reconcile(db, date: str) -> dict:
         # Raw gate detections (for reference — NOT unique people)
         "raw_gate_in": raw_gate_in,
         "raw_gate_out": raw_gate_out,
+        # Deduplicated counts (estimated unique crossings)
+        "unique_gate_in": unique_gate_in,
+        "unique_gate_out": unique_gate_out,
         # Legacy keys for backward compat
-        "total_gate_in": raw_gate_in,
-        "total_gate_out": raw_gate_out,
+        "total_gate_in": unique_gate_in,
+        "total_gate_out": unique_gate_out,
         # Verified staff
         "total_registered": total_registered,
         "trueface_identified": len(trueface),
@@ -625,7 +682,7 @@ def _normalize_category(raw: str) -> str:
     if raw in ("advocate",):
         return "Advocates / Legal"
     if raw in ("staff",):
-        return "Support Staff"
+        return "Staff"
     if raw in ("web designers",):
         return "IT / Design"
     return raw.title()
@@ -1724,7 +1781,10 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     pdf.ln(2)
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 5, f"Note: Raw gate detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)} (same person may be detected multiple times across cameras)", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 5,
+             f"Unique crossings: IN={recon.get('unique_gate_in', 0)}, OUT={recon.get('unique_gate_out', 0)}"
+             f"  (raw detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)})",
+             new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
@@ -2028,8 +2088,8 @@ async def send_reconciliation_report():
         f"  Unknown / Visitors Inside: {unknown_inside}\n"
         f"{cat_lines}"
         f"\nVerified Staff Exited: {staff_exited_count}\n"
-        f"Raw Gate Detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)}\n"
-        f"(Note: raw detections != unique people — same person detected multiple times)\n"
+        f"Unique Gate Crossings: IN={recon.get('unique_gate_in', 0)}, OUT={recon.get('unique_gate_out', 0)}\n"
+        f"(Raw detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)})\n"
         f"{vehicle_line}\n"
         f"Staff Reconciliation: Verified={len(fully_verified)} | "
         f"TrueFace Only={len(tf_only_list)} | "
