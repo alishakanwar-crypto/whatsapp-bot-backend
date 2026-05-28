@@ -370,6 +370,7 @@ async def init_db():
                 camera TEXT NOT NULL,
                 direction TEXT NOT NULL DEFAULT 'IN',
                 vehicle_type TEXT NOT NULL DEFAULT 'car',
+                snapshot TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -553,6 +554,13 @@ async def init_db():
                 )
             except Exception:
                 pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE vehicle_entries ADD COLUMN snapshot TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass  # column already exists
 
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()

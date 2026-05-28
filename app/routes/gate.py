@@ -108,6 +108,21 @@ async def _get_gate_entries(db, date: str, direction: str | None = None) -> list
     ]
 
 
+async def _get_gate_entries_with_crops(db, date: str) -> list[dict]:
+    """Get gate entries including person_crop images for snapshot gallery."""
+    cur = await db.execute(
+        "SELECT id, timestamp, camera, direction, person_crop "
+        "FROM gate_entries WHERE date = ? AND direction = 'IN' "
+        "AND person_crop != '' ORDER BY timestamp DESC LIMIT 16",
+        (date,),
+    )
+    return [
+        {"id": r[0], "timestamp": r[1], "camera": r[2],
+         "direction": r[3], "person_crop": r[4]}
+        for r in await cur.fetchall()
+    ]
+
+
 async def _get_trueface_attendance(db, date: str) -> list[dict]:
     """Get all TrueFace attendance records for a date."""
     cur = await db.execute(
@@ -248,10 +263,12 @@ async def _store_vehicle_entries(db, entries: list[dict]) -> int:
         direction = entry.get("direction", "IN")
         vehicle_type = entry.get("vehicle_type", "car")
 
+        snapshot = entry.get("snapshot", "")
+
         await db.execute(
-            "INSERT INTO vehicle_entries (date, timestamp, camera, direction, vehicle_type) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (date_part, ts, camera, direction, vehicle_type),
+            "INSERT INTO vehicle_entries (date, timestamp, camera, direction, vehicle_type, snapshot) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (date_part, ts, camera, direction, vehicle_type, snapshot),
         )
         count += 1
     await db.commit()
@@ -261,13 +278,13 @@ async def _store_vehicle_entries(db, entries: list[dict]) -> int:
 async def _get_vehicle_entries(db, date: str) -> list[dict]:
     """Get all vehicle entries for a date."""
     cur = await db.execute(
-        "SELECT id, timestamp, camera, direction, vehicle_type "
+        "SELECT id, timestamp, camera, direction, vehicle_type, snapshot "
         "FROM vehicle_entries WHERE date = ? ORDER BY timestamp",
         (date,),
     )
     return [
         {"id": r[0], "timestamp": r[1], "camera": r[2],
-         "direction": r[3], "vehicle_type": r[4]}
+         "direction": r[3], "vehicle_type": r[4], "snapshot": r[5] if len(r) > 5 else ""}
         for r in await cur.fetchall()
     ]
 
@@ -296,6 +313,7 @@ async def _reconcile(db, date: str) -> dict:
     visitor_sightings = await _get_visitor_sightings(db, date)
     vehicle_entries = await _get_vehicle_entries(db, date)
     contact_categories = await _get_contact_categories(db)
+    gate_entries_with_crops = await _get_gate_entries_with_crops(db, date)
 
     total_in = len(gate_in)
     total_out = len(gate_out)
@@ -530,6 +548,7 @@ async def _reconcile(db, date: str) -> dict:
         "vehicles_out": len(vehicles_out),
         "vehicle_types": vehicle_type_counts,
         "vehicle_entries": vehicle_entries,
+        "gate_entries_with_crops": gate_entries_with_crops,
     }
 
 
@@ -1182,6 +1201,86 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     for col_letter, w in [("A", 5), ("B", 30), ("C", 12), ("D", 25), ("E", 60)]:
         ws9.column_dimensions[col_letter].width = w
 
+    # ── Sheet 10: Snapshots ──
+    import base64
+    import tempfile
+    from openpyxl.drawing.image import Image as XlImage
+
+    vehicle_entries = recon.get("vehicle_entries", [])
+    gate_crops = recon.get("gate_entries_with_crops", [])
+    vehicle_snaps = [v for v in vehicle_entries if v.get("snapshot")]
+    person_snaps = [g for g in gate_crops if g.get("person_crop")]
+
+    if vehicle_snaps or person_snaps:
+        ws10 = wb.create_sheet("Snapshots")
+        # Vehicle snapshots header
+        r = 1
+        for col, val in enumerate(["#", "Type", "Direction", "Time", "Camera", "Snapshot"], 1):
+            c = ws10.cell(row=r, column=col, value=val)
+            c.font = header_font
+            c.fill = header_fill
+            c.border = border
+        r += 1
+
+        ws10.cell(row=r, column=1, value="VEHICLE SNAPSHOTS").font = Font(bold=True, size=12)
+        r += 1
+
+        for idx, v in enumerate(vehicle_snaps[-12:], 1):
+            ws10.cell(row=r, column=1, value=idx).border = border
+            ws10.cell(row=r, column=2, value=v.get("vehicle_type", "").upper()).border = border
+            ws10.cell(row=r, column=3, value=v.get("direction", "")).border = border
+            ts = v.get("timestamp", "")
+            time_part = ts.split(" ")[1] if " " in ts else ts
+            ws10.cell(row=r, column=4, value=time_part).border = border
+            ws10.cell(row=r, column=5, value=v.get("camera", "")).border = border
+            # Embed image
+            try:
+                img_bytes = base64.b64decode(v["snapshot"])
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                img = XlImage(tmp_path)
+                img.width = 200
+                img.height = 130
+                ws10.add_image(img, f"F{r}")
+                ws10.row_dimensions[r].height = 100
+                import os
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            r += 1
+
+        r += 2
+        ws10.cell(row=r, column=1, value="GATE ENTRY PERSON SNAPSHOTS").font = Font(bold=True, size=12)
+        r += 1
+
+        for idx, g in enumerate(person_snaps[-16:], 1):
+            ws10.cell(row=r, column=1, value=idx).border = border
+            ws10.cell(row=r, column=2, value="PERSON").border = border
+            ws10.cell(row=r, column=3, value=g.get("direction", "IN")).border = border
+            ts = g.get("timestamp", "")
+            time_part = ts.split(" ")[1] if " " in ts else ts
+            ws10.cell(row=r, column=4, value=time_part).border = border
+            ws10.cell(row=r, column=5, value=g.get("camera", "")).border = border
+            try:
+                img_bytes = base64.b64decode(g["person_crop"])
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                img = XlImage(tmp_path)
+                img.width = 120
+                img.height = 160
+                ws10.add_image(img, f"F{r}")
+                ws10.row_dimensions[r].height = 125
+                import os
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            r += 1
+
+        for col_letter, w in [("A", 5), ("B", 12), ("C", 10), ("D", 12), ("E", 18), ("F", 30)]:
+            ws10.column_dimensions[col_letter].width = w
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1264,6 +1363,113 @@ def _generate_ai_observations(recon: dict) -> list[str]:
         observations.append("No significant observations for this period.")
 
     return observations
+
+
+# ============================================================
+# PDF Snapshot Gallery
+# ============================================================
+
+def _add_snapshot_gallery(pdf, recon: dict, section_header):
+    """Add live snapshot images to the PDF report."""
+    import base64
+    import tempfile
+
+    vehicle_entries = recon.get("vehicle_entries", [])
+    gate_entries_raw = recon.get("gate_entries_with_crops", [])
+
+    # Collect vehicle snapshots (latest 12)
+    vehicle_snaps = [v for v in vehicle_entries if v.get("snapshot")]
+    # Collect person crops from gate entries (latest 12)
+    person_snaps = [g for g in gate_entries_raw if g.get("person_crop")]
+
+    if not vehicle_snaps and not person_snaps:
+        return
+
+    def _embed_b64_image(b64_data: str, img_w: int = 45, img_h: int = 35):
+        """Decode base64 image and embed in PDF."""
+        try:
+            img_bytes = base64.b64decode(b64_data)
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(img_bytes)
+                tmp_path = tmp.name
+            pdf.image(tmp_path, w=img_w, h=img_h)
+            import os
+            os.unlink(tmp_path)
+            return True
+        except Exception:
+            return False
+
+    # ── Vehicle Snapshots ──
+    if vehicle_snaps:
+        section_header("VEHICLE SNAPSHOTS (Live DVR Captures)")
+        pdf.set_font("Helvetica", "", 8)
+        cols = 3
+        img_w = 58
+        img_h = 40
+        for i, v in enumerate(vehicle_snaps[-12:]):
+            col = i % cols
+            if col == 0 and i > 0:
+                pdf.ln(img_h + 12)
+            x = pdf.l_margin + col * (img_w + 5)
+            y = pdf.get_y()
+            if y + img_h + 15 > pdf.h - pdf.b_margin:
+                pdf.add_page()
+                y = pdf.get_y()
+            try:
+                img_bytes = base64.b64decode(v["snapshot"])
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                pdf.image(tmp_path, x=x, y=y, w=img_w, h=img_h)
+                import os
+                os.unlink(tmp_path)
+                # Caption below image
+                pdf.set_xy(x, y + img_h)
+                ts = v.get("timestamp", "")
+                time_part = ts.split(" ")[1] if " " in ts else ts
+                vtype = v.get("vehicle_type", "vehicle").upper()
+                direction = v.get("direction", "")
+                caption = f"{vtype} {direction} - {time_part}"
+                pdf.cell(img_w, 4, caption, align="C")
+            except Exception:
+                pass
+        pdf.ln(img_h + 15)
+
+    # ── Gate Entry Person Snapshots ──
+    if person_snaps:
+        section_header("GATE ENTRY SNAPSHOTS (Live DVR Captures)")
+        pdf.set_font("Helvetica", "", 8)
+        cols = 4
+        img_w = 42
+        img_h = 50
+        for i, g in enumerate(person_snaps[-16:]):
+            col = i % cols
+            if col == 0 and i > 0:
+                pdf.ln(img_h + 12)
+            x = pdf.l_margin + col * (img_w + 5)
+            y = pdf.get_y()
+            if y + img_h + 15 > pdf.h - pdf.b_margin:
+                pdf.add_page()
+                y = pdf.get_y()
+            try:
+                img_bytes = base64.b64decode(g["person_crop"])
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                pdf.image(tmp_path, x=x, y=y, w=img_w, h=img_h)
+                import os
+                os.unlink(tmp_path)
+                # Caption
+                pdf.set_xy(x, y + img_h)
+                ts = g.get("timestamp", "")
+                time_part = ts.split(" ")[1] if " " in ts else ts
+                cam = g.get("camera", "")
+                direction = g.get("direction", "IN")
+                caption = f"{direction} {time_part}"
+                pdf.cell(img_w, 4, caption, align="C")
+            except Exception:
+                pass
+        pdf.ln(img_h + 15)
 
 
 # ============================================================
@@ -1539,6 +1745,9 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     for obs in ai_obs:
         pdf.multi_cell(0, 6, f"  * {obs}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
+
+    # ── Live Snapshots Gallery ──
+    _add_snapshot_gallery(pdf, recon, section_header)
 
     # ── Footer ──
     pdf.set_font("Helvetica", "I", 8)
