@@ -800,18 +800,9 @@ async def receive_gate_entries(request: Request):
     finally:
         await db.close()
 
-    # Send WhatsApp alerts for unknown persons at entry points
-    alert_count = 0
-    for entry in entries:
-        cam_upper = entry.get("camera", "").upper()
-        is_entry_cam = any(k in cam_upper for k in _ENTRY_CAMERA_KEYWORDS)
-        has_crop = bool(entry.get("person_crop"))
-        is_inbound = entry.get("direction", "IN") == "IN"
-        if has_crop and is_inbound and is_entry_cam:
-            alert_count += 1
-            asyncio.create_task(_send_unknown_person_alert(entry))
-    if alert_count:
-        logger.info("[GATE] Queued %d unknown person alert(s)", alert_count)
+    # Note: WhatsApp alerts for unknown persons are triggered from
+    # /api/gate/visitor-sighting (face-recognition-verified unknowns),
+    # not from gate entries (which include all persons, known and unknown).
 
     logger.info("[GATE] Stored %d gate entry event(s)", count)
     return {"status": "ok", "stored": count}
@@ -841,7 +832,8 @@ async def receive_teacher_sightings(request: Request):
 async def receive_visitor_sightings(request: Request):
     """Receive DVR visitor (unknown face) sightings from the campus agent.
 
-    Body: [{"camera": "...", "timestamp": "...", "date": "..."}]
+    Body: [{"camera": "...", "timestamp": "...", "date": "...", "snapshot": "base64..."}]
+    These are faces that did NOT match any registered person in the face DB.
     """
     body = await request.json()
     visitors = body if isinstance(body, list) else [body]
@@ -851,6 +843,24 @@ async def receive_visitor_sightings(request: Request):
         count = await _store_visitor_sightings(db, visitors)
     finally:
         await db.close()
+
+    # Send WhatsApp alert for each unknown visitor at entry cameras
+    alert_count = 0
+    for v in visitors:
+        cam = v.get("camera", "")
+        cam_upper = cam.upper()
+        is_entry_cam = any(k in cam_upper for k in _ENTRY_CAMERA_KEYWORDS)
+        if is_entry_cam:
+            alert_entry = {
+                "camera": cam,
+                "timestamp": v.get("timestamp", ""),
+                "direction": "IN",
+                "person_crop": v.get("snapshot", ""),
+            }
+            alert_count += 1
+            asyncio.create_task(_send_unknown_person_alert(alert_entry))
+    if alert_count:
+        logger.info("[GATE] Queued %d unknown visitor alert(s)", alert_count)
 
     logger.info("[GATE] Stored %d DVR visitor sighting(s)", count)
     return {"status": "ok", "stored": count}
