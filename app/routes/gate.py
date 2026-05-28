@@ -51,6 +51,11 @@ REPORT_RECIPIENTS = os.environ.get(
 )
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
+UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
+
+# Dedup: max one unknown person alert per camera per 60-second window
+_unknown_alert_last: dict[str, float] = {}
+_UNKNOWN_ALERT_COOLDOWN = 60  # seconds
 
 
 # ============================================================
@@ -632,6 +637,59 @@ def _reconciliation_status(trueface_present: bool, dvr_seen: bool) -> str:
 
 
 # ============================================================
+# Unknown Person WhatsApp Alert
+# ============================================================
+
+async def _send_unknown_person_alert(entry: dict):
+    """Send WhatsApp alert with snapshot for an unrecognized person.
+
+    Includes: face/body crop image, camera source, timestamp, direction.
+    Deduplicates by camera to avoid spam (one alert per camera per 60s).
+    """
+    import time
+    camera = entry.get("camera", "Unknown")
+    now = time.time()
+
+    cache_key = camera
+    last_sent = _unknown_alert_last.get(cache_key, 0)
+    if now - last_sent < _UNKNOWN_ALERT_COOLDOWN:
+        logger.debug("[GATE] Skipping unknown alert for %s (cooldown)", camera)
+        return
+
+    _unknown_alert_last[cache_key] = now
+
+    ts = entry.get("timestamp", "")
+    direction = entry.get("direction", "IN")
+    person_crop = entry.get("person_crop", "")
+
+    caption = (
+        f"UNKNOWN PERSON DETECTED\n\n"
+        f"Camera: {camera}\n"
+        f"Time: {ts}\n"
+        f"Direction: {direction}\n\n"
+        f"This person is NOT registered in the face database.\n"
+        f"Please verify identity."
+    )
+
+    if person_crop:
+        from app.services.whatsapp_service import upload_base64_image_cloud, send_cloud_media
+        media_id = await upload_base64_image_cloud(person_crop)
+        if media_id:
+            ok = await send_cloud_media(
+                UNKNOWN_ALERT_PHONE, "image",
+                media_id=media_id, caption=caption,
+            )
+            logger.info("[GATE] Unknown person alert → %s: %s (camera=%s)",
+                        UNKNOWN_ALERT_PHONE, "OK" if ok else "FAILED", camera)
+            return
+
+    from app.services.whatsapp_service import send_whatsapp_message
+    await send_whatsapp_message(UNKNOWN_ALERT_PHONE, caption)
+    logger.info("[GATE] Unknown person text alert → %s (camera=%s, no image)",
+                UNKNOWN_ALERT_PHONE, camera)
+
+
+# ============================================================
 # Endpoints
 # ============================================================
 
@@ -649,6 +707,11 @@ async def receive_gate_entries(request: Request):
         count = await _store_gate_entries(db, entries)
     finally:
         await db.close()
+
+    # Send WhatsApp alerts for entries with person crops (unidentified persons)
+    for entry in entries:
+        if entry.get("person_crop") and entry.get("direction", "IN") == "IN":
+            asyncio.create_task(_send_unknown_person_alert(entry))
 
     logger.info("[GATE] Stored %d gate entry event(s)", count)
     return {"status": "ok", "stored": count}
