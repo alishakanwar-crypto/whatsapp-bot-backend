@@ -588,13 +588,19 @@ async def init_db():
         logger.info(f"agent_dvrs count on startup: {dvr_count}")
 
         if SEED_DVRS:
-            cursor2 = await db.execute("SELECT ip FROM agent_dvrs")
-            existing_ips = {r[0] for r in await cursor2.fetchall()}
-            missing = [d for d in SEED_DVRS if d.get("ip", "") not in existing_ips]
-            if missing:
-                logger.info("Seeding %d missing DVR(s): %s",
-                            len(missing), [d["ip"] for d in missing])
-                try:
+            cursor2 = await db.execute("SELECT ip, password FROM agent_dvrs")
+            existing = {r[0]: r[1] for r in await cursor2.fetchall()}
+            missing = [d for d in SEED_DVRS if d.get("ip", "") not in existing]
+            empty_pw = [
+                d for d in SEED_DVRS
+                if d.get("ip", "") in existing
+                and not existing[d["ip"]]
+                and d.get("password", "")
+            ]
+            try:
+                if missing:
+                    logger.info("Seeding %d missing DVR(s): %s",
+                                len(missing), [d["ip"] for d in missing])
                     for dvr in missing:
                         await db.execute(
                             "INSERT INTO agent_dvrs (name, ip, port, username, password, channels) "
@@ -608,10 +614,20 @@ async def init_db():
                                 dvr.get("channels", 64),
                             ),
                         )
+                if empty_pw:
+                    logger.info("Updating password for %d DVR(s) with empty passwords: %s",
+                                len(empty_pw), [d["ip"] for d in empty_pw])
+                    for dvr in empty_pw:
+                        await db.execute(
+                            "UPDATE agent_dvrs SET password = ? WHERE ip = ?",
+                            (dvr["password"], dvr["ip"]),
+                        )
+                if missing or empty_pw:
                     await db.commit()
-                    logger.info("Seeded %d DVR(s) OK", len(missing))
-                except Exception as e:
-                    logger.error(f"Auto-seed DVRs failed: {e}", exc_info=True)
+                    logger.info("DVR seed/update complete: %d inserted, %d updated",
+                                len(missing), len(empty_pw))
+            except Exception as e:
+                logger.error(f"Auto-seed DVRs failed: {e}", exc_info=True)
 
         # --- Auto-seed camera mappings ---
         cursor = await db.execute("SELECT COUNT(*) FROM agent_camera_mapping")
