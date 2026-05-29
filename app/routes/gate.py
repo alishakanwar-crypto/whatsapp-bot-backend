@@ -636,12 +636,91 @@ async def _reconcile(db, date: str) -> dict:
                        "May be false positive if school is not in session."),
         })
 
+    # ── GATE vs FACE DISCREPANCY ──
+    # Compare YOLO head count with identified faces to find unreconciled entries
+    total_identified = unique_staff_detected + estimated_unknown_in
+    unreconciled_count = max(0, unique_gate_in - total_identified)
+
+    # Group gate entries by hourly time window for discrepancy breakdown
+    hourly_gate: dict[str, int] = {}
+    hourly_identified: dict[str, int] = {}
+    for g in gate_in:
+        ts = g.get("timestamp", "")
+        hour_key = ts[11:13] + ":00" if len(ts) > 13 else "unknown"
+        hourly_gate[hour_key] = hourly_gate.get(hour_key, 0) + 1
+    # Staff sightings by hour
+    for s in staff_detail:
+        if s.get("dvr_first_seen"):
+            hour_key = s["dvr_first_seen"][:2] + ":00" if len(s["dvr_first_seen"]) >= 2 else "unknown"
+            hourly_identified[hour_key] = hourly_identified.get(hour_key, 0) + 1
+    # Visitor sightings by hour
+    for v in visitor_sightings:
+        ts = v.get("timestamp", "")
+        hour_key = ts[11:13] + ":00" if len(ts) > 13 else "unknown"
+        hourly_identified[hour_key] = hourly_identified.get(hour_key, 0) + 1
+
+    all_hours = sorted(set(list(hourly_gate.keys()) + list(hourly_identified.keys())))
+    hourly_discrepancy = []
+    for h in all_hours:
+        if h == "unknown":
+            continue
+        gate_count = hourly_gate.get(h, 0)
+        id_count = hourly_identified.get(h, 0)
+        gap = max(0, gate_count - id_count)
+        hourly_discrepancy.append({
+            "hour": h,
+            "gate_entries": gate_count,
+            "identified": id_count,
+            "unreconciled": gap,
+        })
+
+    # Unmatched gate entries: IN entries that don't correspond to any identified person
+    # Include attire color and camera info for visual tracking
+    unmatched_entries = []
+    for g in gate_in:
+        if not g.get("reconciled") and not g.get("matched_pin"):
+            ts = g.get("timestamp", "")
+            time_part = ts.split(" ")[1] if " " in ts else ts
+            unmatched_entries.append({
+                "timestamp": ts,
+                "time": time_part,
+                "camera": g.get("camera", "Unknown"),
+                "attire_color": g.get("attire_color", ""),
+            })
+
+    discrepancy = {
+        "gate_head_count": unique_gate_in,
+        "faces_identified": total_identified,
+        "staff_identified": unique_staff_detected,
+        "visitors_identified": estimated_unknown_in,
+        "unreconciled": unreconciled_count,
+        "reconciliation_rate": round(
+            (total_identified / unique_gate_in * 100) if unique_gate_in > 0 else 100, 1
+        ),
+        "hourly_breakdown": hourly_discrepancy,
+        "unmatched_entries": unmatched_entries[:50],
+    }
+
+    if unreconciled_count > 0:
+        alerts.append({
+            "type": "GATE_FACE_DISCREPANCY",
+            "severity": "high" if unreconciled_count > 5 else "medium",
+            "person": "",
+            "category": "unknown",
+            "detail": (
+                f"Gate counted {unique_gate_in} people IN, but only "
+                f"{total_identified} identified ({unique_staff_detected} staff + "
+                f"{estimated_unknown_in} visitors). "
+                f"{unreconciled_count} unreconciled entries."
+            ),
+        })
+
     # Update daily summary
     await db.execute(
         "INSERT OR REPLACE INTO gate_daily_summary "
         "(date, total_in, total_out, trueface_matched, unreconciled) "
         "VALUES (?, ?, ?, ?, ?)",
-        (date, raw_gate_in, raw_gate_out, len(trueface), abs(len(trueface) - len([s for s in staff_detail if s["dvr_seen"]]))),
+        (date, raw_gate_in, raw_gate_out, len(trueface), unreconciled_count),
     )
     await db.commit()
 
@@ -690,9 +769,11 @@ async def _reconcile(db, date: str) -> dict:
         "gate_entries_with_crops": gate_entries_with_crops,
         # Alerts
         "alerts": alerts,
+        # Gate vs Face discrepancy
+        "discrepancy": discrepancy,
         # Legacy
         "total_registered_teachers": total_registered,
-        "unreconciled_count": abs(len(trueface) - len([s for s in staff_detail if s["dvr_seen"]])),
+        "unreconciled_count": unreconciled_count,
         "timing_trail": [],
     }
 
@@ -1085,6 +1166,14 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     for vtype, vcount in sorted(recon.get("vehicle_types", {}).items()):
         summary_rows.append((f"    {vtype.title()}", vcount, None))
     summary_rows += [
+        ("", "", None),
+        ("GATE vs FACE DISCREPANCY", "", None),
+        ("  Gate Head Count (IN)", disc.get("gate_head_count", 0), None),
+        ("  Faces Identified", disc.get("faces_identified", 0), None),
+        ("  UNRECONCILED", disc.get("unreconciled", 0),
+         red_fill if disc.get("unreconciled", 0) > 0 else green_fill),
+        ("  Reconciliation Rate", f"{disc.get('reconciliation_rate', 100)}%",
+         green_fill if disc.get("reconciliation_rate", 100) >= 80 else red_fill),
         ("", "", None),
         ("STAFF RECONCILIATION", "", None),
         ("  Fully Verified (TrueFace + DVR)", len(fully_verified), green_fill),
@@ -1496,7 +1585,80 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     for col_letter, w in [("A", 5), ("B", 30), ("C", 12), ("D", 25), ("E", 60)]:
         ws9.column_dimensions[col_letter].width = w
 
-    # ── Sheet 10: Snapshots ──
+    # ── Sheet 10: Gate vs Face Discrepancy ──
+    disc = recon.get("discrepancy", {})
+    ws10d = wb.create_sheet("Discrepancy")
+
+    ws10d.merge_cells("A1:F1")
+    ws10d["A1"] = f"════════ GATE vs FACE DISCREPANCY — {date_str} ════════"
+    ws10d["A1"].font = Font(bold=True, size=14)
+
+    r = 3
+    disc_summary = [
+        ("Gate Head Count (IN)", disc.get("gate_head_count", 0), None),
+        ("Faces Identified (Total)", disc.get("faces_identified", 0), None),
+        ("  Staff Identified", disc.get("staff_identified", 0), light_blue_fill),
+        ("  Visitors Identified", disc.get("visitors_identified", 0), orange_fill),
+        ("UNRECONCILED", disc.get("unreconciled", 0),
+         red_fill if disc.get("unreconciled", 0) > 0 else green_fill),
+        ("Reconciliation Rate", f"{disc.get('reconciliation_rate', 100)}%",
+         green_fill if disc.get("reconciliation_rate", 100) >= 80 else red_fill),
+    ]
+    for label, value, fill in disc_summary:
+        ws10d.cell(row=r, column=1, value=label).font = Font(bold=True)
+        ws10d.cell(row=r, column=1).border = border
+        ws10d.cell(row=r, column=2, value=value).font = Font(bold=True, size=12)
+        ws10d.cell(row=r, column=2).border = border
+        if fill:
+            ws10d.cell(row=r, column=1).fill = fill
+            ws10d.cell(row=r, column=2).fill = fill
+        r += 1
+
+    # Hourly breakdown table
+    hourly = disc.get("hourly_breakdown", [])
+    if hourly:
+        r += 1
+        ws10d.cell(row=r, column=1, value="HOURLY BREAKDOWN").font = Font(bold=True, size=12)
+        r += 1
+        for col, h in enumerate(["Hour", "Gate Entries", "Identified", "Unreconciled"], 1):
+            cell = ws10d.cell(row=r, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = border
+        r += 1
+        for hd in hourly:
+            ws10d.cell(row=r, column=1, value=hd["hour"]).border = border
+            ws10d.cell(row=r, column=2, value=hd["gate_entries"]).border = border
+            ws10d.cell(row=r, column=3, value=hd["identified"]).border = border
+            unrec_cell = ws10d.cell(row=r, column=4, value=hd["unreconciled"])
+            unrec_cell.border = border
+            if hd["unreconciled"] > 0:
+                unrec_cell.fill = red_fill
+            r += 1
+
+    # Unmatched entries detail
+    unmatched = disc.get("unmatched_entries", [])
+    if unmatched:
+        r += 1
+        ws10d.cell(row=r, column=1, value="UNMATCHED ENTRIES (not identified by face recognition)").font = Font(bold=True, size=12)
+        r += 1
+        for col, h in enumerate(["#", "Time", "Camera", "Attire Color"], 1):
+            cell = ws10d.cell(row=r, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = border
+        r += 1
+        for idx, ue in enumerate(unmatched, 1):
+            ws10d.cell(row=r, column=1, value=idx).border = border
+            ws10d.cell(row=r, column=2, value=ue.get("time", "")).border = border
+            ws10d.cell(row=r, column=3, value=ue.get("camera", "")).border = border
+            ws10d.cell(row=r, column=4, value=ue.get("attire_color", "")).border = border
+            r += 1
+
+    for col_letter, w in [("A", 40), ("B", 18), ("C", 20), ("D", 20)]:
+        ws10d.column_dimensions[col_letter].width = w
+
+    # ── Sheet 11: Snapshots ──
     import base64
     import tempfile
     import os
