@@ -3413,6 +3413,7 @@ async def detect_and_handle_snapshot_request(
         )
 
         total_sent = 0
+        fail_reasons: list[str] = []
         for loc in multi_locations:
             try:
                 result = await request_snapshot(loc, timeout=60.0)
@@ -3449,7 +3450,9 @@ async def detect_and_handle_snapshot_request(
                     except Exception as exc:
                         logger.error(f"Error sending snapshot for {loc}: {exc}", exc_info=True)
             else:
-                logger.warning(f"Snapshot failed for {loc}: {result.get('error', 'unknown')}")
+                reason = result.get("detail") or result.get("error", "unknown")
+                logger.warning(f"Snapshot failed for {loc}: {reason}")
+                fail_reasons.append(f"{loc}: {reason}")
 
         if total_sent > 0:
             record_snapshot_success()
@@ -3457,11 +3460,18 @@ async def detect_and_handle_snapshot_request(
             return True
 
         record_snapshot_failure()
+        fail_body = (
+            f"We were unable to capture photos from {label} at this time. "
+            f"The cameras may be temporarily unavailable."
+        )
+        if is_admin and fail_reasons:
+            # Admins get the technical reason per camera so they can tell
+            # whether it's an offline camera/channel vs an auth issue.
+            fail_body += "\n\nReason:\n" + "\n".join(fail_reasons)
         await send_whatsapp_message(
             reply_to,
             f"{_greeting(sender)},\n\n"
-            f"We were unable to capture photos from {label} at this time. "
-            f"The cameras may be temporarily unavailable.\n\n"
+            f"{fail_body}\n\n"
             f"Please try again later.\n\n"
             "Thank you for your patience.\n"
             "Warm regards,\nPP International School"
@@ -3571,7 +3581,11 @@ async def detect_and_handle_snapshot_request(
         record_snapshot_failure()
 
         error_msg = result.get("error", "Unknown error")
-        logger.error(f"Snapshot request failed for {location}: {error_msg}")
+        detail = result.get("detail", "")
+        logger.error(
+            f"Snapshot request failed for {location}: {error_msg}"
+            + (f" (detail={detail})" if detail else "")
+        )
         fail_msg = (
             f"We were unable to capture a photo from {location} at this time. "
             f"The camera may be temporarily unavailable."
@@ -3583,6 +3597,11 @@ async def detect_and_handle_snapshot_request(
                 "Ms. Harpreet Kaur (Administration Incharge): 9599488106"
             )
         else:
+            # Admins get the technical reason so they can tell whether it's an
+            # offline camera/channel vs an auth issue.
+            diag = detail or error_msg
+            if diag:
+                fail_msg += f"\n\nReason: {diag}"
             fail_msg += "\n\nPlease try again later."
         await send_whatsapp_message(
             reply_to,
