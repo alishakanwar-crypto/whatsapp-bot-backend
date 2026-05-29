@@ -786,7 +786,11 @@ async def generate_vision_response(
     conversation_history: list[dict[str, str]] | None = None,
     sender_name: str = "",
 ) -> str:
-    """Generate a response for an image using GPT-4o-mini vision."""
+    """Generate a response for an image/document using GPT-4o-mini.
+
+    For documents (PDF, DOCX, etc.), extracts text via MarkItDown and uses
+    a text-only GPT call instead of expensive Vision API — saves tokens.
+    """
     import base64
 
     ai_client = get_client()
@@ -799,6 +803,42 @@ async def generate_vision_response(
         )
 
     try:
+        # Try MarkItDown for documents (PDF, DOCX, etc.) — text-only, no vision
+        from app.services.markitdown_service import is_supported, extract_text
+        if is_supported(mime_type=mime_type):
+            doc_text = extract_text(image_bytes, mime_type=mime_type)
+            if doc_text:
+                user_text = caption.strip() if caption.strip() else ""
+                name_hint = f" Their name is {sender_name}." if sender_name else ""
+                instruction = (
+                    f"The user has shared a document with you.{name_hint} "
+                    f"First, thank them by name if known (e.g. 'Thank you {sender_name or 'for sharing'}!'). "
+                    "Here is the extracted text from the document:\n\n"
+                    f"---\n{doc_text[:3000]}\n---\n\n"
+                    "Summarize what this document contains. "
+                    "If the user added a caption, address it. "
+                    "Keep your response concise, warm and friendly."
+                )
+                if user_text:
+                    instruction += f"\n\nUser caption: {user_text}"
+
+                messages: list[dict] = [{"role": "system", "content": system_prompt}]
+                if conversation_history:
+                    messages.extend(conversation_history[-6:])
+                messages.append({"role": "user", "content": instruction})
+
+                response = await ai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    max_tokens=500,
+                    temperature=0.7,
+                )
+                reply = response.choices[0].message.content
+                if reply:
+                    logger.info("[VISION] Used MarkItDown text extraction — no vision API needed")
+                    return reply.strip()
+
+        # Fall back to Vision API for images and unsupported formats
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         data_uri = f"data:{mime_type};base64,{b64}"
 
@@ -822,7 +862,7 @@ async def generate_vision_response(
             {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
         ]
 
-        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": system_prompt}]
         if conversation_history:
             messages.extend(conversation_history[-6:])
         messages.append({"role": "user", "content": user_content})
@@ -854,6 +894,14 @@ async def classify_image_for_face_registration(
         "face"     — image contains a clear human face suitable for registration
         "document" — image is a document, book page, screenshot, PDF, or text-heavy
     """
+    # If MarkItDown can extract text, it's a document — skip vision API
+    from app.services.markitdown_service import is_supported, extract_text
+    if is_supported(mime_type=mime_type):
+        doc_text = extract_text(image_bytes, mime_type=mime_type)
+        if doc_text and len(doc_text) > 20:
+            logger.info("[IMAGE CLASSIFY] MarkItDown extracted text → document (no vision API needed)")
+            return "document"
+
     api_client = get_client()
     if not api_client:
         logger.warning("[IMAGE CLASSIFY] OpenAI client not available — defaulting to 'face'")
