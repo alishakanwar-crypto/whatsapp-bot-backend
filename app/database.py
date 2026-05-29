@@ -562,6 +562,18 @@ async def init_db():
         except Exception:
             pass  # column already exists
 
+        # visitor_dvr_sightings: add classification + snapshot columns
+        for col_name, col_def in [
+            ("classification", "TEXT DEFAULT 'Visitor'"),
+            ("snapshot", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                await db.execute(
+                    f"ALTER TABLE visitor_dvr_sightings ADD COLUMN {col_name} {col_def}"
+                )
+            except Exception:
+                pass  # column already exists
+
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()
 

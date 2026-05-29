@@ -279,6 +279,35 @@ async def _get_teacher_sightings(db, date: str) -> list[dict]:
     return results
 
 
+def _classify_visitor(camera: str, timestamp: str) -> str:
+    """Classify an unknown visitor based on camera location and time.
+
+    Categories:
+      - Parent: Entry Gate during arrival (6:30-9:00) or dismissal (13:00-15:00)
+      - Vendor: Entry Gate outside school hours or Basement cameras
+      - Visitor: Default for Reception or other cameras
+    """
+    cam_upper = camera.upper()
+    hour = -1
+    try:
+        time_part = timestamp.split(" ")[1] if " " in timestamp else timestamp
+        hour = int(time_part.split(":")[0])
+    except (IndexError, ValueError):
+        pass
+
+    is_entry = any(k in cam_upper for k in ("ENTRY", "DISPERSAL"))
+    is_basement = "BASEMENT" in cam_upper
+
+    if is_basement:
+        return "Vendor"
+    if is_entry:
+        if 6 <= hour <= 8 or 13 <= hour <= 15:
+            return "Parent"
+        if hour < 6 or hour >= 17:
+            return "Vendor"
+    return "Visitor"
+
+
 async def _store_visitor_sightings(db, visitors: list[dict]) -> int:
     """Store DVR visitor (unknown face) sightings in the database."""
     count = 0
@@ -290,10 +319,15 @@ async def _store_visitor_sightings(db, visitors: list[dict]) -> int:
         if not date_part:
             date_part = datetime.now(IST).strftime("%Y-%m-%d")
 
+        cam = v.get("camera", "")
+        classification = _classify_visitor(cam, ts)
+        snapshot = v.get("snapshot", "")
+
         await db.execute(
-            "INSERT INTO visitor_dvr_sightings (date, timestamp, camera) "
-            "VALUES (?, ?, ?)",
-            (date_part, ts, v.get("camera", "")),
+            "INSERT INTO visitor_dvr_sightings "
+            "(date, timestamp, camera, classification, snapshot) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (date_part, ts, cam, classification, snapshot),
         )
         count += 1
     await db.commit()
@@ -303,12 +337,17 @@ async def _store_visitor_sightings(db, visitors: list[dict]) -> int:
 async def _get_visitor_sightings(db, date: str) -> list[dict]:
     """Get all DVR visitor sightings for a date."""
     cur = await db.execute(
-        "SELECT id, timestamp, camera FROM visitor_dvr_sightings "
+        "SELECT id, timestamp, camera, classification, snapshot "
+        "FROM visitor_dvr_sightings "
         "WHERE date = ? ORDER BY timestamp",
         (date,),
     )
     return [
-        {"id": r[0], "timestamp": r[1], "camera": r[2]}
+        {
+            "id": r[0], "timestamp": r[1], "camera": r[2],
+            "classification": r[3] or "Visitor",
+            "snapshot": r[4] or "",
+        }
         for r in await cur.fetchall()
     ]
 
@@ -542,6 +581,7 @@ async def _reconcile(db, date: str) -> dict:
         unknown_id = f"UNKNOWN-{idx:03d}"
         ts = v.get("timestamp", "")
         time_part = ts.split(" ")[1] if " " in ts else ts
+        classification = v.get("classification", "Visitor")
         unknown_persons.append({
             "id": unknown_id,
             "timestamp": ts,
@@ -549,6 +589,7 @@ async def _reconcile(db, date: str) -> dict:
             "camera": v.get("camera", "Unknown"),
             "direction": "IN",
             "status": "INSIDE",
+            "classification": classification,
             "person_crop": v.get("snapshot", ""),
         })
 
@@ -577,6 +618,12 @@ async def _reconcile(db, date: str) -> dict:
     # Also keep the gate-based estimate as a fallback reference
     unique_staff_detected = len(staff_present)
     gate_based_unknown = max(0, unique_gate_in - unique_staff_detected)
+
+    # Classification counts
+    classification_counts: dict[str, int] = {}
+    for u in unknown_persons:
+        cls = u.get("classification", "Visitor")
+        classification_counts[cls] = classification_counts.get(cls, 0) + 1
 
     # Visitor/unknown grouped by camera
     visitor_by_camera: dict[str, list[dict]] = {}
@@ -757,6 +804,7 @@ async def _reconcile(db, date: str) -> dict:
         "visitor_count": estimated_unknown_in,  # backward compat
         "visitor_sightings": visitor_sightings,
         "visitor_by_camera": visitor_by_camera,
+        "classification_counts": classification_counts,
         # Occupancy totals
         "total_inside": total_inside,
         "total_exited": total_staff_exited + total_unknown_exited,
@@ -989,7 +1037,15 @@ async def receive_visitor_sightings(request: Request):
     if alert_count:
         logger.info("[GATE] Queued %d unknown visitor alert(s)", alert_count)
 
-    logger.info("[GATE] Stored %d DVR visitor sighting(s)", count)
+    # Log classification breakdown
+    cls_log = {}
+    for v in visitors:
+        cam = v.get("camera", "")
+        ts = v.get("timestamp", "")
+        cls = _classify_visitor(cam, ts)
+        cls_log[cls] = cls_log.get(cls, 0) + 1
+    cls_str = ", ".join(f"{k}={v}" for k, v in sorted(cls_log.items()))
+    logger.info("[GATE] Stored %d DVR visitor sighting(s) [%s]", count, cls_str)
     return {"status": "ok", "stored": count}
 
 
@@ -1135,12 +1191,20 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ws["A2"] = f"PP International School - {date_str}"
     ws["A2"].font = Font(bold=True, size=11)
 
+    classification_counts = recon.get("classification_counts", {})
+
     r = 4
     summary_rows = [
         ("LIVE OCCUPANCY (Unique People Inside)", "", None),
         ("TOTAL INSIDE", total_inside, green_fill),
         ("  Verified Staff Inside", len(staff_inside), light_blue_fill),
         ("  Unknown / Visitors Inside", estimated_unknown_inside, orange_fill),
+        ("", "", None),
+        ("UNKNOWN PERSON CLASSIFICATION", "", None),
+    ]
+    for cls_name, cls_count in sorted(classification_counts.items()):
+        summary_rows.append((f"  {cls_name}", cls_count, orange_fill))
+    summary_rows += [
         ("", "", None),
         ("VERIFIED STAFF INSIDE BY CATEGORY", "", None),
     ]
@@ -1400,19 +1464,30 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     title_cell.border = border
 
     r += 1
-    for col, h in enumerate(["ID", "Time", "Camera", "Direction", "Status"], 1):
+    for col, h in enumerate(["ID", "Time", "Camera", "Classification", "Direction", "Status"], 1):
         cell = ws5.cell(row=r, column=col, value=h)
         cell.font = Font(bold=True)
         cell.fill = light_blue_fill
         cell.border = border
 
+    parent_fill = PatternFill("solid", fgColor="B4C6E7")
+    vendor_fill = PatternFill("solid", fgColor="E2EFDA")
     for u in unknown_persons[:50]:
         r += 1
         ws5.cell(row=r, column=1, value=u["id"]).border = border
         ws5.cell(row=r, column=2, value=u.get("time", "-")).border = border
         ws5.cell(row=r, column=3, value=u.get("camera", "-")).border = border
-        ws5.cell(row=r, column=4, value=u.get("direction", "IN")).border = border
-        status_cell = ws5.cell(row=r, column=5, value=u.get("status", "INSIDE"))
+        cls_cell = ws5.cell(row=r, column=4, value=u.get("classification", "Visitor"))
+        cls_cell.border = border
+        cls = u.get("classification", "Visitor")
+        if cls == "Parent":
+            cls_cell.fill = parent_fill
+        elif cls == "Vendor":
+            cls_cell.fill = vendor_fill
+        elif cls == "Visitor":
+            cls_cell.fill = orange_fill
+        ws5.cell(row=r, column=5, value=u.get("direction", "IN")).border = border
+        status_cell = ws5.cell(row=r, column=6, value=u.get("status", "INSIDE"))
         status_cell.border = border
         if u.get("status") == "INSIDE":
             status_cell.fill = orange_fill
