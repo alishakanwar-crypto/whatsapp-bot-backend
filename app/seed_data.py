@@ -7,12 +7,10 @@ wipes the ephemeral SQLite database).
 
 import os
 
-_DVR_PASSWORD = os.getenv("DVR_DEFAULT_PASSWORD", "")
-if not _DVR_PASSWORD:
-    import logging as _logging
-    _logging.getLogger(__name__).warning(
-        "DVR_DEFAULT_PASSWORD env var not set — DVR seed entries will have empty passwords"
-    )
+# All Hikvision DVRs share the same admin password on the school LAN.
+# The env var may override it, but an empty/unset value must NOT win —
+# a blank password causes ISAPI 401 Unauthorized on every capture.
+_DVR_PASSWORD = os.getenv("DVR_DEFAULT_PASSWORD") or "ppis@1980"
 
 SEED_DVRS = [
     {
@@ -34,6 +32,14 @@ SEED_DVRS = [
     {
         "name": "DVR 3",
         "ip": "192.168.0.14",
+        "port": 80,
+        "username": "admin",
+        "password": _DVR_PASSWORD,
+        "channels": 64
+    },
+    {
+        "name": "DVR 4",
+        "ip": "192.168.0.13",
         "port": 80,
         "username": "admin",
         "password": _DVR_PASSWORD,
