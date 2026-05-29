@@ -506,7 +506,7 @@ async def _reconcile(db, date: str) -> dict:
                 "outfit_description": s.get("outfit_description", ""),
             })
 
-        display_name = dvr_names.get(name_upper, tf["name"] if tf else name_upper.title())
+        display_name = tf["name"] if tf else dvr_names.get(name_upper, name_upper.title())
 
         outfit_observations = dvr_outfits.get(name_upper, [])
         outfit_summary = outfit_observations[-1].get("description", "unknown") if outfit_observations else "-"
@@ -581,32 +581,26 @@ async def _reconcile(db, date: str) -> dict:
     }
 
     # ── CATEGORY 2: UNKNOWN / UNREGISTERED PEOPLE ──
-    # Build unknown person list from visitor sightings + unmatched gate entries
-    unknown_persons: list[dict] = []
-    for idx, v in enumerate(visitor_sightings, 1):
-        unknown_id = f"UNKNOWN-{idx:03d}"
+    # Build unknown person list from visitor sightings + gate entries,
+    # deduplicating detections within 2 minutes on the same camera.
+    _raw_unknowns: list[dict] = []
+    for v in visitor_sightings:
         ts = v.get("timestamp", "")
         time_part = ts.split(" ")[1] if " " in ts else ts
-        classification = v.get("classification", "Visitor")
-        unknown_persons.append({
-            "id": unknown_id,
+        _raw_unknowns.append({
             "timestamp": ts,
             "time": time_part,
             "camera": v.get("camera", "Unknown"),
             "direction": "IN",
             "status": "INSIDE",
-            "classification": classification,
+            "classification": v.get("classification", "Visitor"),
             "person_crop": v.get("snapshot", ""),
         })
-
-    # Add crops from gate entries that are unmatched
     for g in gate_entries_with_crops:
         if g.get("person_crop"):
-            idx = len(unknown_persons) + 1
             ts = g.get("timestamp", "")
             time_part = ts.split(" ")[1] if " " in ts else ts
-            unknown_persons.append({
-                "id": f"UNKNOWN-{idx:03d}",
+            _raw_unknowns.append({
                 "timestamp": ts,
                 "time": time_part,
                 "camera": g.get("camera", "Unknown"),
@@ -614,6 +608,31 @@ async def _reconcile(db, date: str) -> dict:
                 "status": "INSIDE" if g.get("direction") == "IN" else "EXITED",
                 "person_crop": g.get("person_crop", ""),
             })
+
+    # Deduplicate: same camera within 2 minutes → same person
+    _raw_unknowns.sort(key=lambda x: (x["camera"], x["timestamp"]))
+    unknown_persons: list[dict] = []
+    _seen: list[tuple[str, str]] = []  # (camera, timestamp) of accepted entries
+    for u in _raw_unknowns:
+        cam = u["camera"]
+        ts = u["timestamp"]
+        is_dup = False
+        for prev_cam, prev_ts in _seen:
+            if prev_cam != cam:
+                continue
+            try:
+                from datetime import datetime as _dt
+                t1 = _dt.strptime(prev_ts[-8:], "%H:%M:%S")
+                t2 = _dt.strptime(ts[-8:], "%H:%M:%S")
+                if abs((t2 - t1).total_seconds()) < 120:
+                    is_dup = True
+                    break
+            except (ValueError, IndexError):
+                pass
+        if not is_dup:
+            _seen.append((cam, ts))
+            u["id"] = f"UNKNOWN-{len(unknown_persons) + 1:03d}"
+            unknown_persons.append(u)
 
     # Count unknown entries/exits from the actual unknown person list
     unknown_in_list = [u for u in unknown_persons if u["direction"] == "IN"]
@@ -1744,96 +1763,10 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     for col_letter, w in [("A", 40), ("B", 18), ("C", 20), ("D", 20)]:
         ws10d.column_dimensions[col_letter].width = w
 
-    # ── Sheet 11: Snapshots ──
-    import base64
-    import tempfile
-    import os
-    from openpyxl.drawing.image import Image as XlImage
-
-    vehicle_entries = recon.get("vehicle_entries", [])
-    gate_crops = recon.get("gate_entries_with_crops", [])
-    vehicle_snaps = [v for v in vehicle_entries if v.get("snapshot")]
-    person_snaps = [g for g in gate_crops if g.get("person_crop")]
-
-    # Keep temp files alive until after wb.save()
-    _tmp_files: list[str] = []
-
-    if vehicle_snaps or person_snaps:
-        ws10 = wb.create_sheet("Snapshots")
-        r = 1
-        for col, val in enumerate(["#", "Type", "Direction", "Time", "Camera", "Snapshot"], 1):
-            c = ws10.cell(row=r, column=col, value=val)
-            c.font = header_font
-            c.fill = header_fill
-            c.border = border
-        r += 1
-
-        ws10.cell(row=r, column=1, value="VEHICLE SNAPSHOTS").font = Font(bold=True, size=12)
-        r += 1
-
-        for idx, v in enumerate(vehicle_snaps[-12:], 1):
-            ws10.cell(row=r, column=1, value=idx).border = border
-            ws10.cell(row=r, column=2, value=v.get("vehicle_type", "").upper()).border = border
-            ws10.cell(row=r, column=3, value=v.get("direction", "")).border = border
-            ts = v.get("timestamp", "")
-            time_part = ts.split(" ")[1] if " " in ts else ts
-            ws10.cell(row=r, column=4, value=time_part).border = border
-            ws10.cell(row=r, column=5, value=v.get("camera", "")).border = border
-            try:
-                img_bytes = base64.b64decode(v["snapshot"])
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
-                _tmp_files.append(tmp_path)
-                img = XlImage(tmp_path)
-                img.width = 200
-                img.height = 130
-                ws10.add_image(img, f"F{r}")
-                ws10.row_dimensions[r].height = 100
-            except Exception:
-                pass
-            r += 1
-
-        r += 2
-        ws10.cell(row=r, column=1, value="GATE ENTRY PERSON SNAPSHOTS").font = Font(bold=True, size=12)
-        r += 1
-
-        for idx, g in enumerate(person_snaps[-16:], 1):
-            ws10.cell(row=r, column=1, value=idx).border = border
-            ws10.cell(row=r, column=2, value="PERSON").border = border
-            ws10.cell(row=r, column=3, value=g.get("direction", "IN")).border = border
-            ts = g.get("timestamp", "")
-            time_part = ts.split(" ")[1] if " " in ts else ts
-            ws10.cell(row=r, column=4, value=time_part).border = border
-            ws10.cell(row=r, column=5, value=g.get("camera", "")).border = border
-            try:
-                img_bytes = base64.b64decode(g["person_crop"])
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
-                _tmp_files.append(tmp_path)
-                img = XlImage(tmp_path)
-                img.width = 120
-                img.height = 160
-                ws10.add_image(img, f"F{r}")
-                ws10.row_dimensions[r].height = 125
-            except Exception:
-                pass
-            r += 1
-
-        for col_letter, w in [("A", 5), ("B", 12), ("C", 10), ("D", 12), ("E", 18), ("F", 30)]:
-            ws10.column_dimensions[col_letter].width = w
+    # ── Sheet 11: Snapshots — DISABLED per user request ──
 
     buf = io.BytesIO()
     wb.save(buf)
-
-    # Clean up temp files after save
-    for tmp_path in _tmp_files:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
     return buf.getvalue()
 
 
@@ -2337,8 +2270,8 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
         pdf.multi_cell(0, 6, f"  * {obs}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
 
-    # ── Live Snapshots Gallery ──
-    _add_snapshot_gallery(pdf, recon, section_header)
+    # ── Live Snapshots Gallery — DISABLED per user request ──
+    # _add_snapshot_gallery(pdf, recon, section_header)
 
     # ── Footer ──
     pdf.set_font("Helvetica", "I", 8)
