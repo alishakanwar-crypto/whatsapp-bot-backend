@@ -456,6 +456,60 @@ async def init_db():
             except Exception as e:
                 logger.error(f"Auto-seed DVRs failed: {e}", exc_info=True)
 
+        # --- Reconcile DVR credentials on every startup ---
+        # Even when the table already has rows, ensure each seed DVR exists
+        # with the correct admin credentials. This self-heals DVRs that were
+        # previously seeded with a blank/wrong password (the root cause of
+        # ISAPI 401 Unauthorized errors on the campus agent).
+        if SEED_DVRS:
+            try:
+                reconciled = 0
+                inserted = 0
+                for dvr in SEED_DVRS:
+                    ip = dvr.get("ip", "")
+                    if not ip:
+                        continue
+                    cur = await db.execute(
+                        "SELECT id, username, password FROM agent_dvrs WHERE ip = ?",
+                        (ip,),
+                    )
+                    existing = await cur.fetchone()
+                    if existing is None:
+                        await db.execute(
+                            "INSERT INTO agent_dvrs (name, ip, port, username, password, channels) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                dvr.get("name", ""),
+                                ip,
+                                dvr.get("port", 80),
+                                dvr.get("username", "admin"),
+                                dvr.get("password", ""),
+                                dvr.get("channels", 64),
+                            ),
+                        )
+                        inserted += 1
+                    elif (
+                        existing["password"] != dvr.get("password", "")
+                        or existing["username"] != dvr.get("username", "admin")
+                    ):
+                        await db.execute(
+                            "UPDATE agent_dvrs SET username = ?, password = ? WHERE id = ?",
+                            (
+                                dvr.get("username", "admin"),
+                                dvr.get("password", ""),
+                                existing["id"],
+                            ),
+                        )
+                        reconciled += 1
+                if inserted or reconciled:
+                    await db.commit()
+                    logger.info(
+                        f"DVR credential reconcile: inserted {inserted}, "
+                        f"updated {reconciled}"
+                    )
+            except Exception as e:
+                logger.error(f"DVR credential reconcile failed: {e}", exc_info=True)
+
         # --- Auto-seed camera mappings ---
         cursor = await db.execute("SELECT COUNT(*) FROM agent_camera_mapping")
         row = await cursor.fetchone()
