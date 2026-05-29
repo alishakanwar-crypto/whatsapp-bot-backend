@@ -35,6 +35,7 @@ import io
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request
@@ -466,7 +467,7 @@ async def _reconcile(db, date: str) -> dict:
         outfit_summary = outfit_observations[-1].get("description", "unknown") if outfit_observations else "-"
 
         raw_category = contact_categories.get(name_upper, "staff")
-        category = _normalize_category(raw_category)
+        category = _normalize_category(raw_category, name=display_name)
 
         # Determine presence status
         is_present = tf is not None or len(dvr_list) > 0
@@ -621,6 +622,19 @@ async def _reconcile(db, date: str) -> dict:
             "category": "unknown",
             "detail": f"{total_unknown_inside} unregistered/unknown person(s) estimated inside campus.",
         })
+    # Flag student detections during no-school period (likely false positives)
+    student_detections = [s for s in staff_detail
+                         if s["category"] == "Students" and s["occupancy_status"] != "ABSENT"]
+    if student_detections:
+        names = ", ".join(s["name"] for s in student_detections)
+        alerts.append({
+            "type": "STUDENT_DETECTED",
+            "severity": "low",
+            "person": names,
+            "category": "Students",
+            "detail": (f"{len(student_detections)} student(s) detected on DVR: {names}. "
+                       "May be false positive if school is not in session."),
+        })
 
     # Update daily summary
     await db.execute(
@@ -683,9 +697,30 @@ async def _reconcile(db, date: str) -> dict:
     }
 
 
-def _normalize_category(raw: str) -> str:
-    """Normalize raw TrueFace category into display group."""
+# Grade/section pattern: digits followed by optional section letter
+# Matches names like "garv jain 9 - B", "student 10-A", "name 1 - C"
+_STUDENT_GRADE_RE = re.compile(
+    r"\b(?:nursery|prep|[kK][gG]|[1-9]|1[0-2])\s*[-–]\s*[A-Za-z]\b"
+)
+
+
+def _is_student_name(name: str) -> bool:
+    """Detect if a name contains a grade/section pattern (e.g. '9 - B')."""
+    return bool(_STUDENT_GRADE_RE.search(name))
+
+
+def _normalize_category(raw: str, name: str = "") -> str:
+    """Normalize raw TrueFace category into display group.
+
+    Also detects students by name pattern (grade-section in name).
+    """
+    # Student detection by name pattern (overrides all other categories)
+    if name and _is_student_name(name):
+        return "Students"
+
     raw = (raw or "staff").lower().strip()
+    if raw == "student":
+        return "Students"
     teacher_keywords = ("teacher", "eng-teacher", "comp. teacher", "art teacher",
                         "music teacher", "sports teacher", "dance teacher",
                         "theatre teacher", "trainee teacher", "lib. teacher",
