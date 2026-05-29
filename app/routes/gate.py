@@ -1188,6 +1188,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     total_inside = recon.get("total_inside", 0)
     estimated_unknown_inside = recon.get("estimated_unknown_inside", 0)
+    disc = recon.get("discrepancy", {})
 
     # ── Sheet 1: Summary (Occupancy-Based) ──
     ws = wb.active
