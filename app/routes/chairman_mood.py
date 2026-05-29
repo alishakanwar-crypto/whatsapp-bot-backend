@@ -216,9 +216,9 @@ async def receive_mood(request: Request):
         person, timestamp, camera, dominant_emotion, temperament, intensity,
     )
 
-    # Immediately send a mood report when Chairman is first detected
-    if person.lower() == "chairman":
-        asyncio.ensure_future(_send_chairman_instant_report())
+    # Mood reports permanently disabled per user request
+    # if person.lower() == "chairman":
+    #     asyncio.ensure_future(_send_chairman_instant_report())
 
     return {"status": "ok", "person": person, "emotion": dominant_emotion, "temperament": temperament}
 
