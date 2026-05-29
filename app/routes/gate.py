@@ -395,17 +395,28 @@ async def _reconcile(db, date: str) -> dict:
     unique_gate_out = len(gate_out)
 
     # ── CATEGORY 1: VERIFIED STAFF ──
+    # Name aliases: DVR name → TrueFace canonical name (for people registered
+    # under different names on different systems)
+    _NAME_ALIASES: dict[str, str] = {
+        "ALISHA AHUJA": "ALISHA KANWAR",
+    }
+
+    def _canonical(name: str) -> str:
+        """Return canonical (TrueFace) name, resolving aliases."""
+        upper = name.upper().strip()
+        return _NAME_ALIASES.get(upper, upper)
+
     # Build TrueFace lookup by name
     tf_by_name: dict[str, dict] = {}
     for t in trueface:
-        tf_by_name[t["name"].upper().strip()] = t
+        tf_by_name[_canonical(t["name"])] = t
 
     # Build DVR sightings grouped by person
     dvr_by_person: dict[str, list[dict]] = {}
     dvr_names: dict[str, str] = {}
     dvr_outfits: dict[str, list[dict]] = {}
     for s in dvr_sightings:
-        key = s["name"].upper().strip()
+        key = _canonical(s["name"])
         dvr_by_person.setdefault(key, []).append(s)
         dvr_names[key] = s["name"]
         if s.get("outfit_color") and s["outfit_color"] != "unknown":
@@ -417,10 +428,10 @@ async def _reconcile(db, date: str) -> dict:
                 "timestamp": s.get("timestamp", ""),
             })
 
-    # All unique registered staff names
+    # All unique registered staff names (using canonical names)
     all_names: set[str] = set()
     for t in all_teachers:
-        all_names.add(t["name"].upper().strip())
+        all_names.add(_canonical(t["name"]))
     for key in tf_by_name:
         all_names.add(key)
     for key in dvr_by_person:
