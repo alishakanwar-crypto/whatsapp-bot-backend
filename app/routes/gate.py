@@ -54,6 +54,11 @@ REPORT_RECIPIENTS = os.environ.get(
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
+UNKNOWN_ALERT_PHONES = [
+    "918796105084",   # Alisha
+    "919289280410",   # Charu
+    "919718305474",   # Poonam
+]
 UNKNOWN_ALERT_TEMPLATE = "unknown_person_detected"
 
 # Dedup: max one unknown person alert per camera per 60-second window
@@ -283,9 +288,9 @@ def _classify_visitor(camera: str, timestamp: str) -> str:
     """Classify an unknown visitor based on camera location and time.
 
     Categories:
-      - Parent: Entry Gate during arrival (6:30-9:00) or dismissal (13:00-15:00)
-      - Vendor: Entry Gate outside school hours or Basement cameras
-      - Visitor: Default for Reception or other cameras
+      - Parent: Entry Gate or Reception during school hours (6:30-17:00)
+      - Vendor: Entry Gate, Reception, or Basement at odd hours (before 6, after 17)
+      - Visitor: Default fallback
     """
     cam_upper = camera.upper()
     hour = -1
@@ -296,15 +301,18 @@ def _classify_visitor(camera: str, timestamp: str) -> str:
         pass
 
     is_entry = any(k in cam_upper for k in ("ENTRY", "DISPERSAL"))
+    is_reception = "RECEPTION" in cam_upper
     is_basement = "BASEMENT" in cam_upper
+    is_monitored = is_entry or is_reception or is_basement
 
-    if is_basement:
-        return "Vendor"
-    if is_entry:
-        if 6 <= hour <= 8 or 13 <= hour <= 15:
-            return "Parent"
+    if is_monitored:
+        # Odd hours → Vendor (any monitored camera)
         if hour < 6 or hour >= 17:
             return "Vendor"
+        # School hours → Parent (entry/reception), Vendor (basement)
+        if is_basement:
+            return "Vendor"
+        return "Parent"
     return "Visitor"
 
 
@@ -941,17 +949,21 @@ async def _send_unknown_person_alert(entry: dict):
             logger.warning("[GATE] Failed to upload image for alert (camera=%s)", camera)
             return
 
-        sent = await send_cloud_template_message(
-            to=UNKNOWN_ALERT_PHONE,
-            template_name=UNKNOWN_ALERT_TEMPLATE,
-            language_code="en",
-            body_params=[camera, ts, direction],
-            header_image_id=header_image_id,
-        )
+        # Send alert to all configured recipients
+        for phone in UNKNOWN_ALERT_PHONES:
+            try:
+                sent = await send_cloud_template_message(
+                    to=phone,
+                    template_name=UNKNOWN_ALERT_TEMPLATE,
+                    language_code="en",
+                    body_params=[camera, ts, direction],
+                    header_image_id=header_image_id,
+                )
+                logger.info("[GATE] Unknown person alert → %s: %s (camera=%s)",
+                            phone, "OK" if sent else "FAILED", camera)
+            except Exception as inner_e:
+                logger.error("[GATE] Alert to %s failed: %s", phone, inner_e)
 
-        logger.info("[GATE] Unknown person alert → %s: %s (camera=%s, image=%s)",
-                    UNKNOWN_ALERT_PHONE, "OK" if sent else "FAILED", camera,
-                    "yes" if person_crop else "placeholder")
     except Exception as e:
         logger.error("[GATE] Unknown person alert failed: %s (camera=%s)", e, camera)
 
@@ -2362,7 +2374,7 @@ async def test_unknown_person_alert():
     # Clear cooldown so the test alert always sends
     _unknown_alert_last.pop("ENTRY GATE-1", None)
     await _send_unknown_person_alert(test_entry)
-    return {"status": "sent", "phone": UNKNOWN_ALERT_PHONE, "template": UNKNOWN_ALERT_TEMPLATE}
+    return {"status": "sent", "phones": UNKNOWN_ALERT_PHONES, "template": UNKNOWN_ALERT_TEMPLATE}
 
 
 async def send_reconciliation_report():
