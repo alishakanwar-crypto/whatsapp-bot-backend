@@ -932,11 +932,11 @@ def _generate_placeholder_image() -> str:
 
 
 async def _send_unknown_person_alert(entry: dict):
-    """Send WhatsApp template alert with snapshot for an unrecognized person.
+    """Send WhatsApp template alert with 3-angle snapshots for an unrecognized person.
 
     Uses the 'unknown_person_detected' template (IMAGE header + body params)
     so alerts work outside the 24-hour conversation window.
-    Template requires an IMAGE header — uses placeholder if no crop available.
+    Sends up to 3 photos: face close-up (template header), body shot, context.
     Deduplicates by camera to avoid spam (one alert per camera per 60s).
     """
     import time
@@ -953,22 +953,37 @@ async def _send_unknown_person_alert(entry: dict):
     ts = entry.get("timestamp", "")
     direction = entry.get("direction", "IN")
     person_crop = entry.get("person_crop", "")
+    snapshot_face = entry.get("snapshot_face", "")
+    snapshot_body = entry.get("snapshot_body", "")
+    snapshot_context = entry.get("snapshot_context", "")
+
+    # Primary image: prefer face close-up, fall back to person_crop
+    primary_image = snapshot_face or person_crop
 
     try:
         from app.services.whatsapp_service import (
             upload_base64_image_cloud,
             send_cloud_template_message,
+            send_cloud_media,
         )
 
-        image_data = person_crop if person_crop else _generate_placeholder_image()
+        image_data = primary_image if primary_image else _generate_placeholder_image()
         header_image_id = await upload_base64_image_cloud(image_data)
         if not header_image_id:
             logger.warning("[GATE] Failed to upload image for alert (camera=%s)", camera)
             return
 
-        # Send alert to all configured recipients
+        # Upload body and context photos for follow-up messages
+        body_image_id = None
+        context_image_id = None
+        if snapshot_body:
+            body_image_id = await upload_base64_image_cloud(snapshot_body)
+        if snapshot_context:
+            context_image_id = await upload_base64_image_cloud(snapshot_context)
+
         for phone in UNKNOWN_ALERT_PHONES:
             try:
+                # 1) Template message with face close-up
                 sent = await send_cloud_template_message(
                     to=phone,
                     template_name=UNKNOWN_ALERT_TEMPLATE,
@@ -978,6 +993,25 @@ async def _send_unknown_person_alert(entry: dict):
                 )
                 logger.info("[GATE] Unknown person alert → %s: %s (camera=%s)",
                             phone, "OK" if sent else "FAILED", camera)
+
+                # 2) Follow-up: body shot with red highlight box
+                if body_image_id:
+                    await send_cloud_media(
+                        to=phone,
+                        media_type="image",
+                        media_id=body_image_id,
+                        caption=f"\U0001f534 Full body — {camera} at {ts}",
+                    )
+
+                # 3) Follow-up: context shot (full camera frame)
+                if context_image_id:
+                    await send_cloud_media(
+                        to=phone,
+                        media_type="image",
+                        media_id=context_image_id,
+                        caption=f"\U0001f4f7 Gate context — {camera} at {ts}",
+                    )
+
             except Exception as inner_e:
                 logger.error("[GATE] Alert to %s failed: %s", phone, inner_e)
 
@@ -1060,6 +1094,9 @@ async def receive_visitor_sightings(request: Request):
                 "timestamp": v.get("timestamp", ""),
                 "direction": "IN",
                 "person_crop": v.get("snapshot", ""),
+                "snapshot_face": v.get("snapshot_face", ""),
+                "snapshot_body": v.get("snapshot_body", ""),
+                "snapshot_context": v.get("snapshot_context", ""),
             }
             alert_count += 1
             asyncio.create_task(_send_unknown_person_alert(alert_entry))
