@@ -151,13 +151,13 @@ async def _get_gate_entries(db, date: str, direction: str | None = None) -> list
     """Get all gate entries for a date, optionally filtered by direction."""
     if direction:
         cur = await db.execute(
-            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes "
+            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop "
             "FROM gate_entries WHERE date = ? AND direction = ? ORDER BY timestamp",
             (date, direction),
         )
     else:
         cur = await db.execute(
-            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes "
+            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop "
             "FROM gate_entries WHERE date = ? ORDER BY timestamp",
             (date,),
         )
@@ -167,6 +167,7 @@ async def _get_gate_entries(db, date: str, direction: str | None = None) -> list
             "id": r[0], "date": r[1], "timestamp": r[2], "camera": r[3],
             "direction": r[4], "attire_color": r[5], "reconciled": bool(r[6]),
             "matched_pin": r[7], "notes": r[8],
+            "person_crop": r[9] if len(r) > 9 else "",
         }
         for r in rows
     ]
@@ -289,10 +290,13 @@ async def _get_teacher_sightings(db, date: str) -> list[dict]:
 def _classify_visitor(camera: str, timestamp: str) -> str:
     """Classify an unknown visitor based on camera location and time.
 
-    Categories:
-      - Parent: Entry Gate or Reception during school hours (6:30-17:00)
-      - Vendor: Entry Gate, Reception, or Basement at odd hours (before 6, after 17)
-      - Visitor: Default fallback
+    4-category system:
+      - Staff (registered): handled elsewhere via TrueFace/face DB match
+      - Student: handled elsewhere via name pattern / face DB match
+      - Parent: unknown face on entry/reception camera during school hours (7-15)
+      - Third-party/Vendor: unknown face during off-hours, on basement camera,
+        or unreconciled gate entry without face match
+      - Visitor: default fallback for unknown face on other cameras
     """
     cam_upper = camera.upper()
     hour = -1
@@ -308,12 +312,16 @@ def _classify_visitor(camera: str, timestamp: str) -> str:
     is_monitored = is_entry or is_reception or is_basement
 
     if is_monitored:
-        # Odd hours → Vendor (any monitored camera)
-        if hour < 6 or hour >= 17:
-            return "Vendor"
-        # School hours → Parent (entry/reception), Vendor (basement)
+        # Off-hours → Third-party/Vendor (any monitored camera)
+        if hour < 7 or hour >= 17:
+            return "Third-party/Vendor"
+        # Basement → Third-party/Vendor (service providers use basement)
         if is_basement:
-            return "Vendor"
+            return "Third-party/Vendor"
+        # School hours on entry/reception → Parent
+        if 7 <= hour < 15:
+            return "Parent"
+        # After 15:00 (dispersal time) → Parent
         return "Parent"
     return "Visitor"
 
@@ -659,9 +667,7 @@ async def _reconcile(db, date: str) -> dict:
     estimated_unknown_in = len(unknown_in_list)
     estimated_unknown_out = len(unknown_out_list)
     estimated_unknown_inside = max(0, estimated_unknown_in - estimated_unknown_out)
-    # Also keep the gate-based estimate as a fallback reference
     unique_staff_detected = len(staff_present)
-    gate_based_unknown = max(0, unique_gate_in - unique_staff_detected)
 
     # Classification counts
     classification_counts: dict[str, int] = {}
@@ -680,10 +686,88 @@ async def _reconcile(db, date: str) -> dict:
     vehicles_out = [v for v in vehicle_entries if v["direction"] == "OUT"]
     vehicle_type_counts = dict(Counter(v["vehicle_type"] for v in vehicles_in))
 
+    # ── CATEGORY 3: CROSS-REFERENCE GATE ENTRIES WITH FACE DETECTIONS ──
+    # Match each gate entry to a face detection (staff arrival or visitor
+    # sighting) by timestamp proximity. Unmatched entries = people who
+    # entered but could NOT be identified by any face system.
+    _CROSS_REF_WINDOW = 300  # 5-minute matching window
+
+    def _parse_ts(ts_str: str) -> datetime | None:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%H:%M:%S"):
+            try:
+                return datetime.strptime(ts_str, fmt)
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    # Build face detection timeline (all identified arrivals)
+    face_events: list[dict] = []
+    for s in staff_present:
+        arr = s.get("trueface_arrival") or s.get("dvr_first_seen")
+        if arr:
+            face_events.append({"time": arr, "name": s["name"], "type": "staff"})
+    for v in visitor_sightings:
+        ts = v.get("timestamp", "")
+        t_part = ts.split(" ")[1] if " " in ts else ts
+        face_events.append({"time": t_part, "name": "Unknown", "type": "visitor"})
+
+    # Cross-reference each gate IN entry against face detections
+    matched_face_indices: set[int] = set()
+    reconciled_gate: list[dict] = []
+    unreconciled_gate: list[dict] = []
+
+    for g in gate_in:
+        g_ts = _parse_ts(g.get("timestamp", ""))
+        if g_ts is None:
+            continue
+        best_match = None
+        best_diff = _CROSS_REF_WINDOW + 1
+        best_idx = -1
+        for idx, fe in enumerate(face_events):
+            if idx in matched_face_indices:
+                continue
+            fe_ts = _parse_ts(fe["time"])
+            if fe_ts is None:
+                continue
+            # Compare only time-of-day (handle full timestamp vs time-only)
+            g_secs = g_ts.hour * 3600 + g_ts.minute * 60 + g_ts.second
+            fe_secs = fe_ts.hour * 3600 + fe_ts.minute * 60 + fe_ts.second
+            diff = abs(g_secs - fe_secs)
+            if diff < best_diff:
+                best_diff = diff
+                best_match = fe
+                best_idx = idx
+        if best_match and best_diff <= _CROSS_REF_WINDOW:
+            matched_face_indices.add(best_idx)
+            reconciled_gate.append({
+                "gate_timestamp": g.get("timestamp", ""),
+                "camera": g.get("camera", ""),
+                "attire_color": g.get("attire_color", ""),
+                "matched_to": best_match["name"],
+                "matched_type": best_match["type"],
+                "time_diff_seconds": best_diff,
+            })
+        else:
+            ts_str = g.get("timestamp", "")
+            time_part = ts_str.split(" ")[1] if " " in ts_str else ts_str
+            unreconciled_gate.append({
+                "id": f"UNREC-{len(unreconciled_gate) + 1:03d}",
+                "timestamp": ts_str,
+                "time": time_part,
+                "camera": g.get("camera", "Unknown"),
+                "attire_color": g.get("attire_color", "unknown"),
+                "direction": g.get("direction", "IN"),
+                "person_crop": g.get("person_crop", ""),
+                "status": "INSIDE",
+            })
+
+    unreconciled_count = len(unreconciled_gate)
+
     # ── OCCUPANCY SUMMARY ──
     total_staff_inside = len(staff_inside)
     total_unknown_inside = estimated_unknown_inside
-    total_inside = total_staff_inside + total_unknown_inside
+    total_unreconciled_inside = unreconciled_count
+    total_inside = total_staff_inside + total_unknown_inside + total_unreconciled_inside
     total_staff_exited = len(staff_exited)
     total_unknown_exited = estimated_unknown_out
 
@@ -713,6 +797,18 @@ async def _reconcile(db, date: str) -> dict:
             "category": "unknown",
             "detail": f"{total_unknown_inside} unregistered/unknown person(s) estimated inside campus.",
         })
+    if unreconciled_count > 0:
+        alerts.append({
+            "type": "UNRECONCILED_GATE_ENTRIES",
+            "severity": "high" if unreconciled_count > 5 else "medium",
+            "person": "",
+            "category": "unreconciled",
+            "detail": (
+                f"{unreconciled_count} person(s) detected at gate but could NOT be "
+                f"identified by face recognition. Could be guards, housekeeping, "
+                f"vendors, or other unregistered individuals."
+            ),
+        })
     # Flag student detections during no-school period (likely false positives)
     student_detections = [s for s in staff_detail
                          if s["category"] == "Students" and s["occupancy_status"] != "ABSENT"]
@@ -728,9 +824,8 @@ async def _reconcile(db, date: str) -> dict:
         })
 
     # ── GATE vs FACE DISCREPANCY ──
-    # Compare YOLO head count with identified faces to find unreconciled entries
     total_identified = unique_staff_detected + estimated_unknown_in
-    unreconciled_count = max(0, unique_gate_in - total_identified)
+    total_accounted = total_identified  # faces matched by any system
 
     # Group gate entries by hourly time window for discrepancy breakdown
     hourly_gate: dict[str, int] = {}
@@ -765,46 +860,20 @@ async def _reconcile(db, date: str) -> dict:
             "unreconciled": gap,
         })
 
-    # Unmatched gate entries: IN entries that don't correspond to any identified person
-    # Include attire color and camera info for visual tracking
-    unmatched_entries = []
-    for g in gate_in:
-        if not g.get("reconciled") and not g.get("matched_pin"):
-            ts = g.get("timestamp", "")
-            time_part = ts.split(" ")[1] if " " in ts else ts
-            unmatched_entries.append({
-                "timestamp": ts,
-                "time": time_part,
-                "camera": g.get("camera", "Unknown"),
-                "attire_color": g.get("attire_color", ""),
-            })
-
     discrepancy = {
         "gate_head_count": unique_gate_in,
         "faces_identified": total_identified,
         "staff_identified": unique_staff_detected,
         "visitors_identified": estimated_unknown_in,
         "unreconciled": unreconciled_count,
+        "reconciled_gate_entries": len(reconciled_gate),
         "reconciliation_rate": round(
-            (total_identified / unique_gate_in * 100) if unique_gate_in > 0 else 100, 1
+            (total_accounted / unique_gate_in * 100) if unique_gate_in > 0 else 100, 1
         ),
         "hourly_breakdown": hourly_discrepancy,
-        "unmatched_entries": unmatched_entries[:50],
+        "unreconciled_entries": unreconciled_gate[:50],
+        "reconciled_entries": reconciled_gate[:50],
     }
-
-    if unreconciled_count > 0:
-        alerts.append({
-            "type": "GATE_FACE_DISCREPANCY",
-            "severity": "high" if unreconciled_count > 5 else "medium",
-            "person": "",
-            "category": "unknown",
-            "detail": (
-                f"Gate counted {unique_gate_in} people IN, but only "
-                f"{total_identified} identified ({unique_staff_detected} staff + "
-                f"{estimated_unknown_in} visitors). "
-                f"{unreconciled_count} unreconciled entries."
-            ),
-        })
 
     # Update daily summary
     await db.execute(
@@ -840,7 +909,7 @@ async def _reconcile(db, date: str) -> dict:
         "staff_category_inside": dict(staff_category_inside),
         "staff_category_present": dict(staff_category_present),
         "category_counts": dict(staff_category_present),  # backward compat
-        # Unknown / unregistered
+        # Unknown / unregistered (CATEGORY 2)
         "unknown_persons": unknown_persons,
         "estimated_unknown_in": estimated_unknown_in,
         "estimated_unknown_out": estimated_unknown_out,
@@ -848,6 +917,10 @@ async def _reconcile(db, date: str) -> dict:
         "visitor_count": estimated_unknown_in,  # backward compat
         "visitor_sightings": visitor_sightings,
         "visitor_by_camera": visitor_by_camera,
+        # Unreconciled gate entries (CATEGORY 3)
+        "unreconciled_gate_entries": unreconciled_gate,
+        "reconciled_gate_entries": reconciled_gate,
+        "total_unreconciled_inside": total_unreconciled_inside,
         "classification_counts": classification_counts,
         # Occupancy totals
         "total_inside": total_inside,
@@ -1280,12 +1353,21 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
     classification_counts = recon.get("classification_counts", {})
 
+    unreconciled_entries = recon.get("unreconciled_gate_entries", [])
+
     r = 4
     summary_rows = [
         ("LIVE OCCUPANCY (Unique People Inside)", "", None),
         ("TOTAL INSIDE", total_inside, green_fill),
-        ("  Verified Staff Inside", len(staff_inside), light_blue_fill),
-        ("  Unknown / Visitors Inside", estimated_unknown_inside, orange_fill),
+        ("  Cat 1: Verified Staff Inside", len(staff_inside), light_blue_fill),
+        ("  Cat 2: Unknown / Visitors Inside", estimated_unknown_inside, orange_fill),
+        ("  Cat 3: Unreconciled Gate Entries", len(unreconciled_entries), red_fill if unreconciled_entries else green_fill),
+        ("", "", None),
+        ("CATEGORY BREAKDOWN", "", None),
+        ("  Cat 1 — VERIFIED STAFF: Registered on TrueFace/face DB", "", None),
+        ("  Cat 2 — UNKNOWN VISITORS: Face detected but not registered", "", None),
+        ("  Cat 3 — UNRECONCILED: Detected at gate, no face match", "", None),
+        ("  (Cat 3 = guards, housekeeping, vendors, unregistered staff)", "", None),
         ("", "", None),
         ("UNKNOWN PERSON CLASSIFICATION", "", None),
     ]
@@ -1308,7 +1390,10 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
         ("RAW GATE DETECTIONS (not unique people)", "", None),
         ("  Gate Detections IN", recon.get("raw_gate_in", 0), None),
         ("  Gate Detections OUT", recon.get("raw_gate_out", 0), None),
-        ("  (Same person detected multiple times)", "", None),
+        ("  Unique Gate IN (deduplicated)", recon.get("unique_gate_in", 0), None),
+        ("  Reconciled (matched to face)", disc.get("reconciled_gate_entries", 0), green_fill),
+        ("  Unreconciled (no face match)", disc.get("unreconciled", 0),
+         red_fill if disc.get("unreconciled", 0) > 0 else green_fill),
         ("", "", None),
         ("VEHICLE COUNT", "", None),
         ("  Vehicles IN", recon.get("vehicles_in", 0), light_blue_fill),
@@ -1798,26 +1883,55 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
                 unrec_cell.fill = red_fill
             r += 1
 
-    # Unmatched entries detail
-    unmatched = disc.get("unmatched_entries", [])
-    if unmatched:
+    # Unreconciled entries detail (CATEGORY 3)
+    unrec_list = disc.get("unreconciled_entries", [])
+    if unrec_list:
         r += 1
-        ws10d.cell(row=r, column=1, value="UNMATCHED ENTRIES (not identified by face recognition)").font = Font(bold=True, size=12)
+        ws10d.cell(row=r, column=1,
+                    value="CATEGORY 3: UNRECONCILED GATE ENTRIES").font = Font(bold=True, size=12)
         r += 1
-        for col, h in enumerate(["#", "Time", "Camera", "Attire Color"], 1):
+        ws10d.cell(row=r, column=1,
+                    value="(Detected at gate but NOT matched to any face — guards, housekeeping, vendors, etc.)").font = Font(italic=True)
+        r += 1
+        for col, h in enumerate(["ID", "Time", "Camera", "Attire Color", "Direction"], 1):
             cell = ws10d.cell(row=r, column=col, value=h)
             cell.font = header_font
             cell.fill = header_fill
             cell.border = border
         r += 1
-        for idx, ue in enumerate(unmatched, 1):
-            ws10d.cell(row=r, column=1, value=idx).border = border
+        for ue in unrec_list:
+            ws10d.cell(row=r, column=1, value=ue.get("id", "")).border = border
             ws10d.cell(row=r, column=2, value=ue.get("time", "")).border = border
             ws10d.cell(row=r, column=3, value=ue.get("camera", "")).border = border
-            ws10d.cell(row=r, column=4, value=ue.get("attire_color", "")).border = border
+            attire_cell = ws10d.cell(row=r, column=4, value=ue.get("attire_color", ""))
+            attire_cell.border = border
+            attire_cell.fill = yellow_fill
+            ws10d.cell(row=r, column=5, value=ue.get("direction", "IN")).border = border
             r += 1
 
-    for col_letter, w in [("A", 40), ("B", 18), ("C", 20), ("D", 20)]:
+    # Reconciled entries (cross-referenced successfully)
+    rec_list = disc.get("reconciled_entries", [])
+    if rec_list:
+        r += 2
+        ws10d.cell(row=r, column=1,
+                    value="RECONCILED GATE ENTRIES (matched to face detection)").font = Font(bold=True, size=12)
+        r += 1
+        for col, h in enumerate(["Gate Time", "Camera", "Attire", "Matched To", "Type", "Time Diff (s)"], 1):
+            cell = ws10d.cell(row=r, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = border
+        r += 1
+        for re_entry in rec_list:
+            ws10d.cell(row=r, column=1, value=re_entry.get("gate_timestamp", "")).border = border
+            ws10d.cell(row=r, column=2, value=re_entry.get("camera", "")).border = border
+            ws10d.cell(row=r, column=3, value=re_entry.get("attire_color", "")).border = border
+            ws10d.cell(row=r, column=4, value=re_entry.get("matched_to", "")).border = border
+            ws10d.cell(row=r, column=5, value=re_entry.get("matched_type", "")).border = border
+            ws10d.cell(row=r, column=6, value=re_entry.get("time_diff_seconds", "")).border = border
+            r += 1
+
+    for col_letter, w in [("A", 40), ("B", 18), ("C", 20), ("D", 20), ("E", 15), ("F", 15)]:
         ws10d.column_dimensions[col_letter].width = w
 
     # ── Sheet 11: Snapshots — DISABLED per user request ──
@@ -1842,10 +1956,14 @@ def _generate_ai_observations(recon: dict) -> list[str]:
     total_inside = recon.get("total_inside", 0)
     staff_inside = recon.get("staff_inside", 0)
 
+    unreconciled_entries = recon.get("unreconciled_gate_entries", [])
+
     # Occupancy summary
     observations.append(
-        f"LIVE OCCUPANCY: {total_inside} unique people inside campus "
-        f"({staff_inside} verified staff + {unknown_inside} unknown/visitors)."
+        f"LIVE OCCUPANCY: {total_inside} unique people inside campus — "
+        f"Cat 1 (verified staff): {staff_inside}, "
+        f"Cat 2 (unknown visitors): {unknown_inside}, "
+        f"Cat 3 (unreconciled gate): {len(unreconciled_entries)}."
     )
 
     if dvr_only:
@@ -1861,8 +1979,15 @@ def _generate_ai_observations(recon: dict) -> list[str]:
 
     if unknown_inside > 0:
         observations.append(
-            f"{unknown_inside} unregistered/unknown person(s) estimated inside campus. "
-            f"These could be parents, vendors, or visitors."
+            f"{unknown_inside} unregistered/unknown person(s) detected by face "
+            f"recognition but not registered in face DB (Category 2)."
+        )
+
+    if unreconciled_entries:
+        observations.append(
+            f"{len(unreconciled_entries)} person(s) detected at gate counter but "
+            f"could NOT be matched to any face detection (Category 3). "
+            f"These could be guards, housekeeping, vendors, or unregistered staff."
         )
 
     # Peak activity
@@ -2097,16 +2222,25 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     # SECTION 1: LIVE OCCUPANCY (unique people inside)
     # ══════════════════════════════════════════════
     section_header("LIVE OCCUPANCY (Unique People Currently Inside)")
+    unrec_entries = recon.get("unreconciled_gate_entries", [])
+    total_unreconciled = recon.get("total_unreconciled_inside", 0)
+
     pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(0, 100, 0)
     pdf.cell(0, 10, f"TOTAL INSIDE: {total_inside}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.set_text_color(0, 0, 0)
     pdf.ln(2)
-    key_value("Verified Staff Inside", len(staff_inside), bold_val=True)
-    key_value("Unknown / Visitors Inside", estimated_unknown_inside, bold_val=True)
+    key_value("Cat 1: Verified Staff Inside", len(staff_inside), bold_val=True)
+    key_value("Cat 2: Unknown / Visitors Inside", estimated_unknown_inside, bold_val=True)
+    key_value("Cat 3: Unreconciled Gate Entries", total_unreconciled, bold_val=True)
     pdf.ln(2)
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5,
+             "Cat 1 = Registered on TrueFace/face DB | "
+             "Cat 2 = Face detected but not registered | "
+             "Cat 3 = Detected at gate, no face match",
+             new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 5,
              f"Unique crossings: IN={recon.get('unique_gate_in', 0)}, OUT={recon.get('unique_gate_out', 0)}"
              f"  (raw detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)})",
@@ -2195,6 +2329,39 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
             pdf.cell(20, 6, u.get("direction", "IN"), border=1, align="C", new_x="RIGHT")
             pdf.cell(0, 6, u.get("status", "INSIDE"), border=1, new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 4B: UNRECONCILED GATE ENTRIES (Cat 3)
+    # ══════════════════════════════════════════════
+    if unrec_entries:
+        section_header("CATEGORY 3: UNRECONCILED GATE ENTRIES")
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 5,
+                 "Detected at gate by YOLO counter but NOT matched to any face recognition. "
+                 "Could be guards, housekeeping, vendors, or other unregistered individuals.",
+                 new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
+
+        key_value("Total Unreconciled", len(unrec_entries), bold_val=True)
+        pdf.ln(2)
+
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(255, 199, 206)  # red tint
+        pdf.cell(28, 7, "ID", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(25, 7, "Time", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(50, 7, "Camera", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(30, 7, "Attire Color", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Status", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for ue in unrec_entries[:30]:
+            pdf.cell(28, 6, ue.get("id", ""), border=1, new_x="RIGHT")
+            pdf.cell(25, 6, ue.get("time", "-"), border=1, align="C", new_x="RIGHT")
+            pdf.cell(50, 6, ue.get("camera", "-"), border=1, new_x="RIGHT")
+            pdf.cell(30, 6, ue.get("attire_color", "-"), border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, ue.get("status", "INSIDE"), border=1, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
 
     # ══════════════════════════════════════════════
     # SECTION 5: VEHICLE COUNT
@@ -2602,6 +2769,18 @@ async def live_dashboard_data():
             }
             for u in unknown_persons[:50]
         ],
+        "unreconciled_gate_entries": [
+            {
+                "id": ue.get("id", ""),
+                "time": ue.get("time", "-"),
+                "camera": ue.get("camera", "-"),
+                "attire_color": ue.get("attire_color", "unknown"),
+                "direction": ue.get("direction", "IN"),
+                "status": ue.get("status", "INSIDE"),
+            }
+            for ue in recon.get("unreconciled_gate_entries", [])[:50]
+        ],
+        "reconciled_gate_entries": len(recon.get("reconciled_gate_entries", [])),
         "data_sources": ds,
         "alerts": recon.get("alerts", [])[:10],
         "staff_category_inside": recon.get("staff_category_inside", {}),
@@ -2609,6 +2788,7 @@ async def live_dashboard_data():
             "gate_count": recon.get("discrepancy", {}).get("gate_head_count", 0),
             "identified": recon.get("discrepancy", {}).get("faces_identified", 0),
             "unreconciled": recon.get("discrepancy", {}).get("unreconciled", 0),
+            "reconciled": recon.get("discrepancy", {}).get("reconciled_gate_entries", 0),
             "rate": recon.get("discrepancy", {}).get("reconciliation_rate", 100),
         },
     }
@@ -2710,7 +2890,7 @@ function render() {
     <div class="card">
       <h2>Total Inside Campus</h2>
       <div class="big-num green">${o.total_inside}</div>
-      <div class="sub-stat">Staff: <span>${o.staff_inside}</span> &bull; Unknown: <span>${o.unknown_inside}</span></div>
+      <div class="sub-stat">Cat 1 Staff: <span>${o.staff_inside}</span> &bull; Cat 2 Unknown: <span>${o.unknown_inside}</span> &bull; Cat 3 Unrec: <span>${(data.unreconciled_gate_entries||[]).length}</span></div>
     </div>
     <div class="card">
       <h2>Staff Exited</h2>
@@ -2721,11 +2901,12 @@ function render() {
       <h2>Gate Crossings</h2>
       <div class="big-num amber">${g.unique_in}</div>
       <div class="sub-stat">IN: <span>${g.unique_in}</span> &bull; OUT: <span>${g.unique_out}</span></div>
-      <div class="sub-stat">Raw: IN=${g.raw_in}, OUT=${g.raw_out}</div>
+      <div class="sub-stat">Reconciled: ${d.reconciled} &bull; Unreconciled: ${d.unreconciled}</div>
     </div>
     <div class="card">
-      <h2>Unknown Persons</h2>
+      <h2>Unknown Persons (Cat 2)</h2>
       <div class="big-num ${o.unknown_inside > 0 ? 'red' : 'green'}">${o.unknown_inside}</div>
+      <div class="sub-stat">Face detected but not registered</div>
       <div class="sub-stat">Inside: <span>${o.unknown_inside}</span> &bull; Exited: <span>${o.unknown_exited}</span></div>
     </div>`;
 
@@ -2785,6 +2966,24 @@ function render() {
         <td><span class="badge ${u.direction==='IN'?'badge-in':'badge-out'}">${u.direction}</span></td>
         <td><span class="badge ${u.status==='INSIDE'?'badge-inside':'badge-exited'}">${u.status}</span></td>
         <td>${u.classification}</td>
+      </tr>`;
+    }
+    html += '</table></div>';
+  }
+
+  // Unreconciled gate entries (Category 3)
+  const unrec = data.unreconciled_gate_entries || [];
+  if (unrec.length > 0) {
+    html += `<div class="card full-width"><h2>Category 3: Unreconciled Gate Entries (${unrec.length})</h2>
+      <div class="sub-stat" style="margin-bottom:8px">Detected at gate but NOT matched to any face recognition &mdash; guards, housekeeping, vendors, unregistered staff</div>
+      <table>
+      <tr><th>ID</th><th>Time</th><th>Camera</th><th>Attire Color</th><th>Direction</th><th>Status</th></tr>`;
+    for (const u of unrec) {
+      html += `<tr>
+        <td>${u.id}</td><td>${u.time}</td><td>${u.camera}</td>
+        <td><span style="background:${u.attire_color!=='unknown'?u.attire_color:'#666'};padding:2px 8px;border-radius:4px;color:#fff;font-size:11px">${u.attire_color}</span></td>
+        <td><span class="badge badge-in">${u.direction}</span></td>
+        <td><span class="badge badge-inside">${u.status}</span></td>
       </tr>`;
     }
     html += '</table></div>';
