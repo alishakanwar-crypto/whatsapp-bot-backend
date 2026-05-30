@@ -64,8 +64,8 @@ UNKNOWN_ALERT_TEMPLATE = "unknown_person_detected"
 _unknown_alert_last: dict[str, float] = {}
 _UNKNOWN_ALERT_COOLDOWN = 60  # seconds
 
-# Cameras at actual entry/exit points (for accurate visitor counting)
-_ENTRY_CAMERA_KEYWORDS = ("ENTRY GATE", "DISPERSAL")
+# Cameras at actual entry/exit points (Main Gate, Basement, Dispersal)
+_ENTRY_CAMERA_KEYWORDS = ("ENTRY GATE", "DISPERSAL", "BASEMENT")
 
 # Deduplication: entries within this window from same/nearby cameras = same person
 _DEDUP_WINDOW_SECONDS = 120  # 2 minutes
@@ -415,19 +415,17 @@ async def _get_vehicle_entries(db, date: str) -> list[dict]:
 async def _reconcile(db, date: str) -> dict:
     """Perform head count reconciliation for a given date.
 
-    Architecture:
-      CATEGORY 1 — VERIFIED STAFF (registered in TrueFace/face DB)
-        Teachers, Admin, Security, Support — each tracked individually.
-        Source of truth: TrueFace attendance + DVR face sightings.
+    Architecture (per school spec):
+      Total Persons Entered  = gate counter baseline
+      Recognized Students    = students identified by face recognition
+      Recognized Staff       = staff identified by TrueFace / face DB
+      Total Recognized       = students + staff
+      Unrecognized Persons   = Total Entries - Total Recognized
+      Current Occupancy      = Total Entries - Total Exits
 
-      CATEGORY 2 — UNKNOWN / UNREGISTERED PEOPLE
-        Parents, visitors, vendors, delivery agents, etc.
-        Tagged as UNKNOWN-001, UNKNOWN-002, etc.
-        Tracked with snapshots, timestamps, camera source.
-
-      OCCUPANCY — unique people currently INSIDE (not raw detections).
-        Staff with arrival but no departure = INSIDE.
-        Unknown entries without matching exits = INSIDE.
+      Unrecognized persons get temp IDs (U-001, U-002, ...) with:
+        entry time, gate, clothing color, last seen camera/time.
+      We do NOT classify them as parent/vendor/visitor.
     """
     from collections import Counter
 
@@ -620,7 +618,7 @@ async def _reconcile(db, date: str) -> dict:
             "camera": v.get("camera", "Unknown"),
             "direction": v_direction,
             "status": "INSIDE" if v_direction == "IN" else "EXITED",
-            "classification": v.get("classification", "Visitor"),
+            "attire_color": v.get("attire_color", ""),
             "person_crop": v.get("snapshot", ""),
         })
     for g in gate_entries_with_crops:
@@ -658,7 +656,7 @@ async def _reconcile(db, date: str) -> dict:
                 pass
         if not is_dup:
             _seen.append((cam, ts))
-            u["id"] = f"UNKNOWN-{len(unknown_persons) + 1:03d}"
+            u["id"] = f"U-{len(unknown_persons) + 1:03d}"
             unknown_persons.append(u)
 
     # Count unknown entries/exits from the actual unknown person list
@@ -669,11 +667,8 @@ async def _reconcile(db, date: str) -> dict:
     estimated_unknown_inside = max(0, estimated_unknown_in - estimated_unknown_out)
     unique_staff_detected = len(staff_present)
 
-    # Classification counts
+    # Classification removed per spec — all unknowns are "UNRECOGNIZED PERSON"
     classification_counts: dict[str, int] = {}
-    for u in unknown_persons:
-        cls = u.get("classification", "Visitor")
-        classification_counts[cls] = classification_counts.get(cls, 0) + 1
 
     # Visitor/unknown grouped by camera
     visitor_by_camera: dict[str, list[dict]] = {}
@@ -751,7 +746,7 @@ async def _reconcile(db, date: str) -> dict:
             ts_str = g.get("timestamp", "")
             time_part = ts_str.split(" ")[1] if " " in ts_str else ts_str
             unreconciled_gate.append({
-                "id": f"UNREC-{len(unreconciled_gate) + 1:03d}",
+                "id": f"U-{len(unknown_persons) + len(unreconciled_gate) + 1:03d}",
                 "timestamp": ts_str,
                 "time": time_part,
                 "camera": g.get("camera", "Unknown"),
@@ -763,13 +758,31 @@ async def _reconcile(db, date: str) -> dict:
 
     unreconciled_count = len(unreconciled_gate)
 
-    # ── OCCUPANCY SUMMARY ──
+    # ── OCCUPANCY SUMMARY (per school spec) ──
+    # Current Occupancy = Total Entries - Total Exits (gate counter baseline)
     total_staff_inside = len(staff_inside)
-    total_unknown_inside = estimated_unknown_inside
-    total_unreconciled_inside = unreconciled_count
-    total_inside = total_staff_inside + total_unknown_inside + total_unreconciled_inside
     total_staff_exited = len(staff_exited)
     total_unknown_exited = estimated_unknown_out
+
+    # Recognized counts
+    recognized_students = [s for s in staff_present if s["category"] == "Students"]
+    recognized_staff = [s for s in staff_present if s["category"] != "Students"]
+    total_recognized = len(staff_present)  # all recognized (staff + students)
+
+    # Total entries = gate counter (unique IN crossings)
+    total_entries = unique_gate_in
+    total_exits = unique_gate_out
+
+    # Unrecognized = Total Entries - Total Recognized
+    total_unrecognized = max(0, total_entries - total_recognized)
+
+    # Current Occupancy = Total Entries - Total Exits
+    current_occupancy = max(0, total_entries - total_exits)
+
+    # Legacy: keep for backward compat
+    total_unknown_inside = estimated_unknown_inside
+    total_unreconciled_inside = unreconciled_count
+    total_inside = current_occupancy  # use the new formula
 
     # ── ALERTS ──
     alerts: list[dict] = []
@@ -789,24 +802,16 @@ async def _reconcile(db, date: str) -> dict:
             "category": t.get("category", "staff"),
             "detail": f"Seen on DVR ({', '.join(t.get('dvr_cameras', []))}) at {t.get('dvr_first_seen', '?')} but NOT marked on TrueFace.",
         })
-    if total_unknown_inside > 0:
+    if total_unrecognized > 0:
         alerts.append({
-            "type": "UNKNOWN_PERSONS_INSIDE",
-            "severity": "medium",
+            "type": "UNRECOGNIZED_PERSONS",
+            "severity": "high" if total_unrecognized > 10 else "medium",
             "person": "",
-            "category": "unknown",
-            "detail": f"{total_unknown_inside} unregistered/unknown person(s) estimated inside campus.",
-        })
-    if unreconciled_count > 0:
-        alerts.append({
-            "type": "UNRECONCILED_GATE_ENTRIES",
-            "severity": "high" if unreconciled_count > 5 else "medium",
-            "person": "",
-            "category": "unreconciled",
+            "category": "unrecognized",
             "detail": (
-                f"{unreconciled_count} person(s) detected at gate but could NOT be "
-                f"identified by face recognition. Could be guards, housekeeping, "
-                f"vendors, or other unregistered individuals."
+                f"{total_unrecognized} person(s) entered the school but could NOT "
+                f"be recognized as Student or Staff. "
+                f"(Total Entries: {total_entries} - Recognized: {total_recognized})"
             ),
         })
     # Flag student detections during no-school period (likely false positives)
@@ -886,46 +891,53 @@ async def _reconcile(db, date: str) -> dict:
 
     return {
         "date": date,
-        # Raw gate detections (for reference — NOT unique people)
+        # ── ENTRY SUMMARY ──
+        "total_entries": total_entries,  # unique gate IN (baseline)
+        "total_exits": total_exits,     # unique gate OUT
         "raw_gate_in": raw_gate_in,
         "raw_gate_out": raw_gate_out,
-        # Deduplicated counts (estimated unique crossings)
         "unique_gate_in": unique_gate_in,
         "unique_gate_out": unique_gate_out,
-        # Legacy keys for backward compat
-        "total_gate_in": unique_gate_in,
-        "total_gate_out": unique_gate_out,
-        # Verified staff
+        "total_gate_in": unique_gate_in,   # backward compat
+        "total_gate_out": unique_gate_out,  # backward compat
+        # ── RECOGNITION SUMMARY ──
+        "recognized_students": len(recognized_students),
+        "recognized_staff_count": len(recognized_staff),
+        "total_recognized": total_recognized,
         "total_registered": total_registered,
         "trueface_identified": len(trueface),
         "dvr_sighted": len([s for s in staff_detail if s["dvr_seen"]]),
         "staff_detail": staff_detail,
         "teacher_detail": staff_detail,  # backward compat
         "side_by_side": side_by_side,
-        # Staff occupancy
+        # ── UNRECOGNIZED SUMMARY ──
+        "total_unrecognized": total_unrecognized,
+        # ── CURRENT OCCUPANCY ──
+        "current_occupancy": current_occupancy,
+        "total_inside": total_inside,  # = current_occupancy
+        # ── Staff breakdown ──
         "staff_inside": total_staff_inside,
         "staff_exited": total_staff_exited,
         "staff_absent": len(staff_absent),
         "staff_category_inside": dict(staff_category_inside),
         "staff_category_present": dict(staff_category_present),
-        "category_counts": dict(staff_category_present),  # backward compat
-        # Unknown / unregistered (CATEGORY 2)
+        "category_counts": dict(staff_category_present),
+        # ── Unknown persons (face-detected unknowns) ──
         "unknown_persons": unknown_persons,
         "estimated_unknown_in": estimated_unknown_in,
         "estimated_unknown_out": estimated_unknown_out,
         "estimated_unknown_inside": estimated_unknown_inside,
-        "visitor_count": estimated_unknown_in,  # backward compat
+        "visitor_count": estimated_unknown_in,
         "visitor_sightings": visitor_sightings,
         "visitor_by_camera": visitor_by_camera,
-        # Unreconciled gate entries (CATEGORY 3)
+        # ── Unreconciled gate entries ──
         "unreconciled_gate_entries": unreconciled_gate,
         "reconciled_gate_entries": reconciled_gate,
         "total_unreconciled_inside": total_unreconciled_inside,
         "classification_counts": classification_counts,
-        # Occupancy totals
-        "total_inside": total_inside,
+        # ── Exits ──
         "total_exited": total_staff_exited + total_unknown_exited,
-        # Vehicles
+        # ── Vehicles ──
         "vehicles_in": len(vehicles_in),
         "vehicles_out": len(vehicles_out),
         "vehicle_types": vehicle_type_counts,
@@ -1344,61 +1356,71 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     estimated_unknown_inside = recon.get("estimated_unknown_inside", 0)
     disc = recon.get("discrepancy", {})
 
-    # ── Sheet 1: Summary (Occupancy-Based) ──
+    # ── Sheet 1: Summary (per school spec) ──
     ws = wb.active
-    ws.title = "Live Occupancy"
+    ws.title = "Reconciliation"
 
     ws.merge_cells("A1:D1")
-    ws["A1"] = "SCHOOL HEADCOUNT RECONCILIATION"
+    ws["A1"] = "HEAD COUNT RECONCILIATION REPORT"
     ws["A1"].font = Font(bold=True, size=14)
 
     ws.merge_cells("A2:D2")
     ws["A2"] = f"PP International School - {date_str}"
     ws["A2"].font = Font(bold=True, size=11)
 
-    classification_counts = recon.get("classification_counts", {})
+    total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
+    total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
+    recognized_students = recon.get("recognized_students", 0)
+    recognized_staff_count = recon.get("recognized_staff_count", 0)
+    total_recognized = recon.get("total_recognized", len(staff_present))
+    total_unrecognized = recon.get("total_unrecognized", 0)
+    current_occupancy = recon.get("current_occupancy", total_inside)
 
     unreconciled_entries = recon.get("unreconciled_gate_entries", [])
 
     r = 4
     summary_rows = [
-        ("LIVE OCCUPANCY (Unique People Inside)", "", None),
-        ("TOTAL INSIDE", total_inside, green_fill),
-        ("  Cat 1: Verified Staff Inside", len(staff_inside), light_blue_fill),
-        ("  Cat 2: Unknown / Visitors Inside", estimated_unknown_inside, orange_fill),
-        ("  Cat 3: Unreconciled Gate Entries", len(unreconciled_entries), red_fill if unreconciled_entries else green_fill),
+        ("ENTRY SUMMARY", "", None),
+        ("  Total Persons Entered", total_entries, green_fill),
         ("", "", None),
-        ("CATEGORY BREAKDOWN", "", None),
-        ("  Cat 1 — VERIFIED STAFF: Registered on TrueFace/face DB", "", None),
-        ("  Cat 2 — UNKNOWN VISITORS: Face detected but not registered", "", None),
-        ("  Cat 3 — UNRECONCILED: Detected at gate, no face match", "", None),
-        ("  (Cat 3 = guards, housekeeping, vendors, unregistered staff)", "", None),
+        ("RECOGNITION SUMMARY", "", None),
+        ("  Recognized Students", recognized_students, light_blue_fill),
+        ("  Recognized Staff", recognized_staff_count, light_blue_fill),
+        ("  Total Recognized", total_recognized, green_fill),
         ("", "", None),
-        ("UNKNOWN PERSON CLASSIFICATION", "", None),
     ]
-    for cls_name, cls_count in sorted(classification_counts.items()):
-        summary_rows.append((f"  {cls_name}", cls_count, orange_fill))
+    for cat_name, cat_count in sorted(recon.get("staff_category_present", {}).items()):
+        summary_rows.append((f"    {cat_name}", cat_count, None))
     summary_rows += [
         ("", "", None),
-        ("VERIFIED STAFF INSIDE BY CATEGORY", "", None),
+        ("UNRECOGNIZED SUMMARY", "", None),
+        ("  Total Unrecognized Persons", total_unrecognized,
+         red_fill if total_unrecognized > 0 else green_fill),
+        ("  Formula: Entries - Recognized", f"{total_entries} - {total_recognized}", None),
+        ("", "", None),
+        ("EXIT SUMMARY", "", None),
+        ("  Total Persons Exited", total_exits, None),
+        ("", "", None),
+        ("CURRENT OCCUPANCY", "", None),
+        ("  Current Occupancy", current_occupancy, green_fill),
+        ("  Formula: Entries - Exits", f"{total_entries} - {total_exits}", None),
+        ("", "", None),
+        ("RECONCILIATION CHECK", "", None),
+        ("  Total Entries", total_entries, None),
+        ("  Total Recognized", total_recognized, None),
+        ("  Difference (Unrecognized)", total_unrecognized,
+         red_fill if total_unrecognized > 0 else green_fill),
     ]
-    for cat_name, cat_count in sorted(recon.get("staff_category_inside", {}).items()):
-        summary_rows.append((f"  {cat_name}", cat_count, None))
+    recon_rate = round((total_recognized / total_entries * 100) if total_entries > 0 else 100, 1)
     summary_rows += [
+        ("  Reconciliation Rate", f"{recon_rate}%",
+         green_fill if recon_rate >= 80 else red_fill),
         ("", "", None),
-        ("EXITED", "", None),
-        ("  Verified Staff Exited", len(staff_exited), None),
-        ("  Unknown Exited", recon.get("estimated_unknown_out", 0), None),
-        ("", "", None),
-        ("ABSENT (Not Detected)", len(staff_absent), gray_fill),
-        ("", "", None),
-        ("RAW GATE DETECTIONS (not unique people)", "", None),
-        ("  Gate Detections IN", recon.get("raw_gate_in", 0), None),
-        ("  Gate Detections OUT", recon.get("raw_gate_out", 0), None),
-        ("  Unique Gate IN (deduplicated)", recon.get("unique_gate_in", 0), None),
-        ("  Reconciled (matched to face)", disc.get("reconciled_gate_entries", 0), green_fill),
-        ("  Unreconciled (no face match)", disc.get("unreconciled", 0),
-         red_fill if disc.get("unreconciled", 0) > 0 else green_fill),
+        ("STAFF RECONCILIATION", "", None),
+        ("  Fully Verified (TrueFace + DVR)", len(fully_verified), green_fill),
+        ("  Entry Only (DVR - Not on TrueFace)", len(dvr_only), red_fill),
+        ("  TrueFace Only (No DVR Sighting)", len(trueface_only), yellow_fill),
+        ("  Not Detected / Absent", len(absent), gray_fill),
         ("", "", None),
         ("VEHICLE COUNT", "", None),
         ("  Vehicles IN", recon.get("vehicles_in", 0), light_blue_fill),
@@ -1406,22 +1428,6 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     ]
     for vtype, vcount in sorted(recon.get("vehicle_types", {}).items()):
         summary_rows.append((f"    {vtype.title()}", vcount, None))
-    summary_rows += [
-        ("", "", None),
-        ("GATE vs FACE DISCREPANCY", "", None),
-        ("  Gate Head Count (IN)", disc.get("gate_head_count", 0), None),
-        ("  Faces Identified", disc.get("faces_identified", 0), None),
-        ("  UNRECONCILED", disc.get("unreconciled", 0),
-         red_fill if disc.get("unreconciled", 0) > 0 else green_fill),
-        ("  Reconciliation Rate", f"{disc.get('reconciliation_rate', 100)}%",
-         green_fill if disc.get("reconciliation_rate", 100) >= 80 else red_fill),
-        ("", "", None),
-        ("STAFF RECONCILIATION", "", None),
-        ("  Fully Verified (TrueFace + DVR)", len(fully_verified), green_fill),
-        ("  Entry Only (DVR - Not on TrueFace)", len(dvr_only), red_fill),
-        ("  TrueFace Only (No DVR Sighting)", len(trueface_only), yellow_fill),
-        ("  Not Detected", len(absent), gray_fill),
-    ]
     for label, value, fill in summary_rows:
         ws.cell(row=r, column=1, value=label).font = Font(bold=True)
         ws.cell(row=r, column=1).border = border
@@ -1601,75 +1607,55 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
                            ("E", 14), ("F", 14), ("G", 25), ("H", 14)]:
         ws4.column_dimensions[col_letter].width = w
 
-    # ── Sheet 5: Unknown / Unregistered People ──
-    ws5 = wb.create_sheet("Unknown Persons")
+    # ── Sheet 5: Unrecognized Persons ──
+    ws5 = wb.create_sheet("Unrecognized Persons")
 
     ws5.merge_cells("A1:F1")
-    ws5["A1"] = f"UNKNOWN / UNREGISTERED PEOPLE - {date_str}"
+    ws5["A1"] = f"UNRECOGNIZED PERSONS - {date_str}"
     ws5["A1"].font = Font(bold=True, size=14)
 
-    ws5["A3"] = "Estimated Unknown Entered"
+    ws5["A3"] = "Total Unrecognized Persons"
     ws5["A3"].font = Font(bold=True)
     ws5["A3"].border = border
-    ws5["B3"] = recon.get("estimated_unknown_in", 0)
+    ws5["B3"] = recon.get("total_unrecognized", 0)
     ws5["B3"].font = Font(bold=True, size=14)
     ws5["B3"].border = border
     ws5["B3"].fill = orange_fill
 
-    ws5["A4"] = "Estimated Unknown Exited"
+    ws5["A4"] = "Formula"
     ws5["A4"].font = Font(bold=True)
     ws5["A4"].border = border
-    ws5["B4"] = recon.get("estimated_unknown_out", 0)
-    ws5["B4"].font = Font(bold=True, size=12)
+    total_entries = recon.get("total_entries", 0)
+    total_recognized = recon.get("total_recognized", 0)
+    ws5["B4"] = f"Total Entries ({total_entries}) - Total Recognized ({total_recognized})"
+    ws5["B4"].font = Font(bold=True, size=10)
     ws5["B4"].border = border
 
-    ws5["A5"] = "Estimated Unknown INSIDE"
-    ws5["A5"].font = Font(bold=True)
-    ws5["A5"].border = border
-    ws5["A5"].fill = orange_fill
-    ws5["B5"] = estimated_unknown_inside
-    ws5["B5"].font = Font(bold=True, size=14)
-    ws5["B5"].border = border
-    ws5["B5"].fill = orange_fill
-
-    # Unknown person detail table
+    # Unrecognized person detail table
     r = 7
     ws5.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
-    title_cell = ws5.cell(row=r, column=1, value=f"Unknown Person Log ({len(unknown_persons)} entries)")
+    title_cell = ws5.cell(row=r, column=1, value=f"Unrecognized Person Log ({len(unknown_persons)} entries)")
     title_cell.font = Font(bold=True, size=12, color="FFFFFF")
     title_cell.fill = header_fill
     title_cell.border = border
 
     r += 1
-    for col, h in enumerate(["ID", "Time", "Camera", "Classification", "Direction", "Status"], 1):
+    for col, h in enumerate(["ID", "Time", "Entry Point", "Appearance", "Direction", "Status"], 1):
         cell = ws5.cell(row=r, column=col, value=h)
         cell.font = Font(bold=True)
         cell.fill = light_blue_fill
         cell.border = border
 
-    parent_fill = PatternFill("solid", fgColor="B4C6E7")
-    vendor_fill = PatternFill("solid", fgColor="E2EFDA")
     for u in unknown_persons[:50]:
         r += 1
         ws5.cell(row=r, column=1, value=u["id"]).border = border
         ws5.cell(row=r, column=2, value=u.get("time", "-")).border = border
         ws5.cell(row=r, column=3, value=u.get("camera", "-")).border = border
-        cls_cell = ws5.cell(row=r, column=4, value=u.get("classification", "Visitor"))
-        cls_cell.border = border
-        cls = u.get("classification", "Visitor")
-        if cls == "Parent":
-            cls_cell.fill = parent_fill
-        elif cls == "Vendor":
-            cls_cell.fill = vendor_fill
-        elif cls == "Visitor":
-            cls_cell.fill = orange_fill
+        ws5.cell(row=r, column=4, value=u.get("attire_color", u.get("outfit_description", "-"))).border = border
         ws5.cell(row=r, column=5, value=u.get("direction", "IN")).border = border
-        status_cell = ws5.cell(row=r, column=6, value=u.get("status", "INSIDE"))
+        status_cell = ws5.cell(row=r, column=6, value="Unrecognized")
         status_cell.border = border
-        if u.get("status") == "INSIDE":
-            status_cell.fill = orange_fill
-        elif u.get("status") == "EXITED":
-            status_cell.fill = light_blue_fill
+        status_cell.fill = orange_fill
 
     # Camera breakdown
     r += 2
@@ -1738,11 +1724,11 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     for col_letter, w in [("A", 5), ("B", 25), ("C", 35), ("D", 15), ("E", 45)]:
         ws6.column_dimensions[col_letter].width = w
 
-    # ── Sheet 7: AI Observations ──
-    ws7 = wb.create_sheet("AI Observations")
+    # ── Sheet 7: AI Conclusion ──
+    ws7 = wb.create_sheet("AI Conclusion")
 
     ws7.merge_cells("A1:B1")
-    ws7["A1"] = f"════════ AI OBSERVATIONS — {date_str} ════════"
+    ws7["A1"] = f"════════ AI CONCLUSION — {date_str} ════════"
     ws7["A1"].font = Font(bold=True, size=14)
 
     observations = _generate_ai_observations(recon)
@@ -1947,88 +1933,72 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
 
 
 def _generate_ai_observations(recon: dict) -> list[str]:
-    """Generate AI-powered observations from the reconciliation data."""
+    """Generate AI CONCLUSION for the reconciliation report (per school spec).
+
+    Provides:
+    1. Total people who entered.
+    2. Total people who exited.
+    3. Number of students recognized.
+    4. Number of staff recognized.
+    5. Number of unrecognized persons.
+    6. Whether there are significant discrepancies requiring investigation.
+    """
     observations = []
     side_by_side = recon.get("side_by_side", {})
     staff_detail = recon.get("staff_detail", recon.get("teacher_detail", []))
-    unknown_inside = recon.get("estimated_unknown_inside", 0)
 
     dvr_only = side_by_side.get("dvr_only", [])
     trueface_only = side_by_side.get("trueface_only", [])
     fully_verified = side_by_side.get("both_present", [])
-    absent = side_by_side.get("neither", [])
 
-    total_inside = recon.get("total_inside", 0)
-    staff_inside = recon.get("staff_inside", 0)
+    total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
+    total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
+    recognized_students = recon.get("recognized_students", 0)
+    recognized_staff_count = recon.get("recognized_staff_count", 0)
+    total_recognized = recon.get("total_recognized", 0)
+    total_unrecognized = recon.get("total_unrecognized", 0)
+    current_occupancy = recon.get("current_occupancy", recon.get("total_inside", 0))
 
-    unreconciled_entries = recon.get("unreconciled_gate_entries", [])
-
-    # Occupancy summary
+    # 1. Total entries and exits
     observations.append(
-        f"LIVE OCCUPANCY: {total_inside} unique people inside campus — "
-        f"Cat 1 (verified staff): {staff_inside}, "
-        f"Cat 2 (unknown visitors): {unknown_inside}, "
-        f"Cat 3 (unreconciled gate): {len(unreconciled_entries)}."
+        f"Total persons entered: {total_entries}. "
+        f"Total persons exited: {total_exits}. "
+        f"Current occupancy: {current_occupancy}."
     )
+
+    # 2-4. Recognition breakdown
+    observations.append(
+        f"Recognized: {total_recognized} "
+        f"(Students: {recognized_students}, Staff: {recognized_staff_count}). "
+        f"Unrecognized: {total_unrecognized}."
+    )
+
+    # 5. Discrepancy analysis
+    if total_unrecognized > 0:
+        observations.append(
+            f"{total_unrecognized} person(s) entered but could not be recognized "
+            f"by the Student or Staff facial recognition database. "
+            f"These individuals require investigation."
+        )
 
     if dvr_only:
         observations.append(
-            f"{len(dvr_only)} staff seen on DVR cameras but NOT marked "
-            f"on TrueFace 3000. They may have bypassed facial recognition."
+            f"DISCREPANCY: {len(dvr_only)} staff seen on DVR cameras but NOT marked "
+            f"on TrueFace 3000. They may have bypassed biometric attendance."
         )
     if trueface_only:
         observations.append(
-            f"{len(trueface_only)} staff marked on TrueFace but NOT spotted "
-            f"on any DVR camera. Possible camera blind spot or delayed sync."
-        )
-
-    if unknown_inside > 0:
-        observations.append(
-            f"{unknown_inside} unregistered/unknown person(s) detected by face "
-            f"recognition but not registered in face DB (Category 2)."
-        )
-
-    if unreconciled_entries:
-        observations.append(
-            f"{len(unreconciled_entries)} person(s) detected at gate counter but "
-            f"could NOT be matched to any face detection (Category 3). "
-            f"These could be guards, housekeeping, vendors, or unregistered staff."
-        )
-
-    # Peak activity
-    from collections import Counter
-    hourly_counts: Counter = Counter()
-    for t in staff_detail:
-        for det in t.get("dvr_sighting_details", []):
-            time_str = det.get("time", "")
-            if time_str and len(time_str) >= 2:
-                try:
-                    hour = int(time_str[:2])
-                    hourly_counts[hour] += 1
-                except ValueError:
-                    pass
-
-    if hourly_counts:
-        peak_hour = hourly_counts.most_common(1)[0]
-        observations.append(
-            f"Peak DVR activity at {peak_hour[0]:02d}:00 hour with {peak_hour[1]} sightings."
+            f"NOTE: {len(trueface_only)} staff marked on TrueFace but NOT spotted "
+            f"on any DVR camera."
         )
 
     # Staff detection rate
-    total = recon.get("total_registered", recon.get("total_registered_teachers", 0))
-    if total > 0:
+    total_reg = recon.get("total_registered", 0)
+    if total_reg > 0:
         present = len(fully_verified) + len(trueface_only) + len(dvr_only)
-        rate = round(present / total * 100, 1)
+        rate = round(present / total_reg * 100, 1)
         observations.append(
-            f"Staff detection rate: {rate}% ({present} detected out of {total} registered)."
-        )
-
-    # Raw vs unique clarification
-    raw_in = recon.get("raw_gate_in", 0)
-    if raw_in > 0:
-        observations.append(
-            f"Raw gate detections: {raw_in} IN, {recon.get('raw_gate_out', 0)} OUT. "
-            f"These are NOT unique people counts - same person can trigger multiple detections."
+            f"Staff detection rate: {rate}% ({present}/{total_reg} registered staff detected)."
         )
 
     if not observations:
@@ -2150,19 +2120,24 @@ def _add_snapshot_gallery(pdf, recon: dict, section_header):
 
 def _generate_reconciliation_pdf(recon: dict, date_display: str,
                                   time_display: str) -> bytes:
-    """Generate a professionally formatted PDF reconciliation report.
+    """Generate HEAD COUNT RECONCILIATION REPORT matching the school spec.
 
-    New architecture:
-      - LIVE OCCUPANCY (unique people inside, not raw detections)
-      - VERIFIED STAFF INSIDE (by category: Teachers, Admin, Security, Support)
-      - UNKNOWN / VISITOR INSIDE (with UNKNOWN-001 IDs and snapshots)
-      - Staff & unknown exited counts
+    Sections:
+      1. ENTRY SUMMARY
+      2. RECOGNITION SUMMARY
+      3. UNRECOGNIZED SUMMARY
+      4. EXIT SUMMARY
+      5. CURRENT OCCUPANCY
+      6. RECONCILIATION CHECK
+      7. UNRECOGNIZED PERSON DETAILS
+      8. AI CONCLUSION
     """
     from fpdf import FPDF
 
     staff_detail = recon.get("staff_detail", recon.get("teacher_detail", []))
     side_by_side = recon.get("side_by_side", {})
     unknown_persons = recon.get("unknown_persons", [])
+    unrec_entries = recon.get("unreconciled_gate_entries", [])
 
     staff_inside = [s for s in staff_detail if s.get("occupancy_status") == "INSIDE"]
     staff_exited = [s for s in staff_detail if s.get("occupancy_status") == "EXITED"]
@@ -2173,8 +2148,23 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     trueface_only = side_by_side.get("trueface_only", [])
     dvr_only = side_by_side.get("dvr_only", [])
 
-    total_inside = recon.get("total_inside", 0)
-    estimated_unknown_inside = recon.get("estimated_unknown_inside", 0)
+    total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
+    total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
+    recognized_students = recon.get("recognized_students", 0)
+    recognized_staff_count = recon.get("recognized_staff_count", 0)
+    total_recognized = recon.get("total_recognized", len(staff_present))
+    total_unrecognized = recon.get("total_unrecognized", max(0, total_entries - total_recognized))
+    current_occupancy = recon.get("current_occupancy", max(0, total_entries - total_exits))
+
+    # Combine all unrecognized person entries (face-detected unknowns + gate-only)
+    all_unrecognized: list[dict] = []
+    for u in unknown_persons:
+        all_unrecognized.append(u)
+    for ue in unrec_entries:
+        all_unrecognized.append(ue)
+    # Re-number with U-001, U-002, ...
+    for idx, u in enumerate(all_unrecognized, 1):
+        u["id"] = f"U-{idx:03d}"
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -2196,9 +2186,10 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
 
     # ── Title ──
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 12, "SCHOOL HEADCOUNT RECONCILIATION", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 12, "HEAD COUNT RECONCILIATION REPORT", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 7, f"PP International School  |  {date_display}  |  {time_display} IST", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 7, f"PP International School  |  Date: {date_display}  |  {time_display} IST",
+             new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(6)
 
     # ── Helper functions ──
@@ -2217,165 +2208,179 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
         pdf.set_font("Helvetica", "B" if bold_val else "", 10)
         pdf.cell(0, 6, str(value), new_x="LMARGIN", new_y="NEXT")
 
-    def status_row(label: str, count: int, r: int, g: int, b: int):
+    def status_row(label: str, count, r: int, g: int, b: int):
         pdf.set_fill_color(r, g, b)
         pdf.set_font("Helvetica", "B", 10)
         pdf.cell(120, 7, f"  {label}", border=1, fill=True, new_x="RIGHT")
         pdf.cell(30, 7, str(count), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
 
     # ══════════════════════════════════════════════
-    # SECTION 1: LIVE OCCUPANCY (unique people inside)
+    # SECTION 1: ENTRY SUMMARY
     # ══════════════════════════════════════════════
-    section_header("LIVE OCCUPANCY (Unique People Currently Inside)")
-    unrec_entries = recon.get("unreconciled_gate_entries", [])
-    total_unreconciled = recon.get("total_unreconciled_inside", 0)
-
+    section_header("ENTRY SUMMARY")
     pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(0, 100, 0)
-    pdf.cell(0, 10, f"TOTAL INSIDE: {total_inside}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 10, f"Total Persons Entered: {total_entries}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(2)
-    key_value("Cat 1: Verified Staff Inside", len(staff_inside), bold_val=True)
-    key_value("Cat 2: Unknown / Visitors Inside", estimated_unknown_inside, bold_val=True)
-    key_value("Cat 3: Unreconciled Gate Entries", total_unreconciled, bold_val=True)
-    pdf.ln(2)
+    pdf.ln(1)
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(100, 100, 100)
     pdf.cell(0, 5,
-             "Cat 1 = Registered on TrueFace/face DB | "
-             "Cat 2 = Face detected but not registered | "
-             "Cat 3 = Detected at gate, no face match",
-             new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5,
-             f"Unique crossings: IN={recon.get('unique_gate_in', 0)}, OUT={recon.get('unique_gate_out', 0)}"
-             f"  (raw detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)})",
+             f"Counted via: Main Gate cameras, Basement Entry, Dispersal Exit  |  "
+             f"Raw detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)}",
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
     # ══════════════════════════════════════════════
-    # SECTION 2: VERIFIED STAFF INSIDE (by category)
+    # SECTION 2: RECOGNITION SUMMARY
     # ══════════════════════════════════════════════
-    section_header("VERIFIED STAFF INSIDE")
-    staff_cat_inside = recon.get("staff_category_inside", {})
-    if staff_cat_inside:
-        for cat_name in sorted(staff_cat_inside.keys()):
-            key_value(cat_name, staff_cat_inside[cat_name], indent=1)
-    key_value("Total Verified Staff Inside", len(staff_inside), bold_val=True)
+    section_header("RECOGNITION SUMMARY")
+    key_value("Recognized Students", recognized_students, bold_val=True)
+    key_value("Recognized Staff", recognized_staff_count, bold_val=True)
+    status_row("Total Recognized", total_recognized, 198, 239, 206)
     pdf.ln(2)
 
-    # Staff inside table
-    if staff_inside:
+    # Staff breakdown by category
+    staff_cat_present = recon.get("staff_category_present", {})
+    if staff_cat_present:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(0, 6, "  Recognized by Category:", new_x="LMARGIN", new_y="NEXT")
+        for cat_name in sorted(staff_cat_present.keys()):
+            key_value(cat_name, staff_cat_present[cat_name], indent=1)
+    pdf.ln(2)
+
+    # Recognized staff inside table
+    if staff_present:
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(198, 239, 206)
         pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
         pdf.cell(55, 7, "Name", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(35, 7, "Category", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(30, 7, "Category", border=1, fill=True, new_x="RIGHT")
         pdf.cell(25, 7, "Arrived", border=1, fill=True, align="C", new_x="RIGHT")
         pdf.cell(25, 7, "Status", border=1, fill=True, align="C", new_x="RIGHT")
         pdf.cell(0, 7, "Cameras", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 8)
-        for idx, s in enumerate(staff_inside, 1):
+        for idx, s in enumerate(staff_present, 1):
             arrival = s.get("trueface_arrival") or s.get("dvr_first_seen") or "-"
             cams = ", ".join(s.get("dvr_cameras", [])[:3]) or "-"
+            occ = s.get("occupancy_status", "INSIDE")
             pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
             pdf.cell(55, 6, s["name"], border=1, new_x="RIGHT")
-            pdf.cell(35, 6, s["category"], border=1, new_x="RIGHT")
+            pdf.cell(30, 6, s["category"], border=1, new_x="RIGHT")
             pdf.cell(25, 6, arrival, border=1, align="C", new_x="RIGHT")
-            pdf.cell(25, 6, "INSIDE", border=1, align="C", new_x="RIGHT")
+            pdf.cell(25, 6, occ, border=1, align="C", new_x="RIGHT")
             pdf.cell(0, 6, cams, border=1, new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
 
     # ══════════════════════════════════════════════
-    # SECTION 3: VERIFIED STAFF EXITED
+    # SECTION 3: UNRECOGNIZED SUMMARY
     # ══════════════════════════════════════════════
-    if staff_exited:
-        section_header("VERIFIED STAFF EXITED")
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(217, 226, 243)
-        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(55, 7, "Name", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(35, 7, "Category", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(25, 7, "Arrived", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(25, 7, "Departed", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Status", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
-        for idx, s in enumerate(staff_exited, 1):
-            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
-            pdf.cell(55, 6, s["name"], border=1, new_x="RIGHT")
-            pdf.cell(35, 6, s["category"], border=1, new_x="RIGHT")
-            pdf.cell(25, 6, s.get("trueface_arrival") or "-", border=1, align="C", new_x="RIGHT")
-            pdf.cell(25, 6, s.get("trueface_departure") or "-", border=1, align="C", new_x="RIGHT")
-            pdf.cell(0, 6, "EXITED", border=1, new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(3)
-
-    # ══════════════════════════════════════════════
-    # SECTION 4: UNKNOWN / UNREGISTERED PEOPLE
-    # ══════════════════════════════════════════════
-    section_header("UNKNOWN / UNREGISTERED PEOPLE")
-    key_value("Estimated Unknown Entered", recon.get("estimated_unknown_in", 0), bold_val=True)
-    key_value("Estimated Unknown Exited", recon.get("estimated_unknown_out", 0))
-    key_value("Estimated Unknown Inside", estimated_unknown_inside, bold_val=True)
-    pdf.ln(2)
-
-    if unknown_persons:
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(255, 235, 156)
-        pdf.cell(28, 7, "ID", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(25, 7, "Time", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(50, 7, "Camera", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(20, 7, "Dir", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Status", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
-        for u in unknown_persons[:30]:
-            pdf.cell(28, 6, u["id"], border=1, new_x="RIGHT")
-            pdf.cell(25, 6, u.get("time", "-"), border=1, align="C", new_x="RIGHT")
-            pdf.cell(50, 6, u.get("camera", "-"), border=1, new_x="RIGHT")
-            pdf.cell(20, 6, u.get("direction", "IN"), border=1, align="C", new_x="RIGHT")
-            pdf.cell(0, 6, u.get("status", "INSIDE"), border=1, new_x="LMARGIN", new_y="NEXT")
+    section_header("UNRECOGNIZED SUMMARY")
+    status_row("Total Unrecognized Persons", total_unrecognized, 255, 199, 206)
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.cell(0, 5,
+             f"Formula: Total Entries ({total_entries}) - Total Recognized ({total_recognized}) "
+             f"= {total_unrecognized}",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5,
+             "These persons were detected entering but NOT recognized as Student or Staff.",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
     # ══════════════════════════════════════════════
-    # SECTION 4B: UNRECONCILED GATE ENTRIES (Cat 3)
+    # SECTION 4: EXIT SUMMARY
     # ══════════════════════════════════════════════
-    if unrec_entries:
-        section_header("CATEGORY 3: UNRECONCILED GATE ENTRIES")
-        pdf.set_font("Helvetica", "I", 8)
-        pdf.set_text_color(100, 100, 100)
-        pdf.cell(0, 5,
-                 "Detected at gate by YOLO counter but NOT matched to any face recognition. "
-                 "Could be guards, housekeeping, vendors, or other unregistered individuals.",
-                 new_x="LMARGIN", new_y="NEXT")
-        pdf.set_text_color(0, 0, 0)
-        pdf.ln(2)
-
-        key_value("Total Unreconciled", len(unrec_entries), bold_val=True)
-        pdf.ln(2)
-
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(255, 199, 206)  # red tint
-        pdf.cell(28, 7, "ID", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(25, 7, "Time", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(50, 7, "Camera", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(30, 7, "Attire Color", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Status", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
-        for ue in unrec_entries[:30]:
-            pdf.cell(28, 6, ue.get("id", ""), border=1, new_x="RIGHT")
-            pdf.cell(25, 6, ue.get("time", "-"), border=1, align="C", new_x="RIGHT")
-            pdf.cell(50, 6, ue.get("camera", "-"), border=1, new_x="RIGHT")
-            pdf.cell(30, 6, ue.get("attire_color", "-"), border=1, align="C", new_x="RIGHT")
-            pdf.cell(0, 6, ue.get("status", "INSIDE"), border=1, new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(3)
+    section_header("EXIT SUMMARY")
+    key_value("Total Persons Exited", total_exits, bold_val=True)
+    pdf.ln(3)
 
     # ══════════════════════════════════════════════
-    # SECTION 5: VEHICLE COUNT
+    # SECTION 5: CURRENT OCCUPANCY
+    # ══════════════════════════════════════════════
+    section_header("CURRENT OCCUPANCY")
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_text_color(0, 100, 0)
+    pdf.cell(0, 12, f"Current Occupancy: {current_occupancy}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.cell(0, 5,
+             f"Formula: Entries ({total_entries}) - Exits ({total_exits}) = {current_occupancy}",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 6: RECONCILIATION CHECK
+    # ══════════════════════════════════════════════
+    section_header("RECONCILIATION CHECK")
+    key_value("Total Entries", total_entries, bold_val=True)
+    key_value("Total Recognized", total_recognized, bold_val=True)
+    key_value("Difference (Unrecognized)", total_unrecognized, bold_val=True)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.multi_cell(0, 5,
+                   "The difference represents persons detected entering but not recognized "
+                   "by the Student or Staff facial recognition database.",
+                   new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # Reconciliation rate
+    recon_rate = round((total_recognized / total_entries * 100) if total_entries > 0 else 100, 1)
+    if recon_rate >= 80:
+        status_row(f"Reconciliation Rate: {recon_rate}%", "OK", 198, 239, 206)
+    else:
+        status_row(f"Reconciliation Rate: {recon_rate}%", "LOW", 255, 199, 206)
+    pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 7: UNRECOGNIZED PERSON DETAILS
+    # ══════════════════════════════════════════════
+    section_header("UNRECOGNIZED PERSON DETAILS")
+
+    if all_unrecognized:
+        for u in all_unrecognized[:50]:
+            uid = u.get("id", "U-???")
+            entry_time = u.get("time", u.get("timestamp", "-"))
+            camera = u.get("camera", "Unknown")
+            attire = u.get("attire_color", "")
+            outfit = u.get("outfit_description", "")
+            appearance = outfit if outfit else (attire if attire and attire != "unknown" else "-")
+            direction = u.get("direction", "IN")
+            status = "Unrecognized"
+
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_fill_color(255, 235, 156)
+            pdf.cell(0, 7, f"  {uid}", fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 9)
+            pdf.cell(0, 5, f"    Entry Time: {entry_time}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, f"    Entry Point: {camera}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, f"    Appearance: {appearance}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, f"    Direction: {direction}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, f"    Status: {status}", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(2)
+
+        if len(all_unrecognized) > 50:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(0, 5, f"... and {len(all_unrecognized) - 50} more (see Excel for full list)",
+                     new_x="LMARGIN", new_y="NEXT")
+    else:
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.cell(0, 6, "  No unrecognized persons detected.", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 8: VEHICLE COUNT
     # ══════════════════════════════════════════════
     vehicles_in = recon.get("vehicles_in", 0)
     vehicles_out = recon.get("vehicles_out", 0)
     vehicle_types = recon.get("vehicle_types", {})
     if vehicles_in > 0 or vehicles_out > 0:
-        section_header("VEHICLE COUNT")
+        section_header("VEHICLE COUNT (Separate from Head Count)")
         key_value("Vehicles IN", vehicles_in, bold_val=True)
         key_value("Vehicles OUT", vehicles_out)
         for vtype, vcount in sorted(vehicle_types.items()):
@@ -2383,28 +2388,17 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
         pdf.ln(2)
 
     # ══════════════════════════════════════════════
-    # SECTION 6: STAFF RECONCILIATION
+    # SECTION 9: STAFF RECONCILIATION DETAIL
     # ══════════════════════════════════════════════
-    section_header("STAFF RECONCILIATION")
+    section_header("STAFF RECONCILIATION DETAIL")
     status_row("Fully Verified (TrueFace + DVR)", len(fully_verified), 198, 239, 206)
     status_row("Entry Only (DVR - Not on TrueFace)", len(dvr_only), 255, 199, 206)
     status_row("TrueFace Only (No DVR Sighting)", len(trueface_only), 255, 235, 156)
     status_row("Not Detected / Absent", len(staff_absent), 217, 217, 217)
     pdf.ln(3)
 
-    # Staff category breakdown
-    staff_cat_present = recon.get("staff_category_present", {})
-    if staff_cat_present:
-        section_header("STAFF CATEGORY BREAKDOWN (Present)")
-        for cat_name in sorted(staff_cat_present.keys()):
-            key_value(cat_name, staff_cat_present[cat_name], indent=1)
-        pdf.ln(3)
-
-    # ══════════════════════════════════════════════
-    # SECTION 7: ENTRY WITHOUT ATTENDANCE (alerts)
-    # ══════════════════════════════════════════════
+    # Entry without attendance
     if dvr_only:
-        section_header("ENTRY ONLY (DVR - NOT MARKED ON TRUEFACE)")
         for t in dvr_only:
             cams = ", ".join(t.get("dvr_cameras", []))
             pdf.set_font("Helvetica", "B", 10)
@@ -2416,59 +2410,10 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
             pdf.set_text_color(0, 0, 0)
             pdf.ln(2)
 
-    # ══════════════════════════════════════════════
-    # SECTION 8: OUTFIT RECONCILIATION
-    # ══════════════════════════════════════════════
-    dvr_with_outfits = [t for t in staff_detail
-                        if t.get("dvr_seen") and t.get("outfit_observations")]
-    if dvr_with_outfits:
-        section_header("OUTFIT RECONCILIATION")
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(217, 226, 243)
-        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(50, 7, "Name", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(60, 7, "Outfit / Clothing", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(20, 7, "Sightings", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Cameras", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 9)
-        for idx, t in enumerate(dvr_with_outfits, 1):
-            outfit = t.get("outfit_summary", "-")
-            cam_set = set()
-            for obs in t.get("outfit_observations", []):
-                if obs.get("camera"):
-                    cam_set.add(obs["camera"])
-            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
-            pdf.cell(50, 6, t["name"], border=1, new_x="RIGHT")
-            pdf.cell(60, 6, outfit, border=1, new_x="RIGHT")
-            pdf.cell(20, 6, str(t.get("dvr_sighting_count", 0)), border=1, align="C", new_x="RIGHT")
-            pdf.cell(0, 6, ", ".join(sorted(cam_set)) or "-", border=1, new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(5)
-
-    # ── Time Trail (top 10 detected persons) ──
-    detected_with_trail = [t for t in staff_detail if t.get("time_trail")]
-    if detected_with_trail:
-        section_header("TIME TRAIL RECONSTRUCTION")
-        for t in detected_with_trail[:15]:
-            cat = t.get('category', 'Staff')
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_fill_color(217, 226, 243)
-            pdf.cell(0, 6, f"{t['name']} ({cat})", fill=True, new_x="LMARGIN", new_y="NEXT")
-            pdf.set_font("Helvetica", "", 8)
-            for trail in t["time_trail"]:
-                pdf.cell(25, 5, trail.get("time", ""), new_x="RIGHT")
-                pdf.cell(60, 5, trail.get("source", ""), new_x="RIGHT")
-                pdf.cell(0, 5, trail.get("event", ""), new_x="LMARGIN", new_y="NEXT")
-            pdf.ln(2)
-        if len(detected_with_trail) > 15:
-            pdf.set_font("Helvetica", "I", 8)
-            pdf.cell(0, 5, f"... and {len(detected_with_trail) - 15} more (see Excel for full list)",
-                     new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(3)
-
     # ── Mismatch Alerts ──
     alerts = recon.get("alerts", [])
     if alerts:
-        section_header("MISMATCH ALERTS")
+        section_header("ALERTS")
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(217, 226, 243)
         pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
@@ -2491,20 +2436,20 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
             pdf.cell(0, 6, alert.get("detail", ""), border=1, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(5)
 
-    # ── AI Observations ──
+    # ══════════════════════════════════════════════
+    # SECTION 10: AI CONCLUSION
+    # ══════════════════════════════════════════════
     ai_obs = _generate_ai_observations(recon)
-    section_header("AI OBSERVATIONS")
+    section_header("AI CONCLUSION")
     pdf.set_font("Helvetica", "", 10)
     for obs in ai_obs:
-        pdf.multi_cell(0, 6, f"  * {obs}", new_x="LMARGIN", new_y="NEXT")
+        pdf.multi_cell(0, 6, f"  {obs}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
-
-    # ── Live Snapshots Gallery — DISABLED per user request ──
-    # _add_snapshot_gallery(pdf, recon, section_header)
 
     # ── Footer ──
     pdf.set_font("Helvetica", "I", 8)
-    pdf.cell(0, 5, "PPIS Headcount Reconciliation & Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 5, "PPIS Head Count Reconciliation & Entry Monitoring System",
+             new_x="LMARGIN", new_y="NEXT", align="C")
 
     buf = io.BytesIO()
     pdf.output(buf)
@@ -2609,11 +2554,14 @@ async def send_reconciliation_report():
     xlsx_bytes = _generate_reconciliation_excel(recon)
     filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.xlsx"
 
-    # Build counts from new architecture
-    total_inside = recon.get("total_inside", 0)
-    staff_inside_count = recon.get("staff_inside", 0)
-    unknown_inside = recon.get("estimated_unknown_inside", 0)
-    staff_exited_count = recon.get("staff_exited", 0)
+    # Build counts from new architecture (per school spec)
+    total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
+    total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
+    recognized_students = recon.get("recognized_students", 0)
+    recognized_staff_count = recon.get("recognized_staff_count", 0)
+    total_recognized = recon.get("total_recognized", 0)
+    total_unrecognized = recon.get("total_unrecognized", 0)
+    current_occupancy = recon.get("current_occupancy", recon.get("total_inside", 0))
 
     fully_verified = side_by_side.get("both_present", [])
     tf_only_list = side_by_side.get("trueface_only", [])
@@ -2636,29 +2584,28 @@ async def send_reconciliation_report():
             vehicle_line += f" ({type_parts})"
         vehicle_line += "\n"
 
-    # Staff category breakdown for email
-    staff_cat = recon.get("staff_category_inside", {})
-    cat_lines = "\n".join(f"  {cat}: {cnt}" for cat, cnt in sorted(staff_cat.items()))
-    if cat_lines:
-        cat_lines = f"\n{cat_lines}\n"
-
-    # Brief email body using occupancy-based architecture
+    # Brief email body matching school spec
     body = (
-        f"School Headcount Reconciliation — {today_display} at {time_display} IST\n\n"
-        f"LIVE OCCUPANCY (Unique People Inside): {total_inside}\n"
-        f"  Verified Staff Inside: {staff_inside_count}\n"
-        f"  Unknown / Visitors Inside: {unknown_inside}\n"
-        f"{cat_lines}"
-        f"\nVerified Staff Exited: {staff_exited_count}\n"
-        f"Unique Gate Crossings: IN={recon.get('unique_gate_in', 0)}, OUT={recon.get('unique_gate_out', 0)}\n"
-        f"(Raw detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)})\n"
+        f"Head Count Reconciliation Report - {today_display} at {time_display} IST\n\n"
+        f"ENTRY SUMMARY\n"
+        f"  Total Persons Entered: {total_entries}\n\n"
+        f"RECOGNITION SUMMARY\n"
+        f"  Recognized Students: {recognized_students}\n"
+        f"  Recognized Staff: {recognized_staff_count}\n"
+        f"  Total Recognized: {total_recognized}\n\n"
+        f"UNRECOGNIZED SUMMARY\n"
+        f"  Total Unrecognized Persons: {total_unrecognized}\n\n"
+        f"EXIT SUMMARY\n"
+        f"  Total Persons Exited: {total_exits}\n\n"
+        f"CURRENT OCCUPANCY: {current_occupancy}\n"
+        f"  (Entries {total_entries} - Exits {total_exits})\n\n"
+        f"RECONCILIATION CHECK\n"
+        f"  Total Entries: {total_entries}\n"
+        f"  Total Recognized: {total_recognized}\n"
+        f"  Difference: {total_unrecognized}\n"
         f"{vehicle_line}\n"
-        f"Staff Reconciliation: Verified={len(fully_verified)} | "
-        f"TrueFace Only={len(tf_only_list)} | "
-        f"DVR Only={len(dvr_only_list)} | "
-        f"Absent={len(absent_list)}\n\n"
-        f"See attached PDF for the full detailed report.\n\n"
-        f"-- PPIS Headcount Reconciliation & Entry Monitoring System"
+        f"See attached PDF for detailed report including unrecognized person details.\n\n"
+        f"-- PPIS Head Count Reconciliation & Entry Monitoring System"
     )
 
     from app.services.email_service import send_email_async
@@ -2677,9 +2624,9 @@ async def send_reconciliation_report():
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
 
     logger.info(
-        "[GATE] Reconciliation report sent at %s: Inside=%d, Staff=%d, Unknown=%d, Verified=%d",
-        time_display, total_inside, staff_inside_count, unknown_inside,
-        len(fully_verified),
+        "[GATE] Reconciliation report sent at %s: Entries=%d, Recognized=%d, Unrecognized=%d, Occupancy=%d",
+        time_display, total_entries, total_recognized, total_unrecognized,
+        current_occupancy,
     )
 
 
@@ -2723,11 +2670,39 @@ async def live_dashboard_data():
 
     ds = recon.get("data_sources", {})
 
+    # Combine unknown + unreconciled into single "unrecognized" list
+    all_unrec = list(unknown_persons) + list(recon.get("unreconciled_gate_entries", []))
+    for idx, u in enumerate(all_unrec, 1):
+        u["id"] = f"U-{idx:03d}"
+
+    total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
+    total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
+    total_recognized = recon.get("total_recognized", len(staff_inside) + len(staff_exited))
+    total_unrecognized = recon.get("total_unrecognized", 0)
+    current_occupancy = recon.get("current_occupancy", recon.get("total_inside", 0))
+
     return {
         "timestamp": now.strftime("%d-%m-%Y %H:%M:%S IST"),
         "date": today,
+        # Per school spec
+        "entry_summary": {
+            "total_persons_entered": total_entries,
+        },
+        "recognition_summary": {
+            "recognized_students": recon.get("recognized_students", 0),
+            "recognized_staff": recon.get("recognized_staff_count", 0),
+            "total_recognized": total_recognized,
+        },
+        "unrecognized_summary": {
+            "total_unrecognized": total_unrecognized,
+        },
+        "exit_summary": {
+            "total_persons_exited": total_exits,
+        },
+        "current_occupancy": current_occupancy,
+        # Legacy occupancy object (kept for backward compat)
         "occupancy": {
-            "total_inside": recon.get("total_inside", 0),
+            "total_inside": current_occupancy,
             "staff_inside": len(staff_inside),
             "staff_exited": len(staff_exited),
             "staff_absent": len(staff_absent),
@@ -2765,6 +2740,19 @@ async def live_dashboard_data():
             }
             for s in staff_exited
         ],
+        "unrecognized_persons": [
+            {
+                "id": u.get("id", ""),
+                "time": u.get("time", "-"),
+                "camera": u.get("camera", "-"),
+                "direction": u.get("direction", "IN"),
+                "attire": u.get("attire_color", u.get("outfit_description", "-")),
+                "status": "Unrecognized",
+                "has_photo": bool(u.get("person_crop")),
+            }
+            for u in all_unrec[:50]
+        ],
+        # Legacy (kept for compat)
         "unknown_persons": [
             {
                 "id": u.get("id", ""),
@@ -2772,33 +2760,19 @@ async def live_dashboard_data():
                 "camera": u.get("camera", "-"),
                 "direction": u.get("direction", "IN"),
                 "status": u.get("status", "INSIDE"),
-                "classification": u.get("classification", "Visitor"),
                 "has_photo": bool(u.get("person_crop")),
             }
             for u in unknown_persons[:50]
         ],
-        "unreconciled_gate_entries": [
-            {
-                "id": ue.get("id", ""),
-                "time": ue.get("time", "-"),
-                "camera": ue.get("camera", "-"),
-                "attire_color": ue.get("attire_color", "unknown"),
-                "direction": ue.get("direction", "IN"),
-                "status": ue.get("status", "INSIDE"),
-            }
-            for ue in recon.get("unreconciled_gate_entries", [])[:50]
-        ],
-        "reconciled_gate_entries": len(recon.get("reconciled_gate_entries", [])),
+        "reconciliation": {
+            "total_entries": total_entries,
+            "total_recognized": total_recognized,
+            "total_unrecognized": total_unrecognized,
+            "rate": round((total_recognized / total_entries * 100) if total_entries > 0 else 100, 1),
+        },
         "data_sources": ds,
         "alerts": recon.get("alerts", [])[:10],
         "staff_category_inside": recon.get("staff_category_inside", {}),
-        "discrepancy": {
-            "gate_count": recon.get("discrepancy", {}).get("gate_head_count", 0),
-            "identified": recon.get("discrepancy", {}).get("faces_identified", 0),
-            "unreconciled": recon.get("discrepancy", {}).get("unreconciled", 0),
-            "reconciled": recon.get("discrepancy", {}).get("reconciled_gate_entries", 0),
-            "rate": recon.get("discrepancy", {}).get("reconciliation_rate", 100),
-        },
     }
 
 
@@ -2888,43 +2862,53 @@ function render() {
   const o = data.occupancy;
   const g = data.gate;
   const v = data.vehicles;
-  const d = data.discrepancy;
+  const rc = data.reconciliation || {};
   const ds = data.data_sources || {};
+  const es = data.entry_summary || {};
+  const rs = data.recognition_summary || {};
+  const us = data.unrecognized_summary || {};
+  const xs = data.exit_summary || {};
 
   let html = '<div class="grid">';
 
-  // Row 1: Key metrics
+  // Row 1: Key metrics per school spec
   html += `
     <div class="card">
-      <h2>Total Inside Campus</h2>
-      <div class="big-num green">${o.total_inside}</div>
-      <div class="sub-stat">Cat 1 Staff: <span>${o.staff_inside}</span> &bull; Cat 2 Unknown: <span>${o.unknown_inside}</span> &bull; Cat 3 Unrec: <span>${(data.unreconciled_gate_entries||[]).length}</span></div>
-    </div>
-    <div class="card">
-      <h2>Staff Exited</h2>
-      <div class="big-num blue">${o.staff_exited}</div>
-      <div class="sub-stat">Absent: <span>${o.staff_absent}</span> / ${o.total_registered} registered</div>
-    </div>
-    <div class="card">
-      <h2>Gate Crossings</h2>
-      <div class="big-num amber">${g.unique_in}</div>
+      <h2>Total Persons Entered</h2>
+      <div class="big-num green">${es.total_persons_entered || g.unique_in}</div>
       <div class="sub-stat">IN: <span>${g.unique_in}</span> &bull; OUT: <span>${g.unique_out}</span></div>
-      <div class="sub-stat">Reconciled: ${d.reconciled} &bull; Unreconciled: ${d.unreconciled}</div>
     </div>
     <div class="card">
-      <h2>Unknown Persons (Cat 2)</h2>
-      <div class="big-num ${o.unknown_inside > 0 ? 'red' : 'green'}">${o.unknown_inside}</div>
-      <div class="sub-stat">Face detected but not registered</div>
-      <div class="sub-stat">Inside: <span>${o.unknown_inside}</span> &bull; Exited: <span>${o.unknown_exited}</span></div>
+      <h2>Current Occupancy</h2>
+      <div class="big-num green">${data.current_occupancy || o.total_inside}</div>
+      <div class="sub-stat">Entries - Exits = <span>${es.total_persons_entered || g.unique_in} - ${xs.total_persons_exited || g.unique_out}</span></div>
+    </div>
+    <div class="card">
+      <h2>Total Recognized</h2>
+      <div class="big-num blue">${rs.total_recognized || 0}</div>
+      <div class="sub-stat">Students: <span>${rs.recognized_students || 0}</span> &bull; Staff: <span>${rs.recognized_staff || 0}</span></div>
+    </div>
+    <div class="card">
+      <h2>Unrecognized Persons</h2>
+      <div class="big-num ${(us.total_unrecognized||0) > 0 ? 'red' : 'green'}">${us.total_unrecognized || 0}</div>
+      <div class="sub-stat">Entries - Recognized = <span>${es.total_persons_entered || 0} - ${rs.total_recognized || 0}</span></div>
     </div>`;
 
   // Reconciliation rate
   html += `
     <div class="card">
       <h2>Reconciliation Rate</h2>
-      <div class="big-num ${d.rate >= 90 ? 'green' : d.rate >= 70 ? 'amber' : 'red'}">${d.rate}%</div>
-      <div class="progress-bar"><div class="progress-fill" style="width:${d.rate}%;background:${d.rate>=90?'#22c55e':d.rate>=70?'#f59e0b':'#ef4444'}"></div></div>
-      <div class="sub-stat">Gate: <span>${d.gate_count}</span> &bull; Identified: <span>${d.identified}</span> &bull; Gap: <span>${d.unreconciled}</span></div>
+      <div class="big-num ${rc.rate >= 90 ? 'green' : rc.rate >= 70 ? 'amber' : 'red'}">${rc.rate || 100}%</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${rc.rate||100}%;background:${(rc.rate||100)>=90?'#22c55e':(rc.rate||100)>=70?'#f59e0b':'#ef4444'}"></div></div>
+      <div class="sub-stat">Recognized: <span>${rc.total_recognized||0}</span> / ${rc.total_entries||0} entries</div>
+    </div>`;
+
+  // Exit summary
+  html += `
+    <div class="card">
+      <h2>Total Persons Exited</h2>
+      <div class="big-num amber">${xs.total_persons_exited || g.unique_out}</div>
+      <div class="sub-stat">Staff exited: <span>${o.staff_exited}</span></div>
     </div>`;
 
   // Vehicles
@@ -2956,42 +2940,26 @@ function render() {
   const cats = data.staff_category_inside || {};
   const catEntries = Object.entries(cats);
   if (catEntries.length > 0) {
-    html += '<div class="card full-width"><h2>Staff Inside by Category</h2><div class="source-grid">';
+    html += '<div class="card full-width"><h2>Recognized Staff by Category</h2><div class="source-grid">';
     for (const [cat, cnt] of catEntries.sort()) {
       html += `<div class="source-item"><div class="count">${cnt}</div><div class="label">${cat}</div></div>`;
     }
     html += '</div></div>';
   }
 
-  // Unknown persons table
-  const unknowns = data.unknown_persons || [];
-  if (unknowns.length > 0) {
-    html += `<div class="card full-width"><h2>Unknown / Unregistered Persons (${unknowns.length})</h2><table>
-      <tr><th>ID</th><th>Time</th><th>Camera</th><th>Direction</th><th>Status</th><th>Type</th></tr>`;
-    for (const u of unknowns) {
-      html += `<tr>
-        <td>${u.id}</td><td>${u.time}</td><td>${u.camera}</td>
-        <td><span class="badge ${u.direction==='IN'?'badge-in':'badge-out'}">${u.direction}</span></td>
-        <td><span class="badge ${u.status==='INSIDE'?'badge-inside':'badge-exited'}">${u.status}</span></td>
-        <td>${u.classification}</td>
-      </tr>`;
-    }
-    html += '</table></div>';
-  }
-
-  // Unreconciled gate entries (Category 3)
-  const unrec = data.unreconciled_gate_entries || [];
+  // Unrecognized persons table (combined)
+  const unrec = data.unrecognized_persons || [];
   if (unrec.length > 0) {
-    html += `<div class="card full-width"><h2>Category 3: Unreconciled Gate Entries (${unrec.length})</h2>
-      <div class="sub-stat" style="margin-bottom:8px">Detected at gate but NOT matched to any face recognition &mdash; guards, housekeeping, vendors, unregistered staff</div>
+    html += `<div class="card full-width"><h2>Unrecognized Persons (${unrec.length})</h2>
+      <div class="sub-stat" style="margin-bottom:8px">Persons detected entering but NOT recognized as Student or Staff</div>
       <table>
-      <tr><th>ID</th><th>Time</th><th>Camera</th><th>Attire Color</th><th>Direction</th><th>Status</th></tr>`;
+      <tr><th>ID</th><th>Time</th><th>Entry Point</th><th>Appearance</th><th>Direction</th><th>Status</th></tr>`;
     for (const u of unrec) {
       html += `<tr>
-        <td>${u.id}</td><td>${u.time}</td><td>${u.camera}</td>
-        <td><span style="background:${u.attire_color!=='unknown'?u.attire_color:'#666'};padding:2px 8px;border-radius:4px;color:#fff;font-size:11px">${u.attire_color}</span></td>
-        <td><span class="badge badge-in">${u.direction}</span></td>
-        <td><span class="badge badge-inside">${u.status}</span></td>
+        <td><strong>${u.id}</strong></td><td>${u.time}</td><td>${u.camera}</td>
+        <td>${u.attire||'-'}</td>
+        <td><span class="badge ${u.direction==='IN'?'badge-in':'badge-out'}">${u.direction}</span></td>
+        <td><span class="badge badge-inside">Unrecognized</span></td>
       </tr>`;
     }
     html += '</table></div>';
@@ -3000,7 +2968,7 @@ function render() {
   // Staff inside table
   const staffIn = data.staff_inside || [];
   if (staffIn.length > 0) {
-    html += `<div class="card full-width"><h2>Staff Inside (${staffIn.length})</h2><table>
+    html += `<div class="card full-width"><h2>Recognized Staff Inside (${staffIn.length})</h2><table>
       <tr><th>#</th><th>Name</th><th>Category</th><th>Arrived</th><th>Cameras</th></tr>`;
     staffIn.forEach((s,i) => {
       html += `<tr><td>${i+1}</td><td>${s.name}</td><td>${s.category}</td><td>${s.arrival}</td><td>${(s.cameras||[]).join(', ')||'-'}</td></tr>`;
@@ -3011,7 +2979,7 @@ function render() {
   // Staff exited table
   const staffOut = data.staff_exited || [];
   if (staffOut.length > 0) {
-    html += `<div class="card full-width"><h2>Staff Exited (${staffOut.length})</h2><table>
+    html += `<div class="card full-width"><h2>Recognized Staff Exited (${staffOut.length})</h2><table>
       <tr><th>#</th><th>Name</th><th>Category</th><th>Arrived</th><th>Departed</th></tr>`;
     staffOut.forEach((s,i) => {
       html += `<tr><td>${i+1}</td><td>${s.name}</td><td>${s.category}</td><td>${s.arrival}</td><td>${s.departure}</td></tr>`;
