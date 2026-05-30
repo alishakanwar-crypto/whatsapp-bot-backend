@@ -2776,6 +2776,115 @@ async def live_dashboard_data():
     }
 
 
+_LIVE_SNAPSHOT_CAMERAS = [
+    {"key": "ENTRY GATE-1", "label": "Entry Gate 1"},
+    {"key": "ENTRY GATE- 2", "label": "Entry Gate 2"},
+    {"key": "Basement Main Gate", "label": "Basement Main Gate"},
+    {"key": "Reception C1", "label": "Reception C1"},
+    {"key": "Reception C2", "label": "Reception C2"},
+    {"key": "DISPERSAL EXIT", "label": "Dispersal Exit"},
+]
+
+
+@router.get("/api/gate/live-snapshots")
+async def live_snapshot_gallery():
+    """Return live DVR camera snapshots + recognized/unrecognized person photos."""
+    import base64 as b64mod
+    from app.routes.agent_ws import request_snapshot
+
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+
+    # Check if agent is connected before attempting camera snapshots
+    from app.routes.agent_ws import _agent_ws
+    agent_online = _agent_ws is not None
+
+    async def _fetch_cam(cam: dict) -> dict:
+        if not agent_online:
+            return {"camera": cam["label"], "key": cam["key"], "success": False, "photo": ""}
+        try:
+            result = await request_snapshot(cam["key"], timeout=20.0)
+            images = result.get("images", []) if result.get("success") else []
+            return {
+                "camera": cam["label"],
+                "key": cam["key"],
+                "success": result.get("success", False),
+                "photo": images[0]["image_base64"] if images else "",
+            }
+        except Exception:
+            return {"camera": cam["label"], "key": cam["key"], "success": False, "photo": ""}
+
+    cam_tasks = [_fetch_cam(c) for c in _LIVE_SNAPSHOT_CAMERAS]
+    camera_snapshots = await asyncio.gather(*cam_tasks)
+
+    # Recognized staff with face photos
+    db = await _get_db()
+    try:
+        cur = await db.execute(
+            "SELECT DISTINCT arf.name, arf.image_data, ta.arrival_time, ta.departure_time "
+            "FROM trueface_attendance ta "
+            "JOIN agent_registered_faces arf ON arf.name = ta.name AND arf.angle = 'front' "
+            "WHERE ta.date = ? ORDER BY ta.arrival_time",
+            (today,),
+        )
+        recognized = []
+        seen_names: set[str] = set()
+        for r in await cur.fetchall():
+            name = r[0]
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            img = r[1]
+            if isinstance(img, bytes):
+                img = b64mod.b64encode(img).decode()
+            recognized.append({
+                "name": name, "arrival": r[2] or "-",
+                "departure": r[3] or "-", "photo": img or "",
+            })
+
+        # Unrecognized — visitor DVR sightings
+        cur2 = await db.execute(
+            "SELECT id, timestamp, camera, snapshot, direction "
+            "FROM visitor_dvr_sightings "
+            "WHERE date = ? AND snapshot != '' ORDER BY timestamp DESC LIMIT 30",
+            (today,),
+        )
+        unrecognized = []
+        idx = 1
+        for r in await cur2.fetchall():
+            unrecognized.append({
+                "id": f"U-{idx:03d}", "time": r[1], "camera": r[2],
+                "photo": r[3] or "", "direction": r[4] if len(r) > 4 and r[4] else "IN",
+            })
+            idx += 1
+
+        # Gate entries with person_crop
+        cur3 = await db.execute(
+            "SELECT id, timestamp, camera, direction, person_crop, attire_color "
+            "FROM gate_entries WHERE date = ? AND direction = 'IN' "
+            "AND person_crop != '' ORDER BY timestamp DESC LIMIT 30",
+            (today,),
+        )
+        for r in await cur3.fetchall():
+            unrecognized.append({
+                "id": f"U-{idx:03d}", "time": r[1], "camera": r[2],
+                "photo": r[4] or "", "direction": r[3], "attire": r[5] or "-",
+            })
+            idx += 1
+    finally:
+        await db.close()
+
+    return {
+        "timestamp": now.strftime("%d-%m-%Y %H:%M:%S IST"),
+        "agent_online": agent_online,
+        "camera_snapshots": list(camera_snapshots),
+        "recognized": recognized,
+        "unrecognized": unrecognized,
+        "total_recognized": len(recognized),
+        "total_unrecognized": len(unrecognized),
+    }
+
+
 @router.get("/live", response_class=HTMLResponse)
 async def live_dashboard_page():
     """Serve the live dashboard HTML page."""
@@ -2796,6 +2905,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .header .meta{font-size:13px;color:#93c5fd}
 .refresh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.tabs{display:flex;gap:0;padding:0 24px;background:#1e293b;border-bottom:2px solid #334155}
+.tab{padding:12px 24px;cursor:pointer;font-size:14px;font-weight:600;color:#94a3b8;border-bottom:3px solid transparent;transition:all .2s}
+.tab:hover{color:#e2e8f0}
+.tab.active{color:#3b82f6;border-bottom-color:#3b82f6}
+.tab-content{display:none}
+.tab-content.active{display:block}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;padding:20px 24px}
 .card{background:#1e293b;border-radius:12px;padding:20px;border:1px solid #334155;transition:transform .2s}
 .card:hover{transform:translateY(-2px)}
@@ -2819,6 +2934,8 @@ tr:hover td{background:#334155}
 .badge-exited{background:#3f3f46;color:#a1a1aa}
 .badge-active{background:#166534;color:#86efac}
 .badge-nodata{background:#7f1d1d;color:#fca5a5}
+.badge-recognized{background:#166534;color:#86efac}
+.badge-unrecognized{background:#7f1d1d;color:#fca5a5}
 .alert-row{padding:8px 12px;border-left:3px solid;margin-bottom:4px;border-radius:0 6px 6px 0;font-size:13px}
 .alert-high{border-color:#ef4444;background:rgba(239,68,68,.1)}
 .alert-medium{border-color:#f59e0b;background:rgba(245,158,11,.1)}
@@ -2829,9 +2946,20 @@ tr:hover td{background:#334155}
 .source-item{background:#0f172a;border-radius:8px;padding:12px;text-align:center;border:1px solid #334155}
 .source-item .count{font-size:24px;font-weight:700;color:#3b82f6}
 .source-item .label{font-size:11px;color:#94a3b8;margin-top:4px}
+.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;padding:20px 24px}
+.photo-card{background:#1e293b;border-radius:12px;overflow:hidden;border:1px solid #334155;transition:transform .2s}
+.photo-card:hover{transform:translateY(-2px)}
+.photo-card img{width:100%;height:180px;object-fit:cover;background:#334155}
+.photo-card .info{padding:12px}
+.photo-card .name{font-size:14px;font-weight:700;color:#e2e8f0;margin-bottom:4px}
+.photo-card .detail{font-size:12px;color:#94a3b8}
+.photo-card .no-photo{width:100%;height:180px;display:flex;align-items:center;justify-content:center;background:#334155;color:#64748b;font-size:13px}
+.section-header{padding:20px 24px 0;display:flex;justify-content:space-between;align-items:center}
+.section-header h2{font-size:18px;font-weight:700;color:#e2e8f0}
+.section-header .count-badge{font-size:14px;color:#94a3b8;background:#334155;padding:4px 12px;border-radius:20px}
 .footer{text-align:center;padding:16px;color:#475569;font-size:12px}
 .loading{text-align:center;padding:60px;color:#64748b;font-size:16px}
-@media(max-width:768px){.grid{grid-template-columns:1fr;padding:12px}.header{padding:12px 16px}.big-num{font-size:36px}}
+@media(max-width:768px){.grid{grid-template-columns:1fr;padding:12px}.header{padding:12px 16px}.big-num{font-size:36px}.photo-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:12px}.photo-card img{height:140px}}
 </style>
 </head>
 <body>
@@ -2839,7 +2967,16 @@ tr:hover td{background:#334155}
   <h1>PP International School &mdash; Live Campus Monitor</h1>
   <div class="meta"><span class="refresh-dot"></span>Auto-refresh 30s &bull; <span id="ts">Loading...</span></div>
 </div>
-<div id="app" class="loading">Loading dashboard data...</div>
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('overview')">Overview</div>
+  <div class="tab" onclick="switchTab('snapshots')">Additional Information</div>
+</div>
+<div id="tab-overview" class="tab-content active">
+  <div id="app" class="loading">Loading dashboard data...</div>
+</div>
+<div id="tab-snapshots" class="tab-content">
+  <div id="snapshots-app" class="loading">Loading snapshots...</div>
+</div>
 <div class="footer">PPIS Headcount Reconciliation &amp; Entry Monitoring System</div>
 
 <script>
@@ -3001,6 +3138,121 @@ function render() {
   html += '</div>';
   document.getElementById('app').className = '';
   document.getElementById('app').innerHTML = html;
+}
+
+// Tab switching
+let activeTab = 'overview';
+let snapshotsLoaded = false;
+let snapshotsLoading = false;
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[onclick="switchTab('${tab}')"]`).classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  if (tab === 'snapshots' && !snapshotsLoaded && !snapshotsLoading) {
+    loadSnapshots();
+  }
+}
+
+async function loadSnapshots() {
+  snapshotsLoading = true;
+  const el = document.getElementById('snapshots-app');
+  el.innerHTML = '<div class="loading">Fetching live camera snapshots... This may take 15-20 seconds.</div>';
+  try {
+    const r = await fetch('/api/gate/live-snapshots');
+    const d = await r.json();
+    snapshotsLoaded = true;
+    renderSnapshots(d);
+  } catch(e) {
+    el.innerHTML = '<div class="loading">Error loading snapshots. <a href="#" onclick="loadSnapshots();return false" style="color:#3b82f6">Retry</a></div>';
+  }
+  snapshotsLoading = false;
+}
+
+function renderSnapshots(d) {
+  const el = document.getElementById('snapshots-app');
+  let html = '';
+
+  // Agent status banner
+  if (!d.agent_online) {
+    html += '<div style="padding:12px 24px;background:rgba(239,68,68,.15);border-left:4px solid #ef4444;margin:16px 24px 0;border-radius:0 8px 8px 0;font-size:14px;color:#fca5a5">Campus agent is offline — live camera snapshots unavailable. Showing stored person data only.</div>';
+  }
+
+  // Live Camera Feeds
+  const cams = d.camera_snapshots || [];
+  html += '<div class="section-header"><h2>Live Camera Feeds</h2><span class="count-badge">' + cams.length + ' cameras</span></div>';
+  html += '<div class="photo-grid">';
+  for (const c of cams) {
+    if (c.photo) {
+      html += `<div class="photo-card">
+        <img src="data:image/jpeg;base64,${c.photo}" alt="${c.camera}" loading="lazy">
+        <div class="info"><div class="name">${c.camera}</div>
+        <div class="detail">Live snapshot &bull; ${d.timestamp}</div></div></div>`;
+    } else {
+      html += `<div class="photo-card">
+        <div class="no-photo">${c.success === false ? 'Camera offline' : 'No image'}</div>
+        <div class="info"><div class="name">${c.camera}</div>
+        <div class="detail">${c.success === false ? 'Agent not connected' : 'No data'}</div></div></div>`;
+    }
+  }
+  html += '</div>';
+
+  // Recognized Staff
+  const rec = d.recognized || [];
+  html += '<div class="section-header" style="margin-top:16px"><h2>Recognized Staff Today</h2><span class="count-badge badge-recognized">' + rec.length + ' recognized</span></div>';
+  if (rec.length > 0) {
+    html += '<div class="photo-grid">';
+    for (const p of rec) {
+      if (p.photo) {
+        html += `<div class="photo-card">
+          <img src="data:image/jpeg;base64,${p.photo}" alt="${p.name}" loading="lazy">
+          <div class="info"><div class="name">${p.name}</div>
+          <div class="detail">Arrived: ${p.arrival}</div>
+          ${p.departure !== '-' ? '<div class="detail">Left: ' + p.departure + '</div>' : ''}</div></div>`;
+      } else {
+        html += `<div class="photo-card">
+          <div class="no-photo">No photo</div>
+          <div class="info"><div class="name">${p.name}</div>
+          <div class="detail">Arrived: ${p.arrival}</div></div></div>`;
+      }
+    }
+    html += '</div>';
+  } else {
+    html += '<div style="padding:20px 24px;color:#64748b">No recognized staff data for today.</div>';
+  }
+
+  // Unrecognized Persons
+  const unrec = d.unrecognized || [];
+  html += '<div class="section-header" style="margin-top:16px"><h2>Unrecognized Persons</h2><span class="count-badge badge-unrecognized">' + unrec.length + ' unrecognized</span></div>';
+  if (unrec.length > 0) {
+    html += '<div class="photo-grid">';
+    for (const u of unrec) {
+      if (u.photo) {
+        html += `<div class="photo-card">
+          <img src="data:image/jpeg;base64,${u.photo}" alt="${u.id}" loading="lazy">
+          <div class="info"><div class="name">${u.id}</div>
+          <div class="detail">${u.time} &bull; ${u.camera}</div>
+          <div class="detail"><span class="badge ${u.direction==='IN'?'badge-in':'badge-out'}">${u.direction}</span>
+          ${u.attire ? ' &bull; ' + u.attire : ''}</div></div></div>`;
+      } else {
+        html += `<div class="photo-card">
+          <div class="no-photo">No snapshot</div>
+          <div class="info"><div class="name">${u.id}</div>
+          <div class="detail">${u.time} &bull; ${u.camera}</div></div></div>`;
+      }
+    }
+    html += '</div>';
+  } else {
+    html += '<div style="padding:20px 24px;color:#64748b">No unrecognized persons with snapshots for today.</div>';
+  }
+
+  // Refresh button
+  html += '<div style="text-align:center;padding:24px"><button onclick="snapshotsLoaded=false;loadSnapshots()" style="background:#2563eb;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600">Refresh Snapshots</button></div>';
+
+  el.className = '';
+  el.innerHTML = html;
 }
 
 fetchData();
