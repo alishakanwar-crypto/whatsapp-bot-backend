@@ -805,6 +805,58 @@ async def _reconcile(db, date: str) -> dict:
             ),
         })
 
+    # ── DATA SOURCES SUMMARY ──
+    # Break down DVR sightings by source for the report
+    entry_gate_sightings = [s for s in dvr_sightings
+                           if any(k in s["camera"].upper() for k in ("ENTRY", "ENTRANCE"))]
+    basement_sightings = [s for s in dvr_sightings
+                         if "BASEMENT" in s["camera"].upper()]
+    dispersal_sightings = [s for s in dvr_sightings
+                          if any(k in s["camera"].upper() for k in ("DISPERSAL", "EXIT"))]
+    other_dvr_sightings = [s for s in dvr_sightings
+                          if not any(k in s["camera"].upper()
+                                    for k in ("ENTRY", "ENTRANCE", "BASEMENT", "DISPERSAL", "EXIT"))]
+    data_sources = {
+        "entry_gate": {
+            "name": "Entry Gate Cameras (DVR 3)",
+            "sightings": len(entry_gate_sightings),
+            "unique_persons": len(set(s["name"] for s in entry_gate_sightings)),
+        },
+        "basement": {
+            "name": "Basement Cameras (DVR 4)",
+            "sightings": len(basement_sightings),
+            "unique_persons": len(set(s["name"] for s in basement_sightings)),
+        },
+        "dispersal": {
+            "name": "Dispersal Exit Camera (DVR 3)",
+            "sightings": len(dispersal_sightings),
+            "unique_persons": len(set(s["name"] for s in dispersal_sightings)),
+        },
+        "trueface": {
+            "name": "TrueFace 3000 (Biometric)",
+            "sightings": len(trueface),
+            "unique_persons": len(trueface),
+        },
+        "other_dvr": {
+            "name": "Other DVR Cameras",
+            "sightings": len(other_dvr_sightings),
+            "unique_persons": len(set(s["name"] for s in other_dvr_sightings)),
+        },
+    }
+    # Visitor sightings by source
+    visitor_entry_sightings = [v for v in visitor_sightings
+                               if v.get("direction") == "IN"]
+    visitor_exit_sightings = [v for v in visitor_sightings
+                              if v.get("direction") == "OUT"]
+    data_sources["visitor_entry"] = {
+        "name": "Visitor Detections (Entry)",
+        "sightings": len(visitor_entry_sightings),
+    }
+    data_sources["visitor_exit"] = {
+        "name": "Visitor Detections (Exit)",
+        "sightings": len(visitor_exit_sightings),
+    }
+
     # Update daily summary
     await db.execute(
         "INSERT OR REPLACE INTO gate_daily_summary "
@@ -862,6 +914,8 @@ async def _reconcile(db, date: str) -> dict:
         "alerts": alerts,
         # Gate vs Face discrepancy
         "discrepancy": discrepancy,
+        # Data sources breakdown
+        "data_sources": data_sources,
         # Legacy
         "total_registered_teachers": total_registered,
         "unreconciled_count": unreconciled_count,
@@ -2112,6 +2166,37 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
+
+    # ══════════════════════════════════════════════
+    # SECTION 1B: DATA SOURCES CONTRIBUTING
+    # ══════════════════════════════════════════════
+    ds = recon.get("data_sources", {})
+    if ds:
+        section_header("DATA SOURCES")
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(217, 226, 243)
+        pdf.cell(80, 7, "Source", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(30, 7, "Sightings", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(35, 7, "Unique People", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Status", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for src_key in ("entry_gate", "basement", "dispersal", "trueface", "other_dvr"):
+            src = ds.get(src_key, {})
+            if not src:
+                continue
+            s_count = src.get("sightings", 0)
+            u_count = src.get("unique_persons", 0)
+            status = "ACTIVE" if s_count > 0 else "NO DATA"
+            pdf.cell(80, 6, src.get("name", src_key), border=1, new_x="RIGHT")
+            pdf.cell(30, 6, str(s_count), border=1, align="C", new_x="RIGHT")
+            pdf.cell(35, 6, str(u_count), border=1, align="C", new_x="RIGHT")
+            if s_count > 0:
+                pdf.set_text_color(0, 128, 0)
+            else:
+                pdf.set_text_color(180, 0, 0)
+            pdf.cell(0, 6, status, border=1, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(0, 0, 0)
+        pdf.ln(3)
 
     # ══════════════════════════════════════════════
     # SECTION 2: VERIFIED STAFF INSIDE (by category)
