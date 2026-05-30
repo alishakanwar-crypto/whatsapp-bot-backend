@@ -39,6 +39,7 @@ import re
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -2518,3 +2519,317 @@ def send_reconciliation_report_sync():
             loop.run_until_complete(send_reconciliation_report())
     except RuntimeError:
         asyncio.run(send_reconciliation_report())
+
+
+# ============================================================
+# Live Dashboard — Real-Time Unknown Persons Monitor
+# ============================================================
+
+@router.get("/api/gate/live-data")
+async def live_dashboard_data():
+    """Return real-time dashboard data for today."""
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+
+    db = await _get_db()
+    try:
+        recon = await _reconcile(db, today)
+    finally:
+        await db.close()
+
+    staff_detail = recon.get("staff_detail", [])
+    staff_inside = [s for s in staff_detail if s.get("occupancy_status") == "INSIDE"]
+    staff_exited = [s for s in staff_detail if s.get("occupancy_status") == "EXITED"]
+    staff_absent = [s for s in staff_detail if s.get("occupancy_status") == "ABSENT"]
+
+    unknown_persons = recon.get("unknown_persons", [])
+    unknowns_inside = [u for u in unknown_persons if u.get("status") == "INSIDE"]
+    unknowns_exited = [u for u in unknown_persons if u.get("status") == "EXITED"]
+
+    ds = recon.get("data_sources", {})
+
+    return {
+        "timestamp": now.strftime("%d-%m-%Y %H:%M:%S IST"),
+        "date": today,
+        "occupancy": {
+            "total_inside": recon.get("total_inside", 0),
+            "staff_inside": len(staff_inside),
+            "staff_exited": len(staff_exited),
+            "staff_absent": len(staff_absent),
+            "unknown_inside": len(unknowns_inside),
+            "unknown_exited": len(unknowns_exited),
+            "total_registered": recon.get("total_registered", 0),
+        },
+        "gate": {
+            "unique_in": recon.get("unique_gate_in", 0),
+            "unique_out": recon.get("unique_gate_out", 0),
+            "raw_in": recon.get("raw_gate_in", 0),
+            "raw_out": recon.get("raw_gate_out", 0),
+        },
+        "vehicles": {
+            "in": recon.get("vehicles_in", 0),
+            "out": recon.get("vehicles_out", 0),
+            "types": recon.get("vehicle_types", {}),
+        },
+        "staff_inside": [
+            {
+                "name": s["name"],
+                "category": s.get("category", "Staff"),
+                "arrival": s.get("trueface_arrival") or s.get("dvr_first_seen") or "-",
+                "cameras": s.get("dvr_cameras", [])[:3],
+                "status": s.get("occupancy_status", "INSIDE"),
+            }
+            for s in staff_inside
+        ],
+        "staff_exited": [
+            {
+                "name": s["name"],
+                "category": s.get("category", "Staff"),
+                "arrival": s.get("trueface_arrival") or s.get("dvr_first_seen") or "-",
+                "departure": s.get("trueface_departure") or s.get("dvr_last_seen") or "-",
+            }
+            for s in staff_exited
+        ],
+        "unknown_persons": [
+            {
+                "id": u.get("id", ""),
+                "time": u.get("time", "-"),
+                "camera": u.get("camera", "-"),
+                "direction": u.get("direction", "IN"),
+                "status": u.get("status", "INSIDE"),
+                "classification": u.get("classification", "Visitor"),
+                "has_photo": bool(u.get("person_crop")),
+            }
+            for u in unknown_persons[:50]
+        ],
+        "data_sources": ds,
+        "alerts": recon.get("alerts", [])[:10],
+        "staff_category_inside": recon.get("staff_category_inside", {}),
+        "discrepancy": {
+            "gate_count": recon.get("discrepancy", {}).get("gate_head_count", 0),
+            "identified": recon.get("discrepancy", {}).get("faces_identified", 0),
+            "unreconciled": recon.get("discrepancy", {}).get("unreconciled", 0),
+            "rate": recon.get("discrepancy", {}).get("reconciliation_rate", 100),
+        },
+    }
+
+
+@router.get("/live", response_class=HTMLResponse)
+async def live_dashboard_page():
+    """Serve the live dashboard HTML page."""
+    return _LIVE_DASHBOARD_HTML
+
+
+_LIVE_DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPIS Live Campus Monitor</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+.header{background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:16px 24px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.header h1{font-size:20px;font-weight:700;color:#fff}
+.header .meta{font-size:13px;color:#93c5fd}
+.refresh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;padding:20px 24px}
+.card{background:#1e293b;border-radius:12px;padding:20px;border:1px solid #334155;transition:transform .2s}
+.card:hover{transform:translateY(-2px)}
+.card h2{font-size:14px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;margin-bottom:12px}
+.big-num{font-size:48px;font-weight:800;line-height:1}
+.big-num.green{color:#22c55e}
+.big-num.amber{color:#f59e0b}
+.big-num.red{color:#ef4444}
+.big-num.blue{color:#3b82f6}
+.sub-stat{font-size:13px;color:#94a3b8;margin-top:6px}
+.sub-stat span{color:#e2e8f0;font-weight:600}
+.full-width{grid-column:1/-1}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 12px;background:#334155;color:#94a3b8;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
+td{padding:8px 12px;border-bottom:1px solid #334155}
+tr:hover td{background:#334155}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge-in{background:#166534;color:#86efac}
+.badge-out{background:#7c2d12;color:#fdba74}
+.badge-inside{background:#164e63;color:#67e8f9}
+.badge-exited{background:#3f3f46;color:#a1a1aa}
+.badge-active{background:#166534;color:#86efac}
+.badge-nodata{background:#7f1d1d;color:#fca5a5}
+.alert-row{padding:8px 12px;border-left:3px solid;margin-bottom:4px;border-radius:0 6px 6px 0;font-size:13px}
+.alert-high{border-color:#ef4444;background:rgba(239,68,68,.1)}
+.alert-medium{border-color:#f59e0b;background:rgba(245,158,11,.1)}
+.alert-low{border-color:#3b82f6;background:rgba(59,130,246,.1)}
+.progress-bar{height:6px;background:#334155;border-radius:3px;overflow:hidden;margin-top:8px}
+.progress-fill{height:100%;border-radius:3px;transition:width .5s}
+.source-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.source-item{background:#0f172a;border-radius:8px;padding:12px;text-align:center;border:1px solid #334155}
+.source-item .count{font-size:24px;font-weight:700;color:#3b82f6}
+.source-item .label{font-size:11px;color:#94a3b8;margin-top:4px}
+.footer{text-align:center;padding:16px;color:#475569;font-size:12px}
+.loading{text-align:center;padding:60px;color:#64748b;font-size:16px}
+@media(max-width:768px){.grid{grid-template-columns:1fr;padding:12px}.header{padding:12px 16px}.big-num{font-size:36px}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>PP International School &mdash; Live Campus Monitor</h1>
+  <div class="meta"><span class="refresh-dot"></span>Auto-refresh 30s &bull; <span id="ts">Loading...</span></div>
+</div>
+<div id="app" class="loading">Loading dashboard data...</div>
+<div class="footer">PPIS Headcount Reconciliation &amp; Entry Monitoring System</div>
+
+<script>
+const API = '/api/gate/live-data';
+let data = null;
+
+async function fetchData() {
+  try {
+    const r = await fetch(API);
+    data = await r.json();
+    render();
+  } catch(e) {
+    document.getElementById('app').innerHTML = '<div class="loading">Error loading data. Retrying...</div>';
+  }
+}
+
+function render() {
+  if (!data) return;
+  document.getElementById('ts').textContent = data.timestamp;
+  const o = data.occupancy;
+  const g = data.gate;
+  const v = data.vehicles;
+  const d = data.discrepancy;
+  const ds = data.data_sources || {};
+
+  let html = '<div class="grid">';
+
+  // Row 1: Key metrics
+  html += `
+    <div class="card">
+      <h2>Total Inside Campus</h2>
+      <div class="big-num green">${o.total_inside}</div>
+      <div class="sub-stat">Staff: <span>${o.staff_inside}</span> &bull; Unknown: <span>${o.unknown_inside}</span></div>
+    </div>
+    <div class="card">
+      <h2>Staff Exited</h2>
+      <div class="big-num blue">${o.staff_exited}</div>
+      <div class="sub-stat">Absent: <span>${o.staff_absent}</span> / ${o.total_registered} registered</div>
+    </div>
+    <div class="card">
+      <h2>Gate Crossings</h2>
+      <div class="big-num amber">${g.unique_in}</div>
+      <div class="sub-stat">IN: <span>${g.unique_in}</span> &bull; OUT: <span>${g.unique_out}</span></div>
+      <div class="sub-stat">Raw: IN=${g.raw_in}, OUT=${g.raw_out}</div>
+    </div>
+    <div class="card">
+      <h2>Unknown Persons</h2>
+      <div class="big-num ${o.unknown_inside > 0 ? 'red' : 'green'}">${o.unknown_inside}</div>
+      <div class="sub-stat">Inside: <span>${o.unknown_inside}</span> &bull; Exited: <span>${o.unknown_exited}</span></div>
+    </div>`;
+
+  // Reconciliation rate
+  html += `
+    <div class="card">
+      <h2>Reconciliation Rate</h2>
+      <div class="big-num ${d.rate >= 90 ? 'green' : d.rate >= 70 ? 'amber' : 'red'}">${d.rate}%</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${d.rate}%;background:${d.rate>=90?'#22c55e':d.rate>=70?'#f59e0b':'#ef4444'}"></div></div>
+      <div class="sub-stat">Gate: <span>${d.gate_count}</span> &bull; Identified: <span>${d.identified}</span> &bull; Gap: <span>${d.unreconciled}</span></div>
+    </div>`;
+
+  // Vehicles
+  const vTypes = Object.entries(v.types||{}).map(([t,c])=>t[0].toUpperCase()+t.slice(1)+': '+c).join(', ');
+  html += `
+    <div class="card">
+      <h2>Vehicles</h2>
+      <div class="big-num blue">${v.in + v.out}</div>
+      <div class="sub-stat">IN: <span>${v.in}</span> &bull; OUT: <span>${v.out}</span></div>
+      ${vTypes ? '<div class="sub-stat">'+vTypes+'</div>' : ''}
+    </div>`;
+
+  // Data sources
+  html += '<div class="card full-width"><h2>Data Sources</h2><div class="source-grid">';
+  for (const key of ['entry_gate','basement','dispersal','trueface','other_dvr']) {
+    const src = ds[key];
+    if (!src) continue;
+    const active = src.sightings > 0;
+    html += `<div class="source-item">
+      <div class="count">${src.sightings}</div>
+      <div class="label">${src.name}</div>
+      <div style="margin-top:6px"><span class="badge ${active?'badge-active':'badge-nodata'}">${active?'ACTIVE':'NO DATA'}</span></div>
+      ${src.unique_persons !== undefined ? '<div class="label">'+src.unique_persons+' unique</div>' : ''}
+    </div>`;
+  }
+  html += '</div></div>';
+
+  // Staff category breakdown
+  const cats = data.staff_category_inside || {};
+  const catEntries = Object.entries(cats);
+  if (catEntries.length > 0) {
+    html += '<div class="card full-width"><h2>Staff Inside by Category</h2><div class="source-grid">';
+    for (const [cat, cnt] of catEntries.sort()) {
+      html += `<div class="source-item"><div class="count">${cnt}</div><div class="label">${cat}</div></div>`;
+    }
+    html += '</div></div>';
+  }
+
+  // Unknown persons table
+  const unknowns = data.unknown_persons || [];
+  if (unknowns.length > 0) {
+    html += `<div class="card full-width"><h2>Unknown / Unregistered Persons (${unknowns.length})</h2><table>
+      <tr><th>ID</th><th>Time</th><th>Camera</th><th>Direction</th><th>Status</th><th>Type</th></tr>`;
+    for (const u of unknowns) {
+      html += `<tr>
+        <td>${u.id}</td><td>${u.time}</td><td>${u.camera}</td>
+        <td><span class="badge ${u.direction==='IN'?'badge-in':'badge-out'}">${u.direction}</span></td>
+        <td><span class="badge ${u.status==='INSIDE'?'badge-inside':'badge-exited'}">${u.status}</span></td>
+        <td>${u.classification}</td>
+      </tr>`;
+    }
+    html += '</table></div>';
+  }
+
+  // Staff inside table
+  const staffIn = data.staff_inside || [];
+  if (staffIn.length > 0) {
+    html += `<div class="card full-width"><h2>Staff Inside (${staffIn.length})</h2><table>
+      <tr><th>#</th><th>Name</th><th>Category</th><th>Arrived</th><th>Cameras</th></tr>`;
+    staffIn.forEach((s,i) => {
+      html += `<tr><td>${i+1}</td><td>${s.name}</td><td>${s.category}</td><td>${s.arrival}</td><td>${(s.cameras||[]).join(', ')||'-'}</td></tr>`;
+    });
+    html += '</table></div>';
+  }
+
+  // Staff exited table
+  const staffOut = data.staff_exited || [];
+  if (staffOut.length > 0) {
+    html += `<div class="card full-width"><h2>Staff Exited (${staffOut.length})</h2><table>
+      <tr><th>#</th><th>Name</th><th>Category</th><th>Arrived</th><th>Departed</th></tr>`;
+    staffOut.forEach((s,i) => {
+      html += `<tr><td>${i+1}</td><td>${s.name}</td><td>${s.category}</td><td>${s.arrival}</td><td>${s.departure}</td></tr>`;
+    });
+    html += '</table></div>';
+  }
+
+  // Alerts
+  const alerts = data.alerts || [];
+  if (alerts.length > 0) {
+    html += '<div class="card full-width"><h2>Alerts</h2>';
+    for (const a of alerts) {
+      const sev = a.severity || 'medium';
+      html += `<div class="alert-row alert-${sev}"><strong>${a.type||''}</strong> ${a.detail||''}</div>`;
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  document.getElementById('app').className = '';
+  document.getElementById('app').innerHTML = html;
+}
+
+fetchData();
+setInterval(fetchData, 30000);
+</script>
+</body>
+</html>"""
