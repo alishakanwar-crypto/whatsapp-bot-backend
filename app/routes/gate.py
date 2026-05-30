@@ -244,14 +244,16 @@ async def _store_teacher_sightings(db, sightings: list[dict]) -> int:
         outfit_desc = s.get("outfit_description", "")
         outfit_colors = json.dumps(s.get("outfit_colors", []))
 
+        direction = s.get("direction", "IN")
+
         await db.execute(
             "INSERT INTO teacher_dvr_sightings "
             "(date, timestamp, person_id, name, camera, confidence, "
-            "outfit_color, outfit_description, outfit_colors_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "outfit_color, outfit_description, outfit_colors_json, direction) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (date_part, ts, s.get("person_id", ""), s.get("name", ""),
              s.get("camera", ""), s.get("confidence", 0.0),
-             outfit_color, outfit_desc, outfit_colors),
+             outfit_color, outfit_desc, outfit_colors, direction),
         )
         count += 1
     await db.commit()
@@ -262,7 +264,7 @@ async def _get_teacher_sightings(db, date: str) -> list[dict]:
     """Get all DVR teacher sightings for a date."""
     cur = await db.execute(
         "SELECT person_id, name, camera, timestamp, confidence, "
-        "outfit_color, outfit_description, outfit_colors_json "
+        "outfit_color, outfit_description, outfit_colors_json, direction "
         "FROM teacher_dvr_sightings WHERE date = ? ORDER BY name, timestamp",
         (date,),
     )
@@ -278,6 +280,7 @@ async def _get_teacher_sightings(db, date: str) -> list[dict]:
             "outfit_color": r[5] or "",
             "outfit_description": r[6] or "",
             "outfit_colors": outfit_colors,
+            "direction": r[8] if len(r) > 8 and r[8] else "IN",
         })
     return results
 
@@ -328,12 +331,13 @@ async def _store_visitor_sightings(db, visitors: list[dict]) -> int:
         cam = v.get("camera", "")
         classification = _classify_visitor(cam, ts)
         snapshot = v.get("snapshot", "")
+        direction = v.get("direction", "IN")
 
         await db.execute(
             "INSERT INTO visitor_dvr_sightings "
-            "(date, timestamp, camera, classification, snapshot) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (date_part, ts, cam, classification, snapshot),
+            "(date, timestamp, camera, classification, snapshot, direction) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (date_part, ts, cam, classification, snapshot, direction),
         )
         count += 1
     await db.commit()
@@ -343,7 +347,7 @@ async def _store_visitor_sightings(db, visitors: list[dict]) -> int:
 async def _get_visitor_sightings(db, date: str) -> list[dict]:
     """Get all DVR visitor sightings for a date."""
     cur = await db.execute(
-        "SELECT id, timestamp, camera, classification, snapshot "
+        "SELECT id, timestamp, camera, classification, snapshot, direction "
         "FROM visitor_dvr_sightings "
         "WHERE date = ? ORDER BY timestamp",
         (date,),
@@ -353,6 +357,7 @@ async def _get_visitor_sightings(db, date: str) -> list[dict]:
             "id": r[0], "timestamp": r[1], "camera": r[2],
             "classification": r[3] or "Visitor",
             "snapshot": r[4] or "",
+            "direction": r[5] if len(r) > 5 and r[5] else "IN",
         }
         for r in await cur.fetchall()
     ]
@@ -501,6 +506,7 @@ async def _reconcile(db, date: str) -> dict:
             dvr_times.append(time_part)
             dvr_sighting_details.append({
                 "camera": cam, "time": time_part,
+                "direction": s.get("direction", "IN"),
                 "confidence": s.get("confidence", 0),
                 "outfit_color": s.get("outfit_color", ""),
                 "outfit_description": s.get("outfit_description", ""),
@@ -514,9 +520,18 @@ async def _reconcile(db, date: str) -> dict:
         raw_category = contact_categories.get(name_upper, "staff")
         category = _normalize_category(raw_category, name=display_name)
 
-        # Determine presence status
+        # Determine presence status using TrueFace + DVR direction data
         is_present = tf is not None or len(dvr_list) > 0
-        has_departed = tf is not None and tf.get("departure_time") is not None
+        has_departed_tf = tf is not None and tf.get("departure_time") is not None
+        # Check if last DVR sighting was on an exit/dispersal camera
+        dvr_exit_sightings = [s for s in dvr_list if s.get("direction") == "OUT"]
+        dvr_entry_sightings = [s for s in dvr_list if s.get("direction") == "IN"]
+        has_departed_dvr = (len(dvr_exit_sightings) > 0 and
+                            (not dvr_entry_sightings or
+                             dvr_exit_sightings[-1].get("timestamp", "") >
+                             dvr_entry_sightings[-1].get("timestamp", "")))
+        has_departed = has_departed_tf or has_departed_dvr
+
         if is_present and not has_departed:
             occupancy_status = "INSIDE"
         elif is_present and has_departed:
@@ -524,12 +539,14 @@ async def _reconcile(db, date: str) -> dict:
         else:
             occupancy_status = "ABSENT"
 
-        # Time trail
+        # Time trail with entry/exit events
         time_trail: list[dict] = []
         if tf and tf.get("arrival_time"):
             time_trail.append({"time": tf["arrival_time"], "source": "TrueFace 3000", "event": "Arrival"})
         for det in dvr_sighting_details:
-            time_trail.append({"time": det["time"], "source": det["camera"], "event": "DVR Sighting"})
+            direction = det.get("direction", "IN")
+            event_type = "DVR Exit" if direction == "OUT" else "DVR Sighting"
+            time_trail.append({"time": det["time"], "source": det["camera"], "event": event_type})
         if tf and tf.get("departure_time"):
             time_trail.append({"time": tf["departure_time"], "source": "TrueFace 3000", "event": "Departure"})
         time_trail.sort(key=lambda x: x["time"])
@@ -587,12 +604,13 @@ async def _reconcile(db, date: str) -> dict:
     for v in visitor_sightings:
         ts = v.get("timestamp", "")
         time_part = ts.split(" ")[1] if " " in ts else ts
+        v_direction = v.get("direction", "IN")
         _raw_unknowns.append({
             "timestamp": ts,
             "time": time_part,
             "camera": v.get("camera", "Unknown"),
-            "direction": "IN",
-            "status": "INSIDE",
+            "direction": v_direction,
+            "status": "INSIDE" if v_direction == "IN" else "EXITED",
             "classification": v.get("classification", "Visitor"),
             "person_crop": v.get("snapshot", ""),
         })
@@ -1088,11 +1106,12 @@ async def receive_visitor_sightings(request: Request):
         cam = v.get("camera", "")
         cam_upper = cam.upper()
         is_entry_cam = any(k in cam_upper for k in _ENTRY_CAMERA_KEYWORDS)
-        if is_entry_cam:
+        v_direction = v.get("direction", "IN")
+        if is_entry_cam and v_direction == "IN":
             alert_entry = {
                 "camera": cam,
                 "timestamp": v.get("timestamp", ""),
-                "direction": "IN",
+                "direction": v_direction,
                 "person_crop": v.get("snapshot", ""),
                 "snapshot_face": v.get("snapshot_face", ""),
                 "snapshot_body": v.get("snapshot_body", ""),
