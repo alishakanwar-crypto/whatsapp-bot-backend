@@ -2309,6 +2309,52 @@ async def test_unknown_person_alert():
     return {"status": "sent", "phones": UNKNOWN_ALERT_PHONES, "template": UNKNOWN_ALERT_TEMPLATE}
 
 
+# ---------------------------------------------------------------------------
+# Periodic Entry Gate Snapshot → WhatsApp
+# ---------------------------------------------------------------------------
+GATE_SNAPSHOT_PHONES = [
+    "918796105084",   # Alisha
+]
+
+
+@router.post("/api/gate/entry-gate-snapshot")
+async def receive_entry_gate_snapshot(request: Request):
+    """Receive an Entry Gate snapshot from campus agent and send to WhatsApp.
+
+    Body: {"image_b64": "<base64 JPEG>", "camera": "ENTRY GATE-1", "timestamp": "..."}
+    The campus agent calls this every 10 minutes with a fresh ISAPI capture.
+    """
+    body = await request.json()
+    image_b64 = body.get("image_b64", "")
+    camera = body.get("camera", "Entry Gate")
+    ts = body.get("timestamp", datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST"))
+
+    if not image_b64:
+        return {"status": "error", "detail": "no image_b64 provided"}
+
+    from app.services.whatsapp_service import (
+        upload_base64_image_cloud,
+        send_cloud_media,
+    )
+
+    media_id = await upload_base64_image_cloud(image_b64)
+    if not media_id:
+        logger.error("[GATE] Failed to upload entry gate snapshot to WhatsApp")
+        return {"status": "error", "detail": "media upload failed"}
+
+    caption = f"📷 {camera} — {ts}"
+    sent_count = 0
+    for phone in GATE_SNAPSHOT_PHONES:
+        ok = await send_cloud_media(phone, "image", media_id=media_id, caption=caption)
+        if ok:
+            sent_count += 1
+        else:
+            logger.warning("[GATE] Failed to send gate snapshot to %s", phone)
+
+    logger.info("[GATE] Entry gate snapshot sent to %d/%d recipients", sent_count, len(GATE_SNAPSHOT_PHONES))
+    return {"status": "ok", "sent": sent_count, "total": len(GATE_SNAPSHOT_PHONES)}
+
+
 async def send_reconciliation_report():
     """Generate and send the hourly head count reconciliation report."""
     now = datetime.now(IST)
