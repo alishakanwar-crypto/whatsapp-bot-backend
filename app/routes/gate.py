@@ -1038,6 +1038,8 @@ async def _send_unknown_person_alert(entry: dict):
     cache_key = camera
     last_sent = _unknown_alert_last.get(cache_key, 0)
     if now - last_sent < _UNKNOWN_ALERT_COOLDOWN:
+        logger.info("[GATE] Alert skipped — cooldown active for %s (%.0fs left)",
+                    camera, _UNKNOWN_ALERT_COOLDOWN - (now - last_sent))
         return
 
     _unknown_alert_last[cache_key] = now
@@ -1176,11 +1178,14 @@ async def receive_visitor_sightings(request: Request):
 
     # Send WhatsApp alert for each unknown visitor at entry cameras
     alert_count = 0
+    skipped_non_entry = 0
     for v in visitors:
         cam = v.get("camera", "")
         cam_upper = cam.upper()
         is_entry_cam = any(k in cam_upper for k in _ENTRY_CAMERA_KEYWORDS)
         v_direction = v.get("direction", "IN")
+        if not is_entry_cam:
+            skipped_non_entry += 1
         if is_entry_cam and v_direction == "IN":
             alert_entry = {
                 "camera": cam,
@@ -1193,8 +1198,8 @@ async def receive_visitor_sightings(request: Request):
             }
             alert_count += 1
             asyncio.create_task(_send_unknown_person_alert(alert_entry))
-    if alert_count:
-        logger.info("[GATE] Queued %d unknown visitor alert(s)", alert_count)
+    logger.info("[GATE] Visitor sighting alert summary: queued=%d, skipped_non_entry=%d, total=%d",
+                alert_count, skipped_non_entry, len(visitors))
 
     # Log classification breakdown
     cls_log = {}
@@ -2566,14 +2571,32 @@ async def receive_entry_gate_snapshot(request: Request):
         logger.error("[GATE] Failed to upload entry gate snapshot to WhatsApp")
         return {"status": "error", "detail": "media upload failed"}
 
-    caption = f"📷 {camera} — {ts}"
+    # Use template message so snapshots work outside 24h conversation window.
+    # Falls back to regular media message if template send fails.
+    from app.services.whatsapp_service import send_cloud_template_message
+
     sent_count = 0
     for phone in GATE_SNAPSHOT_PHONES:
-        ok = await send_cloud_media(phone, "image", media_id=media_id, caption=caption)
+        # Try template first (works outside 24h window)
+        ok = await send_cloud_template_message(
+            to=phone,
+            template_name=UNKNOWN_ALERT_TEMPLATE,
+            language_code="en",
+            body_params=[camera, ts, "SNAPSHOT"],
+            header_image_id=media_id,
+        )
         if ok:
             sent_count += 1
         else:
-            logger.warning("[GATE] Failed to send gate snapshot to %s", phone)
+            # Fallback to regular media (only works within 24h window)
+            ok = await send_cloud_media(phone, "image", media_id=media_id,
+                                        caption=f"\U0001f4f7 {camera} — {ts}")
+            if ok:
+                sent_count += 1
+            else:
+                logger.warning("[GATE] Failed to send gate snapshot to %s "
+                               "(template + media both failed — user may need "
+                               "to reply to bot to open 24h window)", phone)
 
     logger.info("[GATE] Entry gate snapshot sent to %d/%d recipients", sent_count, len(GATE_SNAPSHOT_PHONES))
     return {"status": "ok", "sent": sent_count, "total": len(GATE_SNAPSHOT_PHONES)}
