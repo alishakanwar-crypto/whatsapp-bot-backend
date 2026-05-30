@@ -2571,32 +2571,17 @@ async def receive_entry_gate_snapshot(request: Request):
         logger.error("[GATE] Failed to upload entry gate snapshot to WhatsApp")
         return {"status": "error", "detail": "media upload failed"}
 
-    # Use template message so snapshots work outside 24h conversation window.
-    # Falls back to regular media message if template send fails.
-    from app.services.whatsapp_service import send_cloud_template_message
-
+    # NOTE: Periodic entry gate snapshots are DISABLED on the campus agent
+    # side (2026-05-30). This endpoint is kept for backward compatibility
+    # but should not receive traffic. Uses regular media message.
+    caption = f"\U0001f4f7 {camera} — {ts}"
     sent_count = 0
     for phone in GATE_SNAPSHOT_PHONES:
-        # Try template first (works outside 24h window)
-        ok = await send_cloud_template_message(
-            to=phone,
-            template_name=UNKNOWN_ALERT_TEMPLATE,
-            language_code="en",
-            body_params=[camera, ts, "SNAPSHOT"],
-            header_image_id=media_id,
-        )
+        ok = await send_cloud_media(phone, "image", media_id=media_id, caption=caption)
         if ok:
             sent_count += 1
         else:
-            # Fallback to regular media (only works within 24h window)
-            ok = await send_cloud_media(phone, "image", media_id=media_id,
-                                        caption=f"\U0001f4f7 {camera} — {ts}")
-            if ok:
-                sent_count += 1
-            else:
-                logger.warning("[GATE] Failed to send gate snapshot to %s "
-                               "(template + media both failed — user may need "
-                               "to reply to bot to open 24h window)", phone)
+            logger.warning("[GATE] Failed to send gate snapshot to %s", phone)
 
     logger.info("[GATE] Entry gate snapshot sent to %d/%d recipients", sent_count, len(GATE_SNAPSHOT_PHONES))
     return {"status": "ok", "sent": sent_count, "total": len(GATE_SNAPSHOT_PHONES)}
