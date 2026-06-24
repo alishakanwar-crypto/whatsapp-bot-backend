@@ -56,7 +56,7 @@ REPORT_RECIPIENTS = os.environ.get(
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
 UNKNOWN_ALERT_PHONES = [
-    "918796105084",   # Alisha
+    # "918796105084",   # Alisha — disabled per request
 ]
 UNKNOWN_ALERT_TEMPLATE = "unknown_person_detected"
 
@@ -2487,7 +2487,7 @@ async def test_unknown_person_alert():
 # Periodic Entry Gate Snapshot → WhatsApp
 # ---------------------------------------------------------------------------
 GATE_SNAPSHOT_PHONES = [
-    "918796105084",   # Alisha
+    # "918796105084",   # Alisha — disabled per request
 ]
 
 
