@@ -1538,6 +1538,54 @@ async def share_homework_doc(request: Request):
     return {"status": "ok" if ok else "error", "doc_id": doc_id, "email": email, "role": role}
 
 
+@app.post("/api/teacher-cwhw-reminder/email")
+async def trigger_teacher_cwhw_email_reminder():
+    """Send CW/HW Google Docs reminder to all class teachers via email."""
+    from app.services.email_service import send_email_async
+    from app.services.openai_service import TEACHER_DATA
+
+    subject = "Reminder: CW/HW Updates via Google Docs from 1st July 2026"
+    body = (
+        "Dear Teacher,\n\n"
+        "This is a reminder from PP International School.\n\n"
+        "Starting from 1st July 2026, the Classwork and Homework (CW/HW) "
+        "updates for all grades will be shared with parents automatically "
+        "through the Google Docs (that were previously shared with you on "
+        "your respective email IDs.)\n\n"
+        "Kindly ensure that you update the CW/HW in your assigned Google Doc "
+        "after each period so that parents receive timely updates.\n\n"
+        "Thank you for your cooperation.\n\n"
+        "Regards,\nPP International School"
+    )
+
+    sent = 0
+    failed = 0
+    sent_emails: set[str] = set()
+    results = []
+
+    for t in TEACHER_DATA:
+        email = t.get("email", "")
+        if not email or email in sent_emails:
+            continue
+        sent_emails.add(email)
+        try:
+            ok = await send_email_async(
+                email, subject, body,
+                sender_name="PP International School",
+            )
+            if ok:
+                sent += 1
+                results.append({"teacher": t["teacher"], "grade": t["grade"], "email": email, "status": "sent"})
+            else:
+                failed += 1
+                results.append({"teacher": t["teacher"], "grade": t["grade"], "email": email, "status": "failed"})
+        except Exception as e:
+            failed += 1
+            results.append({"teacher": t["teacher"], "grade": t["grade"], "email": email, "status": f"error: {e}"})
+
+    return {"sent": sent, "failed": failed, "results": results}
+
+
 @app.get("/privacy-policy")
 async def privacy_policy():
     from fastapi.responses import HTMLResponse
