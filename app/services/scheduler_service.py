@@ -845,14 +845,8 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled daily homework doc clear at 3:00 PM IST (9:30 UTC)")
 
-    # --- One-time Teacher CW/HW Reminder (29 Jun 2026, 09:00 AM IST = 03:30 UTC) ---
-    scheduler.add_job(
-        _send_teacher_cwhw_reminder_sync,
-        trigger=DateTrigger(run_date=datetime(2026, 6, 29, 3, 30, tzinfo=timezone.utc)),
-        id="teacher_cwhw_reminder_29jun",
-        replace_existing=True,
-    )
-    logger.info("Scheduled one-time teacher CW/HW reminder for 29-Jun-2026 09:00 AM IST")
+    # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
+    # for reference only. No job scheduled.
 
     scheduler.start()
     logger.info("Scheduler started successfully")

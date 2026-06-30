@@ -66,6 +66,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info(f"STARTUP: Loaded {n} subject-teacher mappings")
     except Exception as e:
         logger.error(f"STARTUP: subject-teacher mapping load failed: {e}", exc_info=True)
+    # Ensure all homework Google Docs are created (fills gaps for new grades)
+    try:
+        from app.services.homework_delivery_service import ensure_all_docs_created
+        created = await ensure_all_docs_created()
+        if created:
+            logger.info(f"STARTUP: Auto-created {created} missing homework docs")
+    except Exception as e:
+        logger.error(f"STARTUP: homework doc creation check failed: {e}", exc_info=True)
     start_scheduler()
     yield
     stop_scheduler()
