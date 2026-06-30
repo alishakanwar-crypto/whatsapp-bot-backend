@@ -728,16 +728,6 @@ async def run_homework_delivery(period: int) -> dict:
         if now_ist < _SUMMER_START:
             if not _HOMEWORK_ELIGIBLE_GRADES.match(grade):
                 continue
-            # Temporary blackout: skip grades 9-12 from 27-May-2026
-            # through 30-Jun-2026 (inclusive).
-            _blackout_start = datetime(2026, 5, 27, 0, 0, tzinfo=IST)
-            _blackout_end = datetime(2026, 7, 1, 0, 0, tzinfo=IST)
-            if _blackout_start <= now_ist < _blackout_end:
-                logger.info(
-                    f"Skipping {grade} — CW/HW disabled for grades 9-12 "
-                    f"until 30-Jun-2026"
-                )
-                continue
 
         # Skip entries with no doc_id (not yet created)
         if not doc_id:
@@ -1301,6 +1291,40 @@ async def share_google_doc(doc_id: str, email: str, role: str = "writer") -> boo
     except Exception as e:
         logger.error(f"Error sharing doc {doc_id} with {email}: {e}")
         return False
+
+
+async def ensure_all_docs_created() -> int:
+    """Create Google Docs for any registered grade with an empty doc_id.
+
+    Called at startup to fill in any gaps (e.g. Grade 11C-HUMANITIES,
+    Grade 12C-HUMANITIES). Returns number of docs created.
+    """
+    docs = await _get_homework_docs()
+    created = 0
+    for doc_info in docs:
+        grade = doc_info["grade"]
+        doc_id = doc_info["doc_id"]
+        if doc_id:
+            continue
+        # Create the doc
+        title = f"PPIS Classwork & Homework - {grade}"
+        result = await create_google_doc(title)
+        if result:
+            # Register in DB
+            await register_homework_doc(grade, result["doc_id"], result["doc_url"])
+            # Move to the shared Drive folder if possible
+            folder_id = os.getenv("HOMEWORK_DRIVE_FOLDER_ID", "")
+            if folder_id:
+                await move_doc_to_folder(result["doc_id"], folder_id)
+            logger.info(f"Auto-created homework doc for {grade}: {result['doc_id']}")
+            created += 1
+        else:
+            logger.error(f"Failed to auto-create homework doc for {grade}")
+        await asyncio.sleep(1.0)
+
+    if created:
+        logger.info(f"=== AUTO-CREATED {created} MISSING HOMEWORK DOCS ===")
+    return created
 
 
 async def daily_clear_all_docs() -> dict:
