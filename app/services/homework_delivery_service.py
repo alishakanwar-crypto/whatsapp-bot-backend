@@ -682,11 +682,19 @@ def _format_no_homework_message(grade: str, period_label: str) -> str:
 # Core homework delivery logic
 # ---------------------------------------------------------------------------
 
-async def run_homework_delivery(period: int) -> dict:
+# Pre-primary grades (Popsicles through Prep) — school ends at 11:20 IST
+_PREPRIMARY_GRADES = re.compile(
+    r"^(Popsicles|Nursery\s*\d|Prep\s*\d)", re.IGNORECASE
+)
+
+
+async def run_homework_delivery(period: int, grade_filter: str | None = None) -> dict:
     """Check all homework docs for new content and deliver to parents.
 
     Args:
         period: The period number (0-8) that just ended.
+        grade_filter: Optional filter — 'preprimary' to only check
+            Popsicles/Nursery/Prep grades.
 
     Returns:
         Summary dict with results.
@@ -722,6 +730,11 @@ async def run_homework_delivery(period: int) -> dict:
     for doc_info in docs:
         grade = doc_info["grade"]
         doc_id = doc_info["doc_id"]
+
+        # Optional grade filter (e.g. pre-primary safety-net)
+        if grade_filter == "preprimary":
+            if not _PREPRIMARY_GRADES.match(grade):
+                continue
 
         # Grade eligibility: before July 1 only Grade 9-12;
         # from July 1 all grades are eligible.
@@ -1395,16 +1408,16 @@ async def daily_clear_all_docs() -> dict:
 # Sync wrappers for APScheduler
 # ---------------------------------------------------------------------------
 
-def run_homework_delivery_sync(period: int) -> None:
+def run_homework_delivery_sync(period: int, grade_filter: str | None = None) -> None:
     """Synchronous wrapper for APScheduler."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.ensure_future(run_homework_delivery(period))
+            asyncio.ensure_future(run_homework_delivery(period, grade_filter))
         else:
-            asyncio.run(run_homework_delivery(period))
+            asyncio.run(run_homework_delivery(period, grade_filter))
     except RuntimeError:
-        asyncio.run(run_homework_delivery(period))
+        asyncio.run(run_homework_delivery(period, grade_filter))
 
 
 def run_daily_clear_sync() -> None:
