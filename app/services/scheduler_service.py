@@ -821,7 +821,21 @@ def start_scheduler() -> None:
         )
         logger.info(f"Scheduled homework delivery (summer): {desc}")
 
-    # Summer safety-net at 01:50 PM IST (08:20 UTC)
+    # Pre-primary safety-net at 11:45 AM IST (06:15 UTC)
+    # Popsicles/Nursery/Prep school ends at 11:20 — final catch-all for them.
+    scheduler.add_job(
+        run_homework_delivery_sync,
+        trigger=CronTrigger(
+            hour=6, minute=15, second=0,
+            start_date=_summer_start,
+        ),
+        args=[5, "preprimary"],
+        id="homework_delivery_summer_preprimary_safety",
+        replace_existing=True,
+    )
+    logger.info("Scheduled homework delivery (summer): pre-primary safety check 11:45 AM IST")
+
+    # Summer safety-net at 01:50 PM IST (08:20 UTC) — all other grades
     scheduler.add_job(
         run_homework_delivery_sync,
         trigger=CronTrigger(
