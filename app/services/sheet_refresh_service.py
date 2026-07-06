@@ -610,9 +610,32 @@ def _find_phone_column(header_cells: list[str], parent_type: str) -> int:
 
 
 def _normalize_phone(phone: str) -> str:
-    """Normalize an Indian phone number to 91XXXXXXXXXX format."""
+    """Normalize an Indian phone number to 91XXXXXXXXXX format.
+
+    Handles multiple numbers separated by / or , (e.g. '8233855150 / 01161380361')
+    by preferring the first valid 10-digit mobile number (starting with 6-9).
+    """
     if not phone:
         return ""
+    # Split on common separators to handle multiple numbers
+    parts = _re.split(r"[/,]", phone)
+    candidates = []
+    for part in parts:
+        digits = _re.sub(r"\D", "", part.strip())
+        if len(digits) == 12 and digits.startswith("91"):
+            digits = digits[2:]  # strip country code for uniform comparison
+        elif len(digits) == 11 and digits.startswith("0"):
+            digits = digits[1:]  # strip leading 0 for landlines
+        if len(digits) == 10:
+            candidates.append(digits)
+    # Prefer mobile numbers (start with 6-9) over landlines
+    for d in candidates:
+        if d[0] in "6789":
+            return f"91{d}"
+    # Fall back to first candidate if no mobile found
+    if candidates:
+        return f"91{candidates[0]}"
+    # Last resort: old behavior
     digits = _re.sub(r"\D", "", phone)
     if len(digits) == 10:
         return f"91{digits}"
