@@ -884,6 +884,34 @@ async def fetch_all_pi_sheet_tabs() -> bool:
 
     db = await get_db()
     try:
+        # Save allowlisted students before deleting — these are withdrawal
+        # students whose parents still need temporary access.
+        al_phones = await db.execute(
+            "SELECT phone_number, label FROM allowlist "
+            "WHERE label LIKE '%temp until%'"
+        )
+        al_entries = await al_phones.fetchall()
+        protected: list[dict] = []
+        for phone, label in al_entries:
+            import re as _re_al
+            from datetime import date as _date
+            exp_match = _re_al.search(r"temp until (\d{4}-\d{2}-\d{2})", label or "")
+            if exp_match and _date.today() > _date.fromisoformat(exp_match.group(1)):
+                continue  # expired
+            rows_to_save = await db.execute(
+                "SELECT student_name, grade, father_name, mother_name, "
+                "father_mobile, mother_mobile, address, transport "
+                "FROM pi_sheet_students "
+                "WHERE father_mobile = ? OR mother_mobile = ?",
+                (phone, phone),
+            )
+            for row in await rows_to_save.fetchall():
+                protected.append(dict(zip(
+                    ["student_name", "grade", "father_name", "mother_name",
+                     "father_mobile", "mother_mobile", "address", "transport"],
+                    row,
+                )))
+
         await db.execute("DELETE FROM pi_sheet_students")
 
         for s in unique:
@@ -893,6 +921,29 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 "father_mobile, mother_mobile, address, transport) "
                 "VALUES (?, ?, '', '', ?, ?, '', '')",
                 (s["name"], s["grade"], s["father_phone"], s["mother_phone"]),
+            )
+
+        # Re-insert protected (allowlisted) students
+        seen_names: set[str] = set()
+        for p in protected:
+            key = f"{p['student_name']}|{p['grade']}"
+            if key in seen_names:
+                continue
+            seen_names.add(key)
+            await db.execute(
+                "INSERT INTO pi_sheet_students "
+                "(student_name, grade, father_name, mother_name, "
+                "father_mobile, mother_mobile, address, transport) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (p["student_name"], p["grade"], p["father_name"],
+                 p["mother_name"], p["father_mobile"], p["mother_mobile"],
+                 p["address"], p["transport"]),
+            )
+
+        if protected:
+            logger.info(
+                f"PI SHEET FULL REFRESH: re-added {len(seen_names)} "
+                f"allowlisted student entries"
             )
 
         await db.commit()
