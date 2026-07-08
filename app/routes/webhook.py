@@ -3059,8 +3059,13 @@ def _extract_location_from_message(message_text: str) -> str | None:
         ("IMN A/C 2", "IMN A/C 2"),
         ("IMN A/C 1", "IMN A/C 1"),
     ]
+    # Match against the raw uppercased text AND against a punctuation/space
+    # insensitive form, so "3rd floor t. staff", "3rd floor t.staff" and
+    # "3RD FLOOR T STAFF" all resolve to the same camera (letter-by-letter).
+    msg_alnum = re.sub(r"[^A-Z0-9]", "", msg_upper)
     for search_key, db_key in location_keywords:
-        if search_key in msg_upper:
+        key_alnum = re.sub(r"[^A-Z0-9]", "", search_key)
+        if search_key in msg_upper or (key_alnum and key_alnum in msg_alnum):
             return db_key
 
     # --- Fuzzy single-word matches for common short names ---
