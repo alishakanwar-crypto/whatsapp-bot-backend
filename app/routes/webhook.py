@@ -1345,7 +1345,7 @@ _CLASS_LIST_RE = re.compile(
 )
 
 _GRADE_EXTRACT_RE = re.compile(
-    r"(?:grade|class|कक्षा|क्लास)[\s\-]*(\d{1,2})[\s\-]*([a-cA-C])?|"
+    r"(?:grade|class|कक्षा|क्लास)[\s\-]*(\d{1,2})[\s\-]*([a-dA-D])?|"
     r"(?:nur(?:sery)?|nursery)[\s\-]*(\d)?|"
     r"(?:prep)[\s\-]*(\d)?|"
     r"(?:popsicle)",
@@ -3189,8 +3189,8 @@ _SHOW_LOCATION_RE = re.compile(
     r"(?:show|share|send)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?"
     r"(?:photo\s+(?:of\s+)?|picture\s+(?:of\s+)?|image\s+(?:of\s+)?|pic\s+(?:of\s+)?)?"
     r"(?:"
-    r"(?:class|grade|कक्षा|क्लास)\s*\d{1,2}\s*[a-cA-C]?"
-    r"|\d{1,2}\s*[a-cA-C]"           # bare grade: "show 12 b", "show 10 a"
+    r"(?:class|grade|कक्षा|क्लास)\s*\d{1,2}\s*[a-dA-D]?"
+    r"|\d{1,2}\s*[a-dA-D]"           # bare grade: "show 12 b", "show 10 a"
     r"|(?:nursery|nur)\s*\d?"
     r"|(?:prep)\s*\d?"
     r"|popsicle[s]?"
@@ -3352,7 +3352,7 @@ def _extract_classroom_from_message(message_text: str) -> str | None:
     # Fallback: bare grade number with optional section after "of/for/show/share/send"
     # e.g. "show photo of 12 b", "send picture of 3 c", "show 10 a", "show 12 b"
     bare_grade = re.search(
-        r"(?:of|for|show|share|send)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?(?:photo\s+of\s+)?(?:picture\s+of\s+)?(?:image\s+of\s+)?(\d{1,2})\s*([a-cA-C])\b",
+        r"(?:of|for|show|share|send)\s+(?:me\s+)?(?:the\s+)?(?:live\s+)?(?:photo\s+of\s+)?(?:picture\s+of\s+)?(?:image\s+of\s+)?(\d{1,2})\s*([a-dA-D])\b",
         message_text, re.IGNORECASE,
     )
     if bare_grade:
@@ -4468,7 +4468,7 @@ async def _find_student_by_caption(caption: str) -> dict | None:
 # "Grade 3C", "Class 5A", "3C", "3 C", "NUR", "Nursery", "Prep 1", "Popsicle"
 _CAPTION_CLASS_RE = re.compile(
     r"(?:"
-    r"(?:grade|class|कक्षा|क्लास)[\s\-]*(\d{1,2})[\s\-]*([a-cA-C])?"  # "Grade 3C", "Grade 9-A"
+    r"(?:grade|class|कक्षा|क्लास)[\s\-]*(\d{1,2})[\s\-]*([a-dA-D])?"  # "Grade 3C", "Grade 9-A"
     r"|"
     r"(?:nur(?:sery)?)[\s\-]*(\d)?"  # "Nursery", "NUR 1"
     r"|"
@@ -4476,7 +4476,7 @@ _CAPTION_CLASS_RE = re.compile(
     r"|"
     r"(?:popsicle)"  # "Popsicle"
     r"|"
-    r"\b(\d{1,2})[\s\-]*([a-cA-C])\b"  # "3C", "3 C", "3-C", "9-A", "10B"
+    r"\b(\d{1,2})[\s\-]*([a-dA-D])\b"  # "3C", "3 C", "3-C", "9-A", "10B"
     r")",
     re.IGNORECASE,
 )
