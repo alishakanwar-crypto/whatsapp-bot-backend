@@ -2974,6 +2974,18 @@ def _extract_location_from_message(message_text: str) -> str | None:
         ("GALLERY MID 1", "GALLERY MID 1"),
         ("GALLERY MID", "GALLERY MID"),
         # Multi-word non-classroom locations (exact DB keys)
+        # 3rd floor cameras — MUST come before the bare "STAFF" fallback so
+        # "3rd floor t.staff" does not match "TEACHER STAFF 1".
+        ("3RD FLOOR T.STAFF", "3RD FLOOR T.STAFF"),
+        ("3RD FLOOR TSTAFF", "3RD FLOOR T.STAFF"),
+        ("3RD FLOOR TEACHER STAFF", "3RD FLOOR T.STAFF"),
+        ("THIRD FLOOR T.STAFF", "3RD FLOOR T.STAFF"),
+        ("THIRD FLOOR TSTAFF", "3RD FLOOR T.STAFF"),
+        ("THIRD FLOOR TEACHER STAFF", "3RD FLOOR T.STAFF"),
+        ("3RD FLOOR GALLERY 1", "3RD FLOOR GALLERY 1"),
+        ("3RD FLOOR GALLERY 2", "3RD FLOOR GALLERY 2"),
+        ("THIRD FLOOR GALLERY 1", "3RD FLOOR GALLERY 1"),
+        ("THIRD FLOOR GALLERY 2", "3RD FLOOR GALLERY 2"),
         ("PARK GENERATOR SIDE", "PARK GENERATOR SIDE"),
         ("BUS PARKING SIDE", "BUS PARKING SIDE"),
         ("DANCE ROOM BASEMENT", "DANCE ROOM BASEMENT"),
