@@ -701,8 +701,15 @@ async def _reconcile(db, date: str) -> dict:
     # ── CATEGORY 2: UNKNOWN / UNREGISTERED PEOPLE ──
     # Build unknown person list from visitor sightings + gate entries,
     # deduplicating detections within 2 minutes on the same camera.
+    # Per school directive, head-count reconciliation uses ONLY the CP Plus
+    # outside-gate camera. So the unrecognized list is built exclusively from
+    # CP Plus detections — DVR channels (Basement, Entry Gate-1/2, Dispersal,
+    # Reception) are NOT listed here even though they still exist for other
+    # features.
     _raw_unknowns: list[dict] = []
     for v in visitor_sightings:
+        if not _is_cpplus_camera(v.get("camera", "")):
+            continue
         ts = v.get("timestamp", "")
         time_part = ts.split(" ")[1] if " " in ts else ts
         v_direction = v.get("direction", "IN")
@@ -716,6 +723,8 @@ async def _reconcile(db, date: str) -> dict:
             "person_crop": v.get("snapshot", ""),
         })
     for g in gate_entries_with_crops:
+        if not _is_cpplus_camera(g.get("camera", "")):
+            continue
         if g.get("person_crop"):
             ts = g.get("timestamp", "")
             time_part = ts.split(" ")[1] if " " in ts else ts
@@ -789,16 +798,21 @@ async def _reconcile(db, date: str) -> dict:
                 pass
         return None
 
-    # Build face detection timeline (all identified arrivals)
+    # Build the face-recognition timeline used to reconcile CP Plus gate
+    # entries. ONLY named identities from the face-recognition systems
+    # (TrueFace + DVR Hikvision) count as "recognized". Unknown/visitor
+    # detections are NOT recognitions, so a CP Plus entry that matches only
+    # an unknown sighting stays UNRECONCILED.
     face_events: list[dict] = []
     for s in staff_present:
         arr = s.get("trueface_arrival") or s.get("dvr_first_seen")
         if arr:
-            face_events.append({"time": arr, "name": s["name"], "type": "staff"})
-    for v in visitor_sightings:
-        ts = v.get("timestamp", "")
-        t_part = ts.split(" ")[1] if " " in ts else ts
-        face_events.append({"time": t_part, "name": "Unknown", "type": "visitor"})
+            face_events.append({
+                "time": arr,
+                "name": s["name"],
+                "type": "staff",
+                "category": s.get("category", "staff"),
+            })
 
     # Cross-reference each gate IN entry against face detections
     matched_face_indices: set[int] = set()
@@ -834,6 +848,7 @@ async def _reconcile(db, date: str) -> dict:
                 "attire_color": g.get("attire_color", ""),
                 "matched_to": best_match["name"],
                 "matched_type": best_match["type"],
+                "matched_category": best_match.get("category", "staff"),
                 "time_diff_seconds": best_diff,
             })
         else:
@@ -858,17 +873,21 @@ async def _reconcile(db, date: str) -> dict:
     total_staff_exited = len(staff_exited)
     total_unknown_exited = estimated_unknown_out
 
-    # Recognized counts
-    recognized_students = [s for s in staff_present if s["category"] == "Students"]
-    recognized_staff = [s for s in staff_present if s["category"] != "Students"]
-    total_recognized = len(staff_present)  # all recognized (staff + students)
+    # Recognized counts — anchored strictly to CP Plus gate entries that were
+    # matched to a face-recognition identity (per school directive: head-count
+    # reconciliation uses ONLY the CP Plus camera). We do NOT count the full
+    # TrueFace/DVR roster, which includes people who never crossed the CP Plus
+    # gate and previously made Recognized exceed Total Entered.
+    recognized_students = [r for r in reconciled_gate if r.get("matched_category") == "Students"]
+    recognized_staff = [r for r in reconciled_gate if r.get("matched_category") != "Students"]
+    total_recognized = len(reconciled_gate)
 
     # Total entries = gate counter (unique IN crossings)
     total_entries = unique_gate_in
     total_exits = unique_gate_out
 
-    # Unrecognized = Total Entries - Total Recognized
-    total_unrecognized = max(0, total_entries - total_recognized)
+    # Unrecognized = CP Plus entries with no face-recognition match
+    total_unrecognized = len(unreconciled_gate)
 
     # Current Occupancy = Total Entries - Total Exits
     current_occupancy = max(0, total_entries - total_exits)
@@ -2308,12 +2327,13 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     total_unrecognized = recon.get("total_unrecognized", max(0, total_entries - total_recognized))
     current_occupancy = recon.get("current_occupancy", max(0, total_entries - total_exits))
 
-    # Combine all unrecognized person entries (face-detected unknowns + gate-only)
-    all_unrecognized: list[dict] = []
-    for u in unknown_persons:
-        all_unrecognized.append(u)
-    for ue in unrec_entries:
-        all_unrecognized.append(ue)
+    # Unrecognized list = CP Plus gate entries that had NO face-recognition
+    # match (unreconciled_gate_entries). Per the school directive the head-count
+    # reconciliation uses ONLY the CP Plus outside camera, so we do NOT append
+    # the DVR/visitor "unknown_persons" here (that previously listed Basement /
+    # Entry Gate / Reception detections). This also matches Total Unrecognized,
+    # which counts exactly these entries.
+    all_unrecognized: list[dict] = list(unrec_entries)
     # Re-number with U-001, U-002, ...
     for idx, u in enumerate(all_unrecognized, 1):
         u["id"] = f"U-{idx:03d}"
@@ -2858,8 +2878,9 @@ async def live_dashboard_data():
 
     ds = recon.get("data_sources", {})
 
-    # Combine unknown + unreconciled into single "unrecognized" list
-    all_unrec = list(unknown_persons) + list(recon.get("unreconciled_gate_entries", []))
+    # Unrecognized list = CP Plus gate entries with no face-recognition match
+    # (CP-Plus-only head-count directive). Not the DVR/visitor unknowns.
+    all_unrec = list(recon.get("unreconciled_gate_entries", []))
     for idx, u in enumerate(all_unrec, 1):
         u["id"] = f"U-{idx:03d}"
 
