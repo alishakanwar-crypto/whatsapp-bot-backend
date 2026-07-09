@@ -3487,6 +3487,50 @@ async def _extract_classroom_for_queue(
     return None
 
 
+_CHILD_ABSENT_RE = re.compile(
+    r"(?:"
+    r"class\s*room\s+is\s+empty|classroom\s+empty|class\s+is\s+empty|"
+    r"room\s+is\s+empty|(?:^|\b)empty(?:\b|$)|"
+    r"(?:he|she|my\s+(?:child|ward|son|daughter|kid)|student|child|ward|kid)\s+"
+    r"(?:is\s+)?not\s+(?:there|here|visible|seen|present)|"
+    r"not\s+there|no(?:t)?\s+(?:one|body)\s+(?:is\s+)?there|"
+    r"no\s+student|there\s+is\s+no\s+(?:student|child|one|body)|"
+    r"can(?:'|no)?t\s+see\s+(?:my\s+)?(?:child|ward|son|daughter|kid)|"
+    r"cannot\s+see|not\s+able\s+to\s+see|"
+    r"where\s+is\s+(?:my\s+)?(?:child|ward|son|daughter|kid|the\s+student|student|he|she)"
+    r")",
+    re.IGNORECASE,
+)
+
+CHILD_ABSENT_REPLY = (
+    "You can always request later, may be he has gone to attend another class"
+)
+
+# Feature flag — kept OFF until the reply wording is approved by the school.
+_CHILD_ABSENT_REPLY_ENABLED = False
+
+
+def _is_child_absent_complaint(message_text: str) -> bool:
+    """Detect follow-up messages where a parent says the classroom is empty /
+    the child is not visible after receiving a snapshot."""
+    if not message_text:
+        return False
+    return bool(_CHILD_ABSENT_RE.search(message_text.strip()))
+
+
+async def try_handle_child_absent_complaint(
+    sender: str, message_text: str, reply_to: str
+) -> bool:
+    """If the parent reports the classroom empty / child not there, reassure
+    them instead of routing to GPT. Returns True if handled."""
+    if not _CHILD_ABSENT_REPLY_ENABLED:
+        return False
+    if not _is_child_absent_complaint(message_text):
+        return False
+    await send_whatsapp_message(reply_to, CHILD_ABSENT_REPLY)
+    return True
+
+
 async def detect_and_handle_snapshot_request(
     sender: str, message_text: str, reply_to: str
 ) -> bool:
@@ -4107,6 +4151,12 @@ async def receive_whatsapp_message(request: Request):
         # are routed to the camera system, not to GPT or the DM handler.
         snapshot_handled = await detect_and_handle_snapshot_request(sender, message_text, reply_to)
         if snapshot_handled:
+            return {"status": "ok"}
+
+        # Reassure parents who report the classroom empty / child not visible
+        # after a snapshot (e.g. "he is not there", "classroom is empty").
+        absent_handled = await try_handle_child_absent_complaint(sender, message_text, reply_to)
+        if absent_handled:
             return {"status": "ok"}
 
         # Check if this is a direct-message request (e.g. "send message to Harnoor: ...")
@@ -4755,6 +4805,36 @@ async def _try_register_child_face(
                     best_score = score
                     target_child = child
                     caption_matched = True
+
+        if not target_child and not caption_raw:
+            # No caption at all. Parents were told (face_registration template)
+            # to simply "send photos of your child". If they have exactly one
+            # ward, register the photo to that ward automatically. If they have
+            # multiple wards, ask which one it is for.
+            if len(children) == 1:
+                target_child = children[0]
+                caption_matched = True
+                logger.info(
+                    f"Face registration: no caption, single child — "
+                    f"auto-registering to {target_child['student_name']} "
+                    f"({target_child['grade']})"
+                )
+            else:
+                child_list = "\n".join(
+                    f"{i+1}. {c['student_name']} ({c['grade']})"
+                    for i, c in enumerate(children)
+                )
+                ask_msg = (
+                    "Thank you for sharing the photo for face registration!\n\n"
+                    "You have more than one ward linked to your number. "
+                    "Please resend the photo with a caption stating the "
+                    "child's *name and class* so we register it correctly.\n\n"
+                    "Example: *Aarav Sharma Grade 5A*\n\n"
+                    f"Children linked to your number:\n{child_list}"
+                )
+                await save_message(bot_phone, sender, ask_msg, "whatsapp", "outgoing")
+                await send_whatsapp_message(reply_to, ask_msg)
+                return True
 
         if not target_child:
             # Caption had name+class but didn't match any student in DB.
@@ -5733,6 +5813,37 @@ async def receive_cloud_api_message(request: Request):
                 caption = (media_info.get("caption", "") or "").strip()
                 forward_text = caption if caption else "Shared a file/image"
 
+                # ── Parent face registration (no Name+Class caption) ──
+                # Parents are told (ppis_face_registration template) to simply
+                # "send photos of your child". Such photos arrive WITHOUT a
+                # name+class caption, so they don't classify as 'student_photo'.
+                # If the image looks like a face (not a document/worksheet) and
+                # the caption carries no forwarding/check intent, register it to
+                # the parent's ward instead of forwarding it to the teacher.
+                if (
+                    has_image
+                    and _img_content_class == "face"
+                    and not _is_forwarding_or_query(caption)
+                    and not re.search(r"\bcheck\b", caption.lower())
+                    and await _is_pi_sheet_parent(sender)
+                ):
+                    logger.info(
+                        f"[IMAGE HANDLER] Face photo (no name+class) from parent "
+                        f"{sender} — attempting child face registration"
+                    )
+                    try:
+                        face_reg_handled = await _try_register_child_face(
+                            sender, reply_to, bot_phone, media_info,
+                        )
+                        if face_reg_handled:
+                            _recent_images.pop(sender, None)
+                            return {"status": "ok"}
+                    except Exception as img_exc:
+                        logger.error(
+                            f"[IMAGE HANDLER] Parent face registration error: {img_exc}",
+                            exc_info=True,
+                        )
+
                 # --- Homework "check" relay — SUBJECT-WISE ROUTING ---
                 # When caption contains "check", use AI to identify subject,
                 # then forward to the correct subject teacher (not class teacher).
@@ -5955,6 +6066,12 @@ async def receive_cloud_api_message(request: Request):
         # are routed to the camera system, not to GPT or the DM handler.
         snapshot_handled = await detect_and_handle_snapshot_request(sender, message_text, reply_to)
         if snapshot_handled:
+            return {"status": "ok"}
+
+        # Reassure parents who report the classroom empty / child not visible
+        # after a snapshot (e.g. "he is not there", "classroom is empty").
+        absent_handled = await try_handle_child_absent_complaint(sender, message_text, reply_to)
+        if absent_handled:
             return {"status": "ok"}
 
         # Check if this is a direct-message request
