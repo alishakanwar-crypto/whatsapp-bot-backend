@@ -807,11 +807,18 @@ async def _reconcile(db, date: str) -> dict:
     for s in staff_present:
         arr = s.get("trueface_arrival") or s.get("dvr_first_seen")
         if arr:
+            # Which face-recognition system identified this person?
+            if s.get("trueface_arrival"):
+                source = "TrueFace 3000"
+            else:
+                dvr_cams = s.get("dvr_cameras", [])
+                source = f"DVR Hikvision ({dvr_cams[0]})" if dvr_cams else "DVR Hikvision"
             face_events.append({
                 "time": arr,
                 "name": s["name"],
                 "type": "staff",
                 "category": s.get("category", "staff"),
+                "source": source,
             })
 
     # Cross-reference each gate IN entry against face detections
@@ -849,6 +856,7 @@ async def _reconcile(db, date: str) -> dict:
                 "matched_to": best_match["name"],
                 "matched_type": best_match["type"],
                 "matched_category": best_match.get("category", "staff"),
+                "matched_source": best_match.get("source", "Face Recognition"),
                 "time_diff_seconds": best_diff,
             })
         else:
@@ -1017,6 +1025,18 @@ async def _reconcile(db, date: str) -> dict:
         "recognized_students": len(recognized_students),
         "recognized_staff_count": len(recognized_staff),
         "total_recognized": total_recognized,
+        # Named recognized people (CP Plus crossings matched to a face identity),
+        # with the source system that identified them.
+        "recognized_list": [
+            {
+                "name": r.get("matched_to", "?"),
+                "category": r.get("matched_category", "staff"),
+                "source": r.get("matched_source", "Face Recognition"),
+                "time": (r.get("gate_timestamp", "").split(" ")[1]
+                         if " " in r.get("gate_timestamp", "") else r.get("gate_timestamp", "")),
+            }
+            for r in reconciled_gate
+        ],
         "total_registered": total_registered,
         "trueface_identified": len(trueface),
         "dvr_sighted": len([s for s in staff_detail if s["dvr_seen"]]),
@@ -2421,6 +2441,25 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
              "Recognized = CP Plus crossings matched to a Student/Staff face identity.",
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
+    pdf.ln(2)
+
+    # Named recognized people + which system identified them
+    recognized_list = recon.get("recognized_list", [])
+    if recognized_list:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(198, 239, 206)
+        pdf.cell(10, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(60, 7, "Name", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(28, 7, "Category", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(22, 7, "Entry", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Recognized By (source)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for idx, r in enumerate(recognized_list, 1):
+            pdf.cell(10, 6, str(idx), border=1, align="C", new_x="RIGHT")
+            pdf.cell(60, 6, str(r.get("name", "?")), border=1, new_x="RIGHT")
+            pdf.cell(28, 6, str(r.get("category", "staff")), border=1, new_x="RIGHT")
+            pdf.cell(22, 6, str(r.get("time", "-")), border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, str(r.get("source", "Face Recognition")), border=1, new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
 
     # ══════════════════════════════════════════════
