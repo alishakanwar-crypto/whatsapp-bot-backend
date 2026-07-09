@@ -1511,7 +1511,7 @@ def _generate_reconciliation_excel(recon: dict) -> bytes:
     total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
     recognized_students = recon.get("recognized_students", 0)
     recognized_staff_count = recon.get("recognized_staff_count", 0)
-    total_recognized = recon.get("total_recognized", len(staff_present))
+    total_recognized = recon.get("total_recognized", len(staff_inside) + len(staff_exited))
     total_unrecognized = recon.get("total_unrecognized", 0)
     current_occupancy = recon.get("current_occupancy", total_inside)
 
