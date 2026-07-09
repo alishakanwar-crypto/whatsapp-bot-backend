@@ -22,7 +22,7 @@ Endpoints:
     GET  /api/gate/reconciliation/{date} — full reconciliation data
 
 Scheduled:
-    Hourly 7 AM – 5 PM IST — reconciliation report emailed
+    Every 30 min, 6 AM – 5 PM IST — reconciliation report emailed
 
 All timestamps use IST (Asia/Kolkata, UTC+05:30).
 """
@@ -2533,7 +2533,7 @@ async def receive_entry_gate_snapshot(request: Request):
 
 
 async def send_reconciliation_report():
-    """Generate and send the hourly head count reconciliation report."""
+    """Generate and send the head count reconciliation report (runs every 30 min, 6 AM-5 PM IST)."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")

@@ -710,26 +710,21 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
-    # --- Gate Reconciliation Reports (Hourly) ---
-    # 7:00 AM - 5:00 PM IST → hourly gate head count report
-    # IST → UTC: subtract 5h30m  (7 AM IST = 1:30 UTC, 5 PM IST = 11:30 UTC)
+    # --- Gate Reconciliation Reports (every 30 min) ---
+    # 6:00 AM - 5:00 PM IST → half-hourly gate head count report
+    # IST → UTC: subtract 5h30m (6 AM IST = 00:30 UTC, 5 PM IST = 11:30 UTC)
     from app.routes.gate import send_reconciliation_report_sync
-    for ist_hour in range(7, 18):  # 7 AM to 5 PM IST inclusive
-        utc_hour = ist_hour - 6 if ist_hour >= 6 else ist_hour + 18
-        utc_min = 30 if ist_hour >= 6 else 30
-        # IST to UTC: subtract 5:30
-        # e.g. 7:00 IST = 1:30 UTC, 8:00 IST = 2:30 UTC, ..., 17:00 IST = 11:30 UTC
-        utc_h = (ist_hour * 60 + 0 - 330) // 60  # minutes from midnight IST minus 330 min
-        utc_m = (ist_hour * 60 + 0 - 330) % 60
-        if utc_h < 0:
-            utc_h += 24
+    for ist_minutes in range(6 * 60, 17 * 60 + 1, 30):  # 06:00–17:00 IST every 30 min
+        utc_total = (ist_minutes - 330) % (24 * 60)  # subtract 5:30, wrap across midnight
+        utc_h, utc_m = divmod(utc_total, 60)
+        ist_h, ist_min = divmod(ist_minutes, 60)
         scheduler.add_job(
             send_reconciliation_report_sync,
             trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
-            id=f"gate_report_{ist_hour:02d}00",
+            id=f"gate_report_{ist_h:02d}{ist_min:02d}",
             replace_existing=True,
         )
-    logger.info("Scheduled gate reconciliation reports hourly 7:00 AM - 5:00 PM IST")
+    logger.info("Scheduled gate reconciliation reports every 30 min 6:00 AM - 5:00 PM IST")
 
     # --- Mood & Temperament Reports — PERMANENTLY DISABLED ---
     # Previously ran hourly 7 AM - 12 PM IST. Disabled per user request.
