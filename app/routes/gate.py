@@ -92,6 +92,60 @@ CPPLUS_SNAPSHOT_TEMPLATE = os.environ.get(
     "CPPLUS_SNAPSHOT_TEMPLATE", UNKNOWN_ALERT_TEMPLATE
 )
 
+# Face-quality gate for CP Plus snapshots: only share crops with a clear,
+# front-facing face. Tunable via env.
+_SNAPSHOT_MIN_FACE_PX = int(os.environ.get("CPPLUS_SNAPSHOT_MIN_FACE_PX", "48"))
+_SNAPSHOT_MIN_SHARPNESS = float(os.environ.get("CPPLUS_SNAPSHOT_MIN_SHARPNESS", "60"))
+_frontal_cascade = None
+
+
+def _get_frontal_cascade():
+    """Lazily load the OpenCV frontal-face Haar cascade (thread-safe enough for
+    our single-worker deploy; first call builds it, later calls reuse it)."""
+    global _frontal_cascade
+    if _frontal_cascade is None:
+        import cv2
+        _frontal_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+    return _frontal_cascade
+
+
+def _has_clear_frontal_face(image_b64: str) -> bool:
+    """True only if the crop contains a clear, front-facing face.
+
+    A frontal Haar cascade rejects profile / back-of-head / no-face crops
+    (it does not fire on side profiles), and a Laplacian-variance sharpness
+    check on the face region rejects blurry captures. Fails closed: any error
+    or ambiguity returns False so we never share a questionable snapshot.
+    """
+    if not image_b64:
+        return False
+    try:
+        import cv2
+        import numpy as np
+
+        raw = base64.b64decode(image_b64)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return False
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = _get_frontal_cascade().detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=6,
+            minSize=(_SNAPSHOT_MIN_FACE_PX, _SNAPSHOT_MIN_FACE_PX),
+        )
+        for (x, y, w, h) in faces:
+            face = gray[y:y + h, x:x + w]
+            if cv2.Laplacian(face, cv2.CV_64F).var() >= _SNAPSHOT_MIN_SHARPNESS:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("[GATE] CP Plus face-quality check failed: %s", e)
+        return False
+
 # Deduplication: entries within this window from same/nearby cameras = same person
 _DEDUP_WINDOW_SECONDS = 120  # 2 minutes
 
@@ -1169,14 +1223,19 @@ async def _send_cpplus_visitor_snapshot(entry: dict):
     direction = entry.get("direction", "IN")
     image_b64 = entry.get("person_crop", "") or entry.get("snapshot_face", "")
 
+    # Only share a snapshot when the crop shows a clear, front-facing face.
+    # Side/back/blurry detections are still counted for reconciliation but not sent.
+    if not _has_clear_frontal_face(image_b64):
+        logger.info("[GATE] CP Plus snapshot skipped — no clear frontal face (ts=%s)", ts)
+        return
+
     try:
         from app.services.whatsapp_service import (
             upload_base64_image_cloud,
             send_cloud_template_message,
         )
 
-        image_data = image_b64 if image_b64 else _generate_placeholder_image()
-        header_image_id = await upload_base64_image_cloud(image_data)
+        header_image_id = await upload_base64_image_cloud(image_b64)
         if not header_image_id:
             logger.warning("[GATE] CP Plus snapshot: image upload failed (ts=%s)", ts)
             return
