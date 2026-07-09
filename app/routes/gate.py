@@ -2291,17 +2291,21 @@ def _add_snapshot_gallery(pdf, recon: dict, section_header):
 
 def _generate_reconciliation_pdf(recon: dict, date_display: str,
                                   time_display: str) -> bytes:
-    """Generate HEAD COUNT RECONCILIATION REPORT matching the school spec.
+    """Generate a BRIEF head-count reconciliation report — CP Plus camera ONLY.
+
+    Per school directive the report is kept concise and sourced only from the
+    CP Plus outside-gate camera. It intentionally omits the old DVR/TrueFace
+    detail sections (staff roster, DVR sighting timelines, staff reconciliation,
+    vehicles) that used other cameras.
 
     Sections:
-      1. ENTRY SUMMARY
-      2. RECOGNITION SUMMARY
+      1. ENTRY SUMMARY        (CP Plus crossings)
+      2. RECOGNITION SUMMARY  (counts only)
       3. UNRECOGNIZED SUMMARY
       4. EXIT SUMMARY
       5. CURRENT OCCUPANCY
       6. RECONCILIATION CHECK
-      7. UNRECOGNIZED PERSON DETAILS
-      8. AI CONCLUSION
+      7. UNRECOGNIZED PERSON DETAILS (CP Plus)
     """
     from fpdf import FPDF
 
@@ -2398,8 +2402,7 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(100, 100, 100)
     pdf.cell(0, 5,
-             f"Counted via: Main Gate cameras, Basement Entry, Dispersal Exit  |  "
-             f"Raw detections: IN={recon.get('raw_gate_in', 0)}, OUT={recon.get('raw_gate_out', 0)}",
+             "Counted via: ENTRY GATE-OUTSIDE (CP Plus) camera only",
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
@@ -2411,38 +2414,13 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     key_value("Recognized Students", recognized_students, bold_val=True)
     key_value("Recognized Staff", recognized_staff_count, bold_val=True)
     status_row("Total Recognized", total_recognized, 198, 239, 206)
-    pdf.ln(2)
-
-    # Staff breakdown by category
-    staff_cat_present = recon.get("staff_category_present", {})
-    if staff_cat_present:
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(0, 6, "  Recognized by Category:", new_x="LMARGIN", new_y="NEXT")
-        for cat_name in sorted(staff_cat_present.keys()):
-            key_value(cat_name, staff_cat_present[cat_name], indent=1)
-    pdf.ln(2)
-
-    # Recognized staff inside table
-    if staff_present:
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(198, 239, 206)
-        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(55, 7, "Name", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(30, 7, "Category", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(25, 7, "Arrived", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(25, 7, "Status", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Cameras", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
-        for idx, s in enumerate(staff_present, 1):
-            arrival = s.get("trueface_arrival") or s.get("dvr_first_seen") or "-"
-            cams = ", ".join(s.get("dvr_cameras", [])[:3]) or "-"
-            occ = s.get("occupancy_status", "INSIDE")
-            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
-            pdf.cell(55, 6, s["name"], border=1, new_x="RIGHT")
-            pdf.cell(30, 6, s["category"], border=1, new_x="RIGHT")
-            pdf.cell(25, 6, arrival, border=1, align="C", new_x="RIGHT")
-            pdf.cell(25, 6, occ, border=1, align="C", new_x="RIGHT")
-            pdf.cell(0, 6, cams, border=1, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5,
+             "Recognized = CP Plus crossings matched to a Student/Staff face identity.",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
     # ══════════════════════════════════════════════
@@ -2544,79 +2522,6 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
         pdf.set_font("Helvetica", "I", 9)
         pdf.cell(0, 6, "  No unrecognized persons detected.", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
-
-    # ══════════════════════════════════════════════
-    # SECTION 8: VEHICLE COUNT
-    # ══════════════════════════════════════════════
-    vehicles_in = recon.get("vehicles_in", 0)
-    vehicles_out = recon.get("vehicles_out", 0)
-    vehicle_types = recon.get("vehicle_types", {})
-    if vehicles_in > 0 or vehicles_out > 0:
-        section_header("VEHICLE COUNT (Separate from Head Count)")
-        key_value("Vehicles IN", vehicles_in, bold_val=True)
-        key_value("Vehicles OUT", vehicles_out)
-        for vtype, vcount in sorted(vehicle_types.items()):
-            key_value(vtype.title(), vcount, indent=1)
-        pdf.ln(2)
-
-    # ══════════════════════════════════════════════
-    # SECTION 9: STAFF RECONCILIATION DETAIL
-    # ══════════════════════════════════════════════
-    section_header("STAFF RECONCILIATION DETAIL")
-    status_row("Fully Verified (TrueFace + DVR)", len(fully_verified), 198, 239, 206)
-    status_row("Entry Only (DVR - Not on TrueFace)", len(dvr_only), 255, 199, 206)
-    status_row("TrueFace Only (No DVR Sighting)", len(trueface_only), 255, 235, 156)
-    status_row("Not Detected / Absent", len(staff_absent), 217, 217, 217)
-    pdf.ln(3)
-
-    # Entry without attendance
-    if dvr_only:
-        for t in dvr_only:
-            cams = ", ".join(t.get("dvr_cameras", []))
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(0, 6, f"{t['name']} - {t.get('category', 'Staff')}", new_x="LMARGIN", new_y="NEXT")
-            pdf.set_font("Helvetica", "", 9)
-            pdf.cell(0, 5, f"    DVR: {t.get('dvr_first_seen', '-')}  |  Cameras: {cams}", new_x="LMARGIN", new_y="NEXT")
-            pdf.set_text_color(200, 0, 0)
-            pdf.cell(0, 5, "    NOT marked on TrueFace 3000", new_x="LMARGIN", new_y="NEXT")
-            pdf.set_text_color(0, 0, 0)
-            pdf.ln(2)
-
-    # ── Mismatch Alerts ──
-    alerts = recon.get("alerts", [])
-    if alerts:
-        section_header("ALERTS")
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(217, 226, 243)
-        pdf.cell(8, 7, "#", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(45, 7, "Alert Type", border=1, fill=True, new_x="RIGHT")
-        pdf.cell(18, 7, "Severity", border=1, fill=True, align="C", new_x="RIGHT")
-        pdf.cell(0, 7, "Detail", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
-        for idx, alert in enumerate(alerts, 1):
-            sev = alert.get("severity", "medium")
-            if sev == "high":
-                pdf.set_fill_color(255, 68, 68)
-            elif sev == "medium":
-                pdf.set_fill_color(255, 165, 0)
-            else:
-                pdf.set_fill_color(255, 235, 156)
-            pdf.cell(8, 6, str(idx), border=1, align="C", new_x="RIGHT")
-            pdf.cell(45, 6, alert.get("type", ""), border=1, new_x="RIGHT")
-            pdf.cell(18, 6, sev.upper(), border=1, align="C", fill=True, new_x="RIGHT")
-            pdf.set_fill_color(255, 255, 255)
-            pdf.cell(0, 6, alert.get("detail", ""), border=1, new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(5)
-
-    # ══════════════════════════════════════════════
-    # SECTION 10: AI CONCLUSION
-    # ══════════════════════════════════════════════
-    ai_obs = _generate_ai_observations(recon)
-    section_header("AI CONCLUSION")
-    pdf.set_font("Helvetica", "", 10)
-    for obs in ai_obs:
-        pdf.multi_cell(0, 6, f"  {obs}", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(5)
 
     # ── Footer ──
     pdf.set_font("Helvetica", "I", 8)
@@ -2722,10 +2627,6 @@ async def send_reconciliation_report():
         logger.info("[GATE] No TrueFace, DVR, or gate records for %s — skipping report", today)
         return
 
-    # Generate Excel
-    xlsx_bytes = _generate_reconciliation_excel(recon)
-    filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.xlsx"
-
     # Build counts from new architecture (per school spec)
     total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
     total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
@@ -2790,7 +2691,6 @@ async def send_reconciliation_report():
             "PP International School",
             attachments=[
                 (pdf_filename, pdf_bytes),
-                (filename, xlsx_bytes),
             ],
         )
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
