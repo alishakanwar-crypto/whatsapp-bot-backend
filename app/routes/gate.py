@@ -48,6 +48,29 @@ logger = logging.getLogger("app.gate")
 IST = timezone(timedelta(hours=5, minutes=30))
 router = APIRouter()
 
+# Parent vs Vendor is a heuristic split of UNRECOGNIZED entries (neither is
+# face-recognized): an unrecognized person who enters within the morning
+# drop-off window is treated as a Parent, otherwise a Vendor/third-party.
+# Window is [start, end) in 24h IST; override via env without a code change.
+_PARENT_DROP_START = int(os.environ.get("PARENT_DROP_START_HOUR", "6"))
+_PARENT_DROP_END = int(os.environ.get("PARENT_DROP_END_HOUR", "10"))
+
+
+def _split_parent_vendor(time_str: str) -> str:
+    """Classify an unrecognized entry as 'Parent' or 'Vendor' by entry hour.
+
+    time_str may be 'HH:MM:SS' or a full 'YYYY-MM-DD HH:MM:SS'. Anything we
+    cannot parse falls back to 'Vendor' (the conservative label).
+    """
+    if not time_str:
+        return "Vendor"
+    t = time_str.split(" ")[1] if " " in time_str else time_str
+    try:
+        hour = int(t.split(":")[0])
+    except (ValueError, IndexError):
+        return "Vendor"
+    return "Parent" if _PARENT_DROP_START <= hour < _PARENT_DROP_END else "Vendor"
+
 REPORT_RECIPIENTS = os.environ.get(
     "GATE_REPORT_EMAIL",
     "alisha.kanwar@ppischool.in",
@@ -900,6 +923,43 @@ async def _reconcile(db, date: str) -> dict:
     # Current Occupancy = Total Entries - Total Exits
     current_occupancy = max(0, total_entries - total_exits)
 
+    # ── CUMULATIVE HEAD-COUNT BY CATEGORY (since morning) ──
+    # Per school directive the report shows, for the whole day so far:
+    #   Entered (IN) / Left (OUT) / Currently Inside, split into
+    #   Students, Teachers/Staff, Parents, Vendors.
+    # Data model & assumptions (all CP Plus camera only):
+    #   • Students & Teachers = CP Plus entries matched to a face identity;
+    #     they REMAIN inside during school hours, so their "Left" ≈ 0.
+    #   • Parents & Vendors = unrecognized entries (no face match). Parent vs
+    #     Vendor is split by entry time (morning drop-off window = Parent).
+    #   • Gate OUT crossings are not face-identified, so all exits are
+    #     attributed to Parents/Vendors leaving, split proportionally.
+    cat_students_in = len(recognized_students)
+    cat_teachers_in = len(recognized_staff)
+    parent_in = sum(1 for u in unreconciled_gate
+                    if _split_parent_vendor(u.get("timestamp") or u.get("time", "")) == "Parent")
+    vendor_in = total_unrecognized - parent_in
+
+    # Attribute all recorded exits to the Parents/Vendors bucket (students &
+    # staff stay in), split in proportion to how many of each entered.
+    pv_in = parent_in + vendor_in
+    pv_left = min(total_exits, pv_in)
+    parent_left = round(pv_left * parent_in / pv_in) if pv_in > 0 else 0
+    vendor_left = pv_left - parent_left
+    parent_inside = max(0, parent_in - parent_left)
+    vendor_inside = max(0, vendor_in - vendor_left)
+
+    cumulative_by_category = [
+        {"category": "Students", "entered": cat_students_in,
+         "left": 0, "inside": cat_students_in},
+        {"category": "Teachers/Staff", "entered": cat_teachers_in,
+         "left": 0, "inside": cat_teachers_in},
+        {"category": "Parents", "entered": parent_in,
+         "left": parent_left, "inside": parent_inside},
+        {"category": "Vendors", "entered": vendor_in,
+         "left": vendor_left, "inside": vendor_inside},
+    ]
+
     # Legacy: keep for backward compat
     total_unknown_inside = estimated_unknown_inside
     total_unreconciled_inside = unreconciled_count
@@ -1048,6 +1108,8 @@ async def _reconcile(db, date: str) -> dict:
         # ── CURRENT OCCUPANCY ──
         "current_occupancy": current_occupancy,
         "total_inside": total_inside,  # = current_occupancy
+        # Cumulative-since-morning head count split by category
+        "cumulative_by_category": cumulative_by_category,
         # ── Staff breakdown ──
         "staff_inside": total_staff_inside,
         "staff_exited": total_staff_exited,
@@ -2502,6 +2564,43 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
              f"Formula: Entries ({total_entries}) - Exits ({total_exits}) = {current_occupancy}",
              new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
+
+    # Cumulative-since-morning breakdown by category
+    cumulative = recon.get("cumulative_by_category", [])
+    if cumulative:
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 6, "Cumulative Since Morning (by category)", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(197, 217, 241)
+        pdf.cell(70, 7, "Category", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(35, 7, "Entered (IN)", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(30, 7, "Left (OUT)", border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, "Inside now", border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        for row in cumulative:
+            pdf.cell(70, 6, f"  {row.get('category', '?')}", border=1, new_x="RIGHT")
+            pdf.cell(35, 6, str(row.get("entered", 0)), border=1, align="C", new_x="RIGHT")
+            pdf.cell(30, 6, str(row.get("left", 0)), border=1, align="C", new_x="RIGHT")
+            pdf.cell(0, 6, str(row.get("inside", 0)), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+        # TOTAL row
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(226, 239, 218)
+        pdf.cell(70, 7, "  TOTAL", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(35, 7, str(total_entries), border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(30, 7, str(total_exits), border=1, fill=True, align="C", new_x="RIGHT")
+        pdf.cell(0, 7, str(current_occupancy), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.set_text_color(100, 100, 100)
+        pdf.multi_cell(0, 4,
+                       "Students & Teachers are recognized by face and remain inside during "
+                       "school hours. Parents/Vendors are unrecognized entries split by entry "
+                       "time (morning drop-off = Parent); exits are deducted from this bucket. "
+                       "Figures are approximate.",
+                       new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(3)
 
     # ══════════════════════════════════════════════
     # SECTION 6: RECONCILIATION CHECK
