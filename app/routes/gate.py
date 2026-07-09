@@ -81,11 +81,14 @@ def _is_cpplus_camera(camera: str) -> bool:
 
 
 # Recipients for CP Plus outside-gate visitor snapshots (WhatsApp).
-# Env override: comma-separated numbers in CPPLUS_SNAPSHOT_PHONES.
+# DISABLED per request (2026-06-30): default is empty so NO snapshots are sent.
+# Re-enable by setting the CPPLUS_SNAPSHOT_PHONES env var to a comma-separated
+# list of numbers (e.g. "918796105084,919289280410"). Head-count/reconciliation
+# on the CP Plus camera is unaffected.
 CPPLUS_SNAPSHOT_PHONES = [
     p.strip() for p in os.environ.get(
         "CPPLUS_SNAPSHOT_PHONES",
-        "918796105084,919289280410",  # Ali, Charu
+        "",  # snapshot sharing disabled
     ).split(",") if p.strip()
 ]
 CPPLUS_SNAPSHOT_TEMPLATE = os.environ.get(
@@ -1280,11 +1283,13 @@ async def receive_gate_entries(request: Request):
     # Forward every person detected on the CP Plus outside-gate camera as a live
     # WhatsApp snapshot (only this camera — no DVR channels). The gate counter
     # emits one event per line crossing, so each distinct visitor = one alert.
+    # Snapshot sharing is disabled unless CPPLUS_SNAPSHOT_PHONES is configured.
     snapshot_count = 0
-    for e in entries:
-        if _is_cpplus_camera(e.get("camera", "")) and e.get("direction", "IN") == "IN":
-            snapshot_count += 1
-            asyncio.create_task(_send_cpplus_visitor_snapshot(e))
+    if CPPLUS_SNAPSHOT_PHONES:
+        for e in entries:
+            if _is_cpplus_camera(e.get("camera", "")) and e.get("direction", "IN") == "IN":
+                snapshot_count += 1
+                asyncio.create_task(_send_cpplus_visitor_snapshot(e))
 
     logger.info("[GATE] Stored %d gate entry event(s); queued %d CP Plus snapshot(s)",
                 count, snapshot_count)
