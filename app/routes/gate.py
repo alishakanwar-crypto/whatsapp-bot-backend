@@ -789,16 +789,21 @@ async def _reconcile(db, date: str) -> dict:
                 pass
         return None
 
-    # Build face detection timeline (all identified arrivals)
+    # Build the face-recognition timeline used to reconcile CP Plus gate
+    # entries. ONLY named identities from the face-recognition systems
+    # (TrueFace + DVR Hikvision) count as "recognized". Unknown/visitor
+    # detections are NOT recognitions, so a CP Plus entry that matches only
+    # an unknown sighting stays UNRECONCILED.
     face_events: list[dict] = []
     for s in staff_present:
         arr = s.get("trueface_arrival") or s.get("dvr_first_seen")
         if arr:
-            face_events.append({"time": arr, "name": s["name"], "type": "staff"})
-    for v in visitor_sightings:
-        ts = v.get("timestamp", "")
-        t_part = ts.split(" ")[1] if " " in ts else ts
-        face_events.append({"time": t_part, "name": "Unknown", "type": "visitor"})
+            face_events.append({
+                "time": arr,
+                "name": s["name"],
+                "type": "staff",
+                "category": s.get("category", "staff"),
+            })
 
     # Cross-reference each gate IN entry against face detections
     matched_face_indices: set[int] = set()
@@ -834,6 +839,7 @@ async def _reconcile(db, date: str) -> dict:
                 "attire_color": g.get("attire_color", ""),
                 "matched_to": best_match["name"],
                 "matched_type": best_match["type"],
+                "matched_category": best_match.get("category", "staff"),
                 "time_diff_seconds": best_diff,
             })
         else:
@@ -858,17 +864,21 @@ async def _reconcile(db, date: str) -> dict:
     total_staff_exited = len(staff_exited)
     total_unknown_exited = estimated_unknown_out
 
-    # Recognized counts
-    recognized_students = [s for s in staff_present if s["category"] == "Students"]
-    recognized_staff = [s for s in staff_present if s["category"] != "Students"]
-    total_recognized = len(staff_present)  # all recognized (staff + students)
+    # Recognized counts — anchored strictly to CP Plus gate entries that were
+    # matched to a face-recognition identity (per school directive: head-count
+    # reconciliation uses ONLY the CP Plus camera). We do NOT count the full
+    # TrueFace/DVR roster, which includes people who never crossed the CP Plus
+    # gate and previously made Recognized exceed Total Entered.
+    recognized_students = [r for r in reconciled_gate if r.get("matched_category") == "Students"]
+    recognized_staff = [r for r in reconciled_gate if r.get("matched_category") != "Students"]
+    total_recognized = len(reconciled_gate)
 
     # Total entries = gate counter (unique IN crossings)
     total_entries = unique_gate_in
     total_exits = unique_gate_out
 
-    # Unrecognized = Total Entries - Total Recognized
-    total_unrecognized = max(0, total_entries - total_recognized)
+    # Unrecognized = CP Plus entries with no face-recognition match
+    total_unrecognized = len(unreconciled_gate)
 
     # Current Occupancy = Total Entries - Total Exits
     current_occupancy = max(0, total_entries - total_exits)
