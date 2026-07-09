@@ -67,6 +67,31 @@ _UNKNOWN_ALERT_COOLDOWN = 60  # seconds
 # Cameras at actual entry/exit points (Main Gate, Basement, Dispersal)
 _ENTRY_CAMERA_KEYWORDS = ("ENTRY GATE", "DISPERSAL", "BASEMENT")
 
+# The CP Plus camera mounted OUTSIDE the school gate is the single authoritative
+# head-count point. Its camera name contains "CP Plus"
+# (e.g. "ENTRY GATE-OUTSIDE (CP Plus)"). Head-count reconciliation counts ONLY
+# this camera, and every person it detects entering is forwarded as a live
+# WhatsApp snapshot (see _send_cpplus_visitor_snapshot).
+_CPPLUS_CAMERA_MARKERS = ("CP PLUS", "CPPLUS")
+
+
+def _is_cpplus_camera(camera: str) -> bool:
+    """True if the camera name identifies the outside CP Plus gate camera."""
+    return any(m in (camera or "").upper() for m in _CPPLUS_CAMERA_MARKERS)
+
+
+# Recipients for CP Plus outside-gate visitor snapshots (WhatsApp).
+# Env override: comma-separated numbers in CPPLUS_SNAPSHOT_PHONES.
+CPPLUS_SNAPSHOT_PHONES = [
+    p.strip() for p in os.environ.get(
+        "CPPLUS_SNAPSHOT_PHONES",
+        "918796105084,919289280410",  # Ali, Charu
+    ).split(",") if p.strip()
+]
+CPPLUS_SNAPSHOT_TEMPLATE = os.environ.get(
+    "CPPLUS_SNAPSHOT_TEMPLATE", UNKNOWN_ALERT_TEMPLATE
+)
+
 # Deduplication: entries within this window from same/nearby cameras = same person
 _DEDUP_WINDOW_SECONDS = 120  # 2 minutes
 
@@ -440,9 +465,11 @@ async def _reconcile(db, date: str) -> dict:
     contact_categories = await _get_contact_categories(db)
     gate_entries_with_crops = await _get_gate_entries_with_crops(db, date)
 
-    # Only count entry/exit cameras for gate totals (not internal cameras)
-    gate_in_entry = [e for e in gate_in_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
-    gate_out_entry = [e for e in gate_out_all if any(k in e["camera"].upper() for k in _ENTRY_CAMERA_KEYWORDS)]
+    # Head-count reconciliation counts ONLY the CP Plus outside-gate camera
+    # (per school directive). DVR ENTRY/DISPERSAL/BASEMENT channels are not
+    # counted toward the gate entry/exit totals.
+    gate_in_entry = [e for e in gate_in_all if _is_cpplus_camera(e["camera"])]
+    gate_out_entry = [e for e in gate_out_all if _is_cpplus_camera(e["camera"])]
     raw_gate_in = len(gate_in_entry)
     raw_gate_out = len(gate_out_entry)
 
@@ -1125,6 +1152,53 @@ async def _send_unknown_person_alert(entry: dict):
         logger.error("[GATE] Unknown person alert failed: %s (camera=%s)", e, camera)
 
 
+async def _send_cpplus_visitor_snapshot(entry: dict):
+    """Send a live WhatsApp snapshot of a person detected on the CP Plus
+    outside-gate camera to CPPLUS_SNAPSHOT_PHONES (Ali, Charu).
+
+    Only invoked for CP Plus camera IN events. Uses the image-header template
+    so it delivers even outside the 24-hour session window. No per-camera
+    cooldown: the gate counter emits one event per line crossing, so each
+    distinct visitor produces exactly one snapshot.
+    """
+    if not CPPLUS_SNAPSHOT_PHONES:
+        return
+
+    camera = entry.get("camera", "ENTRY GATE-OUTSIDE (CP Plus)")
+    ts = entry.get("timestamp", "")
+    direction = entry.get("direction", "IN")
+    image_b64 = entry.get("person_crop", "") or entry.get("snapshot_face", "")
+
+    try:
+        from app.services.whatsapp_service import (
+            upload_base64_image_cloud,
+            send_cloud_template_message,
+        )
+
+        image_data = image_b64 if image_b64 else _generate_placeholder_image()
+        header_image_id = await upload_base64_image_cloud(image_data)
+        if not header_image_id:
+            logger.warning("[GATE] CP Plus snapshot: image upload failed (ts=%s)", ts)
+            return
+
+        for phone in CPPLUS_SNAPSHOT_PHONES:
+            try:
+                sent = await send_cloud_template_message(
+                    to=phone,
+                    template_name=CPPLUS_SNAPSHOT_TEMPLATE,
+                    language_code="en",
+                    body_params=[camera, ts, direction],
+                    header_image_id=header_image_id,
+                )
+                logger.info("[GATE] CP Plus snapshot → %s: %s (ts=%s)",
+                            phone, "OK" if sent else "FAILED", ts)
+            except Exception as inner_e:
+                logger.error("[GATE] CP Plus snapshot to %s failed: %s", phone, inner_e)
+
+    except Exception as e:
+        logger.error("[GATE] CP Plus snapshot failed: %s (camera=%s)", e, camera)
+
+
 # ============================================================
 # Endpoints
 # ============================================================
@@ -1144,12 +1218,18 @@ async def receive_gate_entries(request: Request):
     finally:
         await db.close()
 
-    # Note: WhatsApp alerts for unknown persons are triggered from
-    # /api/gate/visitor-sighting (face-recognition-verified unknowns),
-    # not from gate entries (which include all persons, known and unknown).
+    # Forward every person detected on the CP Plus outside-gate camera as a live
+    # WhatsApp snapshot (only this camera — no DVR channels). The gate counter
+    # emits one event per line crossing, so each distinct visitor = one alert.
+    snapshot_count = 0
+    for e in entries:
+        if _is_cpplus_camera(e.get("camera", "")) and e.get("direction", "IN") == "IN":
+            snapshot_count += 1
+            asyncio.create_task(_send_cpplus_visitor_snapshot(e))
 
-    logger.info("[GATE] Stored %d gate entry event(s)", count)
-    return {"status": "ok", "stored": count}
+    logger.info("[GATE] Stored %d gate entry event(s); queued %d CP Plus snapshot(s)",
+                count, snapshot_count)
+    return {"status": "ok", "stored": count, "snapshots": snapshot_count}
 
 
 @router.post("/api/gate/teacher-sighting")
@@ -2457,7 +2537,7 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
 
 
 # ============================================================
-# Hourly Reconciliation Report (7 AM - 5 PM IST)
+# Reconciliation Report (every 30 min, 6 AM - 5 PM IST)
 # ============================================================
 
 
@@ -2613,7 +2693,7 @@ async def send_reconciliation_report():
     for email in recipients:
         ok = await send_email_async(
             email,
-            f"Hourly Head Count Reconciliation — {today_display} {time_display} IST",
+            f"Head Count Reconciliation — {today_display} {time_display} IST",
             body,
             "PP International School",
             attachments=[
