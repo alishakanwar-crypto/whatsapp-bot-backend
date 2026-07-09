@@ -53,6 +53,19 @@ REPORT_RECIPIENTS = os.environ.get(
     "alisha.kanwar@ppischool.in",
 )
 
+# Also deliver the reconciliation report PDF over WhatsApp (Meta Cloud API).
+# Comma-separated numbers in GATE_REPORT_WHATSAPP_PHONES; empty string disables.
+# Requires an approved DOCUMENT-header template (GATE_REPORT_WHATSAPP_TEMPLATE).
+GATE_REPORT_WHATSAPP_PHONES = [
+    p.strip() for p in os.environ.get(
+        "GATE_REPORT_WHATSAPP_PHONES",
+        "918796105084,919289280410",  # Ali, Charu
+    ).split(",") if p.strip()
+]
+GATE_REPORT_WHATSAPP_TEMPLATE = os.environ.get(
+    "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_head_count_report"
+)
+
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
 UNKNOWN_ALERT_PHONES = [
@@ -2761,6 +2774,42 @@ async def send_reconciliation_report():
             ],
         )
         logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
+
+    # --- WhatsApp delivery (Meta Cloud API) of the same PDF to Ali & Charu ---
+    if GATE_REPORT_WHATSAPP_PHONES:
+        try:
+            from app.services.whatsapp_service import (
+                send_cloud_template_message,
+                upload_media_bytes_cloud,
+            )
+
+            doc_id = await upload_media_bytes_cloud(
+                pdf_bytes, "application/pdf", pdf_filename
+            )
+            if doc_id:
+                wa_body_params = [
+                    f"{today_display} {time_display} IST",
+                    str(total_entries),
+                    str(total_recognized),
+                    str(total_unrecognized),
+                    str(current_occupancy),
+                ]
+                for phone in GATE_REPORT_WHATSAPP_PHONES:
+                    wok = await send_cloud_template_message(
+                        phone,
+                        GATE_REPORT_WHATSAPP_TEMPLATE,
+                        body_params=wa_body_params,
+                        header_document_id=doc_id,
+                        header_document_filename=pdf_filename,
+                    )
+                    logger.info(
+                        "[GATE] Reconciliation WhatsApp → %s: %s",
+                        phone, "OK" if wok else "FAILED",
+                    )
+            else:
+                logger.error("[GATE] Reconciliation WhatsApp: PDF upload to Cloud API failed")
+        except Exception as e:
+            logger.error("[GATE] Reconciliation WhatsApp send error: %s", e)
 
     logger.info(
         "[GATE] Reconciliation report sent at %s: Entries=%d, Recognized=%d, Unrecognized=%d, Occupancy=%d",
