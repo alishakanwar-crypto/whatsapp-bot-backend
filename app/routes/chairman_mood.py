@@ -25,6 +25,9 @@ IST = timezone(timedelta(hours=5, minutes=30))
 router = APIRouter()
 
 REPORT_EMAIL = os.environ.get("MOOD_REPORT_EMAIL", "alisha.kanwar@ppischool.in")
+MOOD_REPORTS_ENABLED = os.environ.get("MOOD_REPORTS_ENABLED", "false").lower() in (
+    "1", "true", "yes",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +522,10 @@ _chairman_instant_sent: dict[str, bool] = {}
 
 async def _send_chairman_instant_report():
     """Send an immediate mood report when Chairman is first detected today."""
+    if not MOOD_REPORTS_ENABLED:
+        logger.info("[MOOD] Chairman instant report disabled")
+        return
+
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
 
@@ -594,6 +601,10 @@ async def _send_chairman_instant_report():
 
 
 async def send_daily_mood_report():
+    if not MOOD_REPORTS_ENABLED:
+        logger.info("[MOOD] Daily report disabled")
+        return
+
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
