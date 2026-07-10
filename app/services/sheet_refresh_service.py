@@ -919,6 +919,12 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 (phone, phone),
             )
             for row in await rows_to_save.fetchall():
+                normalized_name = " ".join((row[0] or "").upper().split())
+                if (
+                    PI_SHEET_BOT_ENABLED_STUDENTS
+                    and normalized_name not in PI_SHEET_BOT_ENABLED_STUDENTS
+                ):
+                    continue
                 protected.append(dict(zip(
                     ["student_name", "grade", "father_name", "mother_name",
                      "father_mobile", "mother_mobile", "address", "transport"],
