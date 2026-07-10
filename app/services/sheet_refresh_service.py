@@ -54,6 +54,12 @@ PI_SHEET_GRADE_GIDS = [
     "523098156", "255213929", "1291854348",
 ]
 
+PI_SHEET_BOT_DISABLED_STUDENTS = {
+    " ".join(name.upper().split())
+    for name in os.getenv("PI_SHEET_BOT_DISABLED_STUDENTS", "").split(",")
+    if name.strip()
+}
+
 # Known male teachers (for honorific)
 MALE_TEACHERS = {"shyam manohar", "tarun dhall", "christy joseph", "deepak"}
 
@@ -782,6 +788,14 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         )
                         continue
 
+                    normalized_name = " ".join(name.upper().split())
+                    if normalized_name in PI_SHEET_BOT_DISABLED_STUDENTS:
+                        logger.info(
+                            "PI SHEET TAB gid=%s: bot services disabled for '%s'",
+                            gid, name,
+                        )
+                        continue
+
                     grade = (
                         row[grade_col].strip()
                         if grade_col >= 0
@@ -1060,10 +1074,13 @@ async def populate_parent_phones() -> bool:
         names = [n.strip() for n in raw_name.split("&")] if is_multi_student else [raw_name]
 
         for i, name in enumerate(names):
+            norm_name = " ".join(name.upper().split())
+            if norm_name in PI_SHEET_BOT_DISABLED_STUDENTS:
+                continue
             grade = grades[i] if i < len(grades) else (grades[0] if grades else "")
             if not grade:
                 continue
-            key = (name.upper(), grade)
+            key = (norm_name, grade)
             if key not in student_map:
                 student_map[key] = {
                     "student_name": name,
