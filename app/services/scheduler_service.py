@@ -713,7 +713,10 @@ def start_scheduler() -> None:
     # --- Gate Reconciliation Reports (every 30 min) ---
     # 6:00 AM - 5:00 PM IST → half-hourly gate head count report
     # IST → UTC: subtract 5h30m (6 AM IST = 00:30 UTC, 5 PM IST = 11:30 UTC)
-    from app.routes.gate import send_reconciliation_report_sync
+    from app.routes.gate import (
+        send_final_cpplus_report_sync,
+        send_reconciliation_report_sync,
+    )
     for ist_minutes in range(6 * 60, 17 * 60 + 1, 30):  # 06:00–17:00 IST every 30 min
         utc_total = (ist_minutes - 330) % (24 * 60)  # subtract 5:30, wrap across midnight
         utc_h, utc_m = divmod(utc_total, 60)
@@ -724,7 +727,16 @@ def start_scheduler() -> None:
             id=f"gate_report_{ist_h:02d}{ist_min:02d}",
             replace_existing=True,
         )
-    logger.info("Scheduled gate reconciliation reports every 30 min 6:00 AM - 5:00 PM IST")
+    scheduler.add_job(
+        send_final_cpplus_report_sync,
+        trigger=CronTrigger(hour=11, minute=35, second=0),
+        id="gate_final_daily_report",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled gate reports every 30 min 6:00 AM - 5:00 PM IST "
+        "and final daily report at 5:05 PM IST"
+    )
 
     # --- Mood & Temperament Reports — PERMANENTLY DISABLED ---
     # Previously ran hourly 7 AM - 12 PM IST. Disabled per user request.

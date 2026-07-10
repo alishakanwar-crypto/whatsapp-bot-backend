@@ -2668,65 +2668,89 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
 
 def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
                                      time_display: str) -> bytes:
-    """Generate a one-page CP Plus entry-count report without face analysis."""
+    """Generate a CP Plus IN-only report without face analysis."""
     from fpdf import FPDF
 
     total_entries = report.get("total_entries", 0)
     interval_entries = report.get("interval_entries", 0)
     interval_display = report.get("interval_display", "Last 30 minutes")
+    hourly_counts = report.get("hourly_counts", [])
+    peak_hour = report.get("peak_hour", "N/A")
+    peak_count = report.get("peak_count", 0)
+    is_final = report.get("is_final", False)
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
+    title = "CP PLUS FINAL DAILY HEAD COUNT" if is_final else "CP PLUS HEAD COUNT REPORT"
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 12, "CP PLUS HEAD COUNT REPORT", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 12, title, new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.set_font("Helvetica", "", 11)
     pdf.cell(
         0, 7,
         f"PP International School  |  Date: {date_display}  |  {time_display} IST",
         new_x="LMARGIN", new_y="NEXT", align="C",
     )
-    pdf.ln(8)
+    pdf.ln(6)
 
     pdf.set_fill_color(47, 84, 150)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(0, 9, "  ENTRY COUNT", new_x="LMARGIN", new_y="NEXT", fill=True)
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(5)
+    pdf.ln(3)
 
-    pdf.set_fill_color(221, 235, 247)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(120, 10, f"  Entered ({interval_display})", border=1, fill=True, new_x="RIGHT")
-    pdf.cell(0, 10, str(interval_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    if not is_final:
+        pdf.set_fill_color(221, 235, 247)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(120, 9, f"  Entered ({interval_display})", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(0, 9, str(interval_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_fill_color(226, 239, 218)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(120, 12, "  Total Entered Since 6:00 AM", border=1, fill=True, new_x="RIGHT")
-    pdf.cell(0, 12, str(total_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(8)
+    pdf.cell(120, 11, "  Live IN Count Since 6:00 AM", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(0, 11, str(total_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(55, 7, "Camera:", new_x="RIGHT")
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(0, 7, "ENTRY GATE-OUTSIDE (CP Plus)", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(55, 7, "Counting method:", new_x="RIGHT")
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(0, 7, "Physical IN crossings detected in CP Plus video", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(6)
+    pdf.set_fill_color(255, 242, 204)
+    pdf.set_font("Helvetica", "B", 11)
+    peak_value = f"{peak_hour} ({peak_count})" if peak_count else "N/A"
+    pdf.cell(120, 9, "  Peak Entry Hour", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(0, 9, peak_value, border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
 
-    pdf.set_font("Helvetica", "I", 9)
+    pdf.set_fill_color(47, 84, 150)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 8, "  HOURLY IN ENTRIES", new_x="LMARGIN", new_y="NEXT", fill=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "", 9)
+    for item in hourly_counts:
+        pdf.cell(120, 6, f"  {item['hour']}", border=1, new_x="RIGHT")
+        pdf.cell(0, 6, str(item["count"]), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(48, 6, "Camera:", new_x="RIGHT")
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(0, 6, "ENTRY GATE-OUTSIDE (CP Plus)", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(48, 6, "Counting method:", new_x="RIGHT")
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(0, 6, "Tracked physical IN crossings only", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(90, 90, 90)
     pdf.multi_cell(
-        0, 5,
-        "This report counts people entering through the CP Plus outside-gate camera only. "
-        "It does not use facial recognition, identity matching, or recognized/unrecognized classifications.",
+        0, 4,
+        "Only people crossing the CP Plus entry line into campus are counted. "
+        "OUT crossings, faces, vehicles, animals and other cameras are excluded. "
+        "Live IN count means cumulative entries today, not current occupancy.",
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(10)
+    pdf.ln(5)
     pdf.set_font("Helvetica", "I", 8)
     pdf.cell(0, 5, "PPIS CP Plus Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
 
@@ -2811,14 +2835,48 @@ async def receive_entry_gate_snapshot(request: Request):
     return {"status": "ok", "sent": sent_count, "total": len(GATE_SNAPSHOT_PHONES)}
 
 
-async def send_reconciliation_report():
-    """Count CP Plus IN crossings and WhatsApp a report every 30 minutes."""
+def _build_cpplus_head_count_report(
+    entry_times: list[datetime], now: datetime, *, final: bool = False,
+) -> dict:
+    day_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    day_end = now.replace(hour=17, minute=0, second=0, microsecond=0)
+    cutoff = min(now, day_end)
+    interval_start = max(day_start, cutoff - timedelta(minutes=30))
+    counted_times = [timestamp for timestamp in entry_times if day_start <= timestamp <= cutoff]
+
+    last_hour = 16 if final or cutoff.hour >= 17 else max(6, cutoff.hour)
+    hourly_counts = []
+    for hour in range(6, last_hour + 1):
+        hour_start = day_start.replace(hour=hour)
+        hour_end = hour_start + timedelta(hours=1)
+        hourly_counts.append({
+            "hour": f"{hour_start.strftime('%I:%M %p')} - {hour_end.strftime('%I:%M %p')}",
+            "count": sum(hour_start <= timestamp < hour_end for timestamp in counted_times),
+        })
+
+    peak = max(hourly_counts, key=lambda item: item["count"])
+    return {
+        "interval_entries": sum(
+            interval_start <= timestamp <= cutoff for timestamp in counted_times
+        ),
+        "total_entries": len(counted_times),
+        "interval_display": (
+            f"{interval_start.strftime('%I:%M %p')} - "
+            f"{cutoff.strftime('%I:%M %p')} IST"
+        ),
+        "hourly_counts": hourly_counts,
+        "peak_hour": peak["hour"] if peak["count"] else "N/A",
+        "peak_count": peak["count"],
+        "is_final": final,
+    }
+
+
+async def send_reconciliation_report(*, final: bool = False):
+    """Count CP Plus IN crossings and WhatsApp an interval or final report."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
     time_display = now.strftime("%I:%M %p")
-    day_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
-    interval_start = max(day_start, now - timedelta(minutes=30))
 
     db = await _get_db()
     try:
@@ -2840,18 +2898,13 @@ async def send_reconciliation_report():
             return None
 
     entry_times = [timestamp for entry in cpplus_entries if (timestamp := _entry_time(entry))]
-    counted_times = [timestamp for timestamp in entry_times if day_start <= timestamp <= now]
-    interval_entries = sum(interval_start <= timestamp <= now for timestamp in counted_times)
-    total_entries = len(counted_times)
-    interval_display = f"{interval_start.strftime('%I:%M %p')} - {time_display} IST"
-    report = {
-        "interval_entries": interval_entries,
-        "total_entries": total_entries,
-        "interval_display": interval_display,
-    }
+    report = _build_cpplus_head_count_report(entry_times, now, final=final)
+    interval_entries = report["interval_entries"]
+    total_entries = report["total_entries"]
 
     pdf_bytes = _generate_cpplus_head_count_pdf(report, today_display, time_display)
-    pdf_filename = f"CPPlus_Head_Count_{today}_{now.strftime('%H%M')}.pdf"
+    report_label = "Final_" if final else ""
+    pdf_filename = f"CPPlus_{report_label}Head_Count_{today}_{now.strftime('%H%M')}.pdf"
 
     if GATE_REPORT_WHATSAPP_PHONES:
         try:
@@ -2887,8 +2940,9 @@ async def send_reconciliation_report():
             logger.error("[GATE] CP Plus head-count WhatsApp error: %s", e)
 
     logger.info(
-        "[GATE] CP Plus head-count report at %s: interval=%d, since_6am=%d",
-        time_display, interval_entries, total_entries,
+        "[GATE] CP Plus %shead-count report at %s: interval=%d, since_6am=%d, peak=%s (%d)",
+        "final " if final else "", time_display, interval_entries, total_entries,
+        report["peak_hour"], report["peak_count"],
     )
 
 
@@ -2903,6 +2957,19 @@ def send_reconciliation_report_sync():
             loop.run_until_complete(send_reconciliation_report())
     except RuntimeError:
         asyncio.run(send_reconciliation_report())
+
+
+def send_final_cpplus_report_sync():
+    """Sync wrapper for the final daily report after monitoring closes."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(send_reconciliation_report(final=True))
+        else:
+            loop.run_until_complete(send_reconciliation_report(final=True))
+    except RuntimeError:
+        asyncio.run(send_reconciliation_report(final=True))
 
 
 # ============================================================
