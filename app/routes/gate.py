@@ -81,7 +81,7 @@ GATE_REPORT_WHATSAPP_PHONES = [
     ).split(",") if p.strip()
 ]
 GATE_REPORT_WHATSAPP_TEMPLATE = os.environ.get(
-    "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_head_count_report"
+    "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_cpplus_head_count_report"
 )
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
@@ -2666,14 +2666,83 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     return buf.getvalue()
 
 
+def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
+                                     time_display: str) -> bytes:
+    """Generate a one-page CP Plus entry-count report without face analysis."""
+    from fpdf import FPDF
+
+    total_entries = report.get("total_entries", 0)
+    interval_entries = report.get("interval_entries", 0)
+    interval_display = report.get("interval_display", "Last 30 minutes")
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 12, "CP PLUS HEAD COUNT REPORT", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(
+        0, 7,
+        f"PP International School  |  Date: {date_display}  |  {time_display} IST",
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
+    pdf.ln(8)
+
+    pdf.set_fill_color(47, 84, 150)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 9, "  ENTRY COUNT", new_x="LMARGIN", new_y="NEXT", fill=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(5)
+
+    pdf.set_fill_color(221, 235, 247)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(120, 10, f"  Entered ({interval_display})", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(0, 10, str(interval_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_fill_color(226, 239, 218)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(120, 12, "  Total Entered Since 6:00 AM", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(0, 12, str(total_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(8)
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(55, 7, "Camera:", new_x="RIGHT")
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 7, "ENTRY GATE-OUTSIDE (CP Plus)", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(55, 7, "Counting method:", new_x="RIGHT")
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 7, "Physical IN crossings detected in CP Plus video", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(6)
+
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.set_text_color(90, 90, 90)
+    pdf.multi_cell(
+        0, 5,
+        "This report counts people entering through the CP Plus outside-gate camera only. "
+        "It does not use facial recognition, identity matching, or recognized/unrecognized classifications.",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(10)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.cell(0, 5, "PPIS CP Plus Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
+
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
 # ============================================================
-# Reconciliation Report (every 30 min, 6 AM - 5 PM IST)
+# CP Plus Head Count Report (every 30 min, 6 AM - 5 PM IST)
 # ============================================================
 
 
 @router.post("/api/gate/send-report")
 async def trigger_reconciliation_report():
-    """Manual trigger to send the reconciliation report immediately."""
+    """Manual trigger to send the CP Plus head-count report immediately."""
     await send_reconciliation_report()
     return {"status": "sent"}
 
@@ -2743,33 +2812,47 @@ async def receive_entry_gate_snapshot(request: Request):
 
 
 async def send_reconciliation_report():
-    """Generate and WhatsApp the head count report every 30 min, 6 AM-5 PM IST."""
+    """Count CP Plus IN crossings and WhatsApp a report every 30 minutes."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
     time_display = now.strftime("%I:%M %p")
+    day_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    interval_start = max(day_start, now - timedelta(minutes=30))
 
     db = await _get_db()
     try:
-        recon = await _reconcile(db, today)
+        gate_entries = await _get_gate_entries(db, today, direction="IN")
     finally:
         await db.close()
 
-    if recon["trueface_identified"] == 0 and recon.get("dvr_sighted", 0) == 0 and recon.get("raw_gate_in", 0) == 0:
-        logger.info("[GATE] No TrueFace, DVR, or gate records for %s — skipping report", today)
-        return
+    cpplus_entries = [
+        entry for entry in gate_entries
+        if _is_cpplus_camera(entry.get("camera", ""))
+    ]
 
-    # Build counts from new architecture (per school spec)
-    total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
-    total_recognized = recon.get("total_recognized", 0)
-    total_unrecognized = recon.get("total_unrecognized", 0)
-    current_occupancy = recon.get("current_occupancy", recon.get("total_inside", 0))
+    def _entry_time(entry: dict) -> datetime | None:
+        try:
+            return datetime.strptime(
+                entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=IST)
+        except (TypeError, ValueError):
+            return None
 
-    # Generate PDF report
-    pdf_bytes = _generate_reconciliation_pdf(recon, today_display, time_display)
-    pdf_filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.pdf"
+    entry_times = [timestamp for entry in cpplus_entries if (timestamp := _entry_time(entry))]
+    counted_times = [timestamp for timestamp in entry_times if day_start <= timestamp <= now]
+    interval_entries = sum(interval_start <= timestamp <= now for timestamp in counted_times)
+    total_entries = len(counted_times)
+    interval_display = f"{interval_start.strftime('%I:%M %p')} - {time_display} IST"
+    report = {
+        "interval_entries": interval_entries,
+        "total_entries": total_entries,
+        "interval_display": interval_display,
+    }
 
-    # --- WhatsApp delivery (Meta Cloud API) to Ali & Charu ---
+    pdf_bytes = _generate_cpplus_head_count_pdf(report, today_display, time_display)
+    pdf_filename = f"CPPlus_Head_Count_{today}_{now.strftime('%H%M')}.pdf"
+
     if GATE_REPORT_WHATSAPP_PHONES:
         try:
             from app.services.whatsapp_service import (
@@ -2783,13 +2866,11 @@ async def send_reconciliation_report():
             if doc_id:
                 wa_body_params = [
                     f"{today_display} {time_display} IST",
+                    str(interval_entries),
                     str(total_entries),
-                    str(total_recognized),
-                    str(total_unrecognized),
-                    str(current_occupancy),
                 ]
                 for phone in GATE_REPORT_WHATSAPP_PHONES:
-                    wok = await send_cloud_template_message(
+                    sent = await send_cloud_template_message(
                         phone,
                         GATE_REPORT_WHATSAPP_TEMPLATE,
                         body_params=wa_body_params,
@@ -2797,18 +2878,17 @@ async def send_reconciliation_report():
                         header_document_filename=pdf_filename,
                     )
                     logger.info(
-                        "[GATE] Reconciliation WhatsApp → %s: %s",
-                        phone, "OK" if wok else "FAILED",
+                        "[GATE] CP Plus head-count WhatsApp → %s: %s",
+                        phone, "OK" if sent else "FAILED",
                     )
             else:
-                logger.error("[GATE] Reconciliation WhatsApp: PDF upload to Cloud API failed")
+                logger.error("[GATE] CP Plus head-count PDF upload failed")
         except Exception as e:
-            logger.error("[GATE] Reconciliation WhatsApp send error: %s", e)
+            logger.error("[GATE] CP Plus head-count WhatsApp error: %s", e)
 
     logger.info(
-        "[GATE] Reconciliation report generated at %s: Entries=%d, Recognized=%d, Unrecognized=%d, Occupancy=%d",
-        time_display, total_entries, total_recognized, total_unrecognized,
-        current_occupancy,
+        "[GATE] CP Plus head-count report at %s: interval=%d, since_6am=%d",
+        time_display, interval_entries, total_entries,
     )
 
 
