@@ -22,7 +22,7 @@ Endpoints:
     GET  /api/gate/reconciliation/{date} — full reconciliation data
 
 Scheduled:
-    Every 30 min, 6 AM – 5 PM IST — reconciliation report emailed
+    Every 30 min, 6 AM – 5 PM IST — reconciliation report sent on WhatsApp
 
 All timestamps use IST (Asia/Kolkata, UTC+05:30).
 """
@@ -71,12 +71,7 @@ def _split_parent_vendor(time_str: str) -> str:
         return "Vendor"
     return "Parent" if _PARENT_DROP_START <= hour < _PARENT_DROP_END else "Vendor"
 
-REPORT_RECIPIENTS = os.environ.get(
-    "GATE_REPORT_EMAIL",
-    "alisha.kanwar@ppischool.in",
-)
-
-# Also deliver the reconciliation report PDF over WhatsApp (Meta Cloud API).
+# Deliver the reconciliation report PDF over WhatsApp (Meta Cloud API).
 # Comma-separated numbers in GATE_REPORT_WHATSAPP_PHONES; empty string disables.
 # Requires an approved DOCUMENT-header template (GATE_REPORT_WHATSAPP_TEMPLATE).
 GATE_REPORT_WHATSAPP_PHONES = [
@@ -2748,7 +2743,7 @@ async def receive_entry_gate_snapshot(request: Request):
 
 
 async def send_reconciliation_report():
-    """Generate and send the head count reconciliation report (runs every 30 min, 6 AM-5 PM IST)."""
+    """Generate and WhatsApp the head count report every 30 min, 6 AM-5 PM IST."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
@@ -2760,80 +2755,21 @@ async def send_reconciliation_report():
     finally:
         await db.close()
 
-    side_by_side = recon.get("side_by_side", {})
     if recon["trueface_identified"] == 0 and recon.get("dvr_sighted", 0) == 0 and recon.get("raw_gate_in", 0) == 0:
         logger.info("[GATE] No TrueFace, DVR, or gate records for %s — skipping report", today)
         return
 
     # Build counts from new architecture (per school spec)
     total_entries = recon.get("total_entries", recon.get("unique_gate_in", 0))
-    total_exits = recon.get("total_exits", recon.get("unique_gate_out", 0))
-    recognized_students = recon.get("recognized_students", 0)
-    recognized_staff_count = recon.get("recognized_staff_count", 0)
     total_recognized = recon.get("total_recognized", 0)
     total_unrecognized = recon.get("total_unrecognized", 0)
     current_occupancy = recon.get("current_occupancy", recon.get("total_inside", 0))
-
-    fully_verified = side_by_side.get("both_present", [])
-    tf_only_list = side_by_side.get("trueface_only", [])
-    dvr_only_list = side_by_side.get("dvr_only", [])
-    absent_list = side_by_side.get("neither", [])
 
     # Generate PDF report
     pdf_bytes = _generate_reconciliation_pdf(recon, today_display, time_display)
     pdf_filename = f"Head_Count_Reconciliation_{today}_{now.strftime('%H%M')}.pdf"
 
-    # Vehicle summary for body
-    v_in = recon.get("vehicles_in", 0)
-    v_out = recon.get("vehicles_out", 0)
-    v_types = recon.get("vehicle_types", {})
-    vehicle_line = ""
-    if v_in > 0 or v_out > 0:
-        type_parts = ", ".join(f"{vt.title()}: {vc}" for vt, vc in sorted(v_types.items()))
-        vehicle_line = f"\nVehicles IN: {v_in} | OUT: {v_out}"
-        if type_parts:
-            vehicle_line += f" ({type_parts})"
-        vehicle_line += "\n"
-
-    # Brief email body matching school spec
-    body = (
-        f"Head Count Reconciliation Report - {today_display} at {time_display} IST\n\n"
-        f"ENTRY SUMMARY\n"
-        f"  Total Persons Entered: {total_entries}\n\n"
-        f"RECOGNITION SUMMARY\n"
-        f"  Recognized Students: {recognized_students}\n"
-        f"  Recognized Staff: {recognized_staff_count}\n"
-        f"  Total Recognized: {total_recognized}\n\n"
-        f"UNRECOGNIZED SUMMARY\n"
-        f"  Total Unrecognized Persons: {total_unrecognized}\n\n"
-        f"EXIT SUMMARY\n"
-        f"  Total Persons Exited: {total_exits}\n\n"
-        f"CURRENT OCCUPANCY: {current_occupancy}\n"
-        f"  (Entries {total_entries} - Exits {total_exits})\n\n"
-        f"RECONCILIATION CHECK\n"
-        f"  Total Entries: {total_entries}\n"
-        f"  Total Recognized: {total_recognized}\n"
-        f"  Difference: {total_unrecognized}\n"
-        f"{vehicle_line}\n"
-        f"See attached PDF for detailed report including unrecognized person details.\n\n"
-        f"-- PPIS Head Count Reconciliation & Entry Monitoring System"
-    )
-
-    from app.services.email_service import send_email_async
-    recipients = [r.strip() for r in REPORT_RECIPIENTS.split(",") if r.strip()]
-    for email in recipients:
-        ok = await send_email_async(
-            email,
-            f"Head Count Reconciliation — {today_display} {time_display} IST",
-            body,
-            "PP International School",
-            attachments=[
-                (pdf_filename, pdf_bytes),
-            ],
-        )
-        logger.info("[GATE] Reconciliation report → %s: %s", email, "OK" if ok else "FAILED")
-
-    # --- WhatsApp delivery (Meta Cloud API) of the same PDF to Ali & Charu ---
+    # --- WhatsApp delivery (Meta Cloud API) to Ali & Charu ---
     if GATE_REPORT_WHATSAPP_PHONES:
         try:
             from app.services.whatsapp_service import (
@@ -2870,7 +2806,7 @@ async def send_reconciliation_report():
             logger.error("[GATE] Reconciliation WhatsApp send error: %s", e)
 
     logger.info(
-        "[GATE] Reconciliation report sent at %s: Entries=%d, Recognized=%d, Unrecognized=%d, Occupancy=%d",
+        "[GATE] Reconciliation report generated at %s: Entries=%d, Recognized=%d, Unrecognized=%d, Occupancy=%d",
         time_display, total_entries, total_recognized, total_unrecognized,
         current_occupancy,
     )
