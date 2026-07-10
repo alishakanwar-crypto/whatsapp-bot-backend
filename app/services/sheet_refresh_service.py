@@ -943,12 +943,19 @@ async def fetch_all_pi_sheet_tabs() -> bool:
             )
 
         # Re-insert protected (allowlisted) students
-        seen_names: set[str] = set()
+        existing_keys = {
+            f"{' '.join(s['name'].upper().split())}|{s['grade'].upper().strip()}"
+            for s in unique
+        }
+        protected_reinserted = 0
         for p in protected:
-            key = f"{p['student_name']}|{p['grade']}"
-            if key in seen_names:
+            key = (
+                f"{' '.join(p['student_name'].upper().split())}|"
+                f"{p['grade'].upper().strip()}"
+            )
+            if key in existing_keys:
                 continue
-            seen_names.add(key)
+            existing_keys.add(key)
             await db.execute(
                 "INSERT INTO pi_sheet_students "
                 "(student_name, grade, father_name, mother_name, "
@@ -958,10 +965,11 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                  p["mother_name"], p["father_mobile"], p["mother_mobile"],
                  p["address"], p["transport"]),
             )
+            protected_reinserted += 1
 
-        if protected:
+        if protected_reinserted:
             logger.info(
-                f"PI SHEET FULL REFRESH: re-added {len(seen_names)} "
+                f"PI SHEET FULL REFRESH: re-added {protected_reinserted} "
                 f"allowlisted student entries"
             )
 
