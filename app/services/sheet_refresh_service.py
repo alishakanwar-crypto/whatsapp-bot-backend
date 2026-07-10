@@ -54,9 +54,9 @@ PI_SHEET_GRADE_GIDS = [
     "523098156", "255213929", "1291854348",
 ]
 
-PI_SHEET_BOT_DISABLED_STUDENTS = {
+PI_SHEET_BOT_ENABLED_STUDENTS = {
     " ".join(name.upper().split())
-    for name in os.getenv("PI_SHEET_BOT_DISABLED_STUDENTS", "").split(",")
+    for name in os.getenv("PI_SHEET_BOT_ENABLED_STUDENTS", "").split(",")
     if name.strip()
 }
 
@@ -789,11 +789,10 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         continue
 
                     normalized_name = " ".join(name.upper().split())
-                    if normalized_name in PI_SHEET_BOT_DISABLED_STUDENTS:
-                        logger.info(
-                            "PI SHEET TAB gid=%s: bot services disabled for '%s'",
-                            gid, name,
-                        )
+                    if (
+                        PI_SHEET_BOT_ENABLED_STUDENTS
+                        and normalized_name not in PI_SHEET_BOT_ENABLED_STUDENTS
+                    ):
                         continue
 
                     grade = (
@@ -1075,7 +1074,10 @@ async def populate_parent_phones() -> bool:
 
         for i, name in enumerate(names):
             norm_name = " ".join(name.upper().split())
-            if norm_name in PI_SHEET_BOT_DISABLED_STUDENTS:
+            if (
+                PI_SHEET_BOT_ENABLED_STUDENTS
+                and norm_name not in PI_SHEET_BOT_ENABLED_STUDENTS
+            ):
                 continue
             grade = grades[i] if i < len(grades) else (grades[0] if grades else "")
             if not grade:
