@@ -579,14 +579,6 @@ async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
                 name, person_label, ts, dominant_emotion, temperament, intensity,
                 description[:80] if description else "no description")
 
-    # Trigger immediate mood report for Chairman
-    if person_label == "Chairman":
-        try:
-            from app.routes.chairman_mood import _send_chairman_instant_report
-            asyncio.ensure_future(_send_chairman_instant_report())
-        except Exception as e:
-            logger.warning("[TRUEFACE] Failed to trigger chairman instant report: %s", e)
-
 
 # ============================================================
 # Core attendance event endpoint
