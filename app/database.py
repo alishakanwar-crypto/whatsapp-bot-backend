@@ -363,6 +363,22 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_gate_entries_date_dir
                 ON gate_entries (date, direction);
 
+            CREATE TABLE IF NOT EXISTS cpplus_hourly_recounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hour_start TEXT NOT NULL,
+                hour_end TEXT NOT NULL,
+                in_count INTEGER NOT NULL,
+                processed_frames INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'camera_recording',
+                verified_at TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(date, hour_start)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_cpplus_recounts_date
+                ON cpplus_hourly_recounts (date);
+
             CREATE TABLE IF NOT EXISTS vehicle_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,

@@ -38,10 +38,12 @@ import os
 import re
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+from app.routes.agent_config import verify_agent_secret
 
 logger = logging.getLogger("app.gate")
 
@@ -255,6 +257,44 @@ async def _store_gate_entries(db, entries: list[dict]) -> int:
         count += 1
     await db.commit()
     return count
+
+
+async def _store_cpplus_hourly_recount(db, recount: dict) -> None:
+    await db.execute(
+        """
+        INSERT INTO cpplus_hourly_recounts
+            (date, hour_start, hour_end, in_count, processed_frames, source, verified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(date, hour_start) DO UPDATE SET
+            hour_end = excluded.hour_end,
+            in_count = excluded.in_count,
+            processed_frames = excluded.processed_frames,
+            source = excluded.source,
+            verified_at = excluded.verified_at
+        """,
+        (
+            recount["date"], recount["hour_start"], recount["hour_end"],
+            recount["in_count"], recount["processed_frames"],
+            recount["source"], recount["verified_at"],
+        ),
+    )
+    await db.commit()
+
+
+async def _get_cpplus_hourly_recounts(db, date: str) -> dict[int, int]:
+    cur = await db.execute(
+        "SELECT hour_start, in_count FROM cpplus_hourly_recounts "
+        "WHERE date = ? ORDER BY hour_start",
+        (date,),
+    )
+    counts: dict[int, int] = {}
+    for hour_start, in_count in await cur.fetchall():
+        try:
+            hour = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").hour
+        except (TypeError, ValueError):
+            continue
+        counts[hour] = int(in_count)
+    return counts
 
 
 async def _get_gate_entries(db, date: str, direction: str | None = None) -> list[dict]:
@@ -1398,6 +1438,57 @@ async def receive_gate_entries(request: Request):
     logger.info("[GATE] Stored %d gate entry event(s); queued %d CP Plus snapshot(s)",
                 count, snapshot_count)
     return {"status": "ok", "stored": count, "snapshots": snapshot_count}
+
+
+@router.post(
+    "/api/gate/cpplus-hourly-recount",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_cpplus_hourly_recount(request: Request):
+    """Store an IN count produced by replaying one completed camera hour."""
+    body = await request.json()
+    try:
+        date = str(body["date"])
+        hour_start = str(body["hour_start"])
+        hour_end = str(body["hour_end"])
+        in_count = int(body["in_count"])
+        processed_frames = int(body.get("processed_frames", 0))
+        start_dt = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S")
+        end_dt = datetime.strptime(hour_end, "%Y-%m-%d %H:%M:%S")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid recount payload") from exc
+
+    if (
+        start_dt.strftime("%Y-%m-%d") != date
+        or start_dt.minute != 0
+        or start_dt.second != 0
+        or end_dt - start_dt != timedelta(hours=1)
+        or not 6 <= start_dt.hour < 17
+        or in_count < 0
+        or processed_frames < 0
+    ):
+        raise HTTPException(status_code=400, detail="Invalid recount hour or count")
+
+    recount = {
+        "date": date,
+        "hour_start": hour_start,
+        "hour_end": hour_end,
+        "in_count": in_count,
+        "processed_frames": processed_frames,
+        "source": "camera_recording",
+        "verified_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    db = await _get_db()
+    try:
+        await _store_cpplus_hourly_recount(db, recount)
+    finally:
+        await db.close()
+
+    logger.info(
+        "[GATE] Stored CP Plus recording recount %s: IN=%d frames=%d",
+        hour_start, in_count, processed_frames,
+    )
+    return {"status": "ok", "recount": recount}
 
 
 @router.post("/api/gate/teacher-sighting")
@@ -2673,10 +2764,12 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
 
     total_entries = report.get("total_entries", 0)
     interval_entries = report.get("interval_entries", 0)
-    interval_display = report.get("interval_display", "Last 30 minutes")
+    interval_display = report.get("interval_display", "Latest completed hour")
     hourly_counts = report.get("hourly_counts", [])
     peak_hour = report.get("peak_hour", "N/A")
     peak_count = report.get("peak_count", 0)
+    recording_verified_hours = report.get("recording_verified_hours", 0)
+    completed_hours = report.get("completed_hours", 0)
     is_final = report.get("is_final", False)
 
     pdf = FPDF()
@@ -2709,7 +2802,7 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
 
     pdf.set_fill_color(226, 239, 218)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(120, 11, "  Live IN Count Since 6:00 AM", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(120, 11, "  Cumulative IN Count Since 6:00 AM", border=1, fill=True, new_x="RIGHT")
     pdf.cell(0, 11, str(total_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_fill_color(255, 242, 204)
@@ -2717,6 +2810,13 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     peak_value = f"{peak_hour} ({peak_count})" if peak_count else "N/A"
     pdf.cell(120, 9, "  Peak Entry Hour", border=1, fill=True, new_x="RIGHT")
     pdf.cell(0, 9, peak_value, border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_fill_color(242, 242, 242)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(120, 8, "  Recording-Verified Hours", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(
+        0, 8, f"{recording_verified_hours}/{completed_hours}", border=1,
+        fill=True, align="C", new_x="LMARGIN", new_y="NEXT",
+    )
     pdf.ln(5)
 
     pdf.set_fill_color(47, 84, 150)
@@ -2737,16 +2837,16 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(48, 6, "Counting method:", new_x="RIGHT")
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(0, 6, "Tracked physical IN crossings only", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, "Stored-video replay cross-checked with live", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(90, 90, 90)
     pdf.multi_cell(
         0, 4,
-        "Only people crossing the CP Plus entry line into campus are counted. "
-        "OUT crossings, faces, vehicles, animals and other cameras are excluded. "
-        "Live IN count means cumulative entries today, not current occupancy.",
+        "Completed hours use the higher of the stored-video recount and live "
+        "tracked crossings. OUT crossings, identities, faces, vehicles, animals "
+        "and other cameras are excluded.",
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.set_text_color(0, 0, 0)
@@ -2760,7 +2860,7 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
 
 
 # ============================================================
-# CP Plus Head Count Report (every 30 min, 6 AM - 5 PM IST)
+# CP Plus Head Count Report (hourly, 6 AM - 5 PM IST)
 # ============================================================
 
 
@@ -2836,37 +2936,47 @@ async def receive_entry_gate_snapshot(request: Request):
 
 
 def _build_cpplus_head_count_report(
-    entry_times: list[datetime], now: datetime, *, final: bool = False,
+    entry_times: list[datetime],
+    now: datetime,
+    *,
+    final: bool = False,
+    recording_counts: dict[int, int] | None = None,
 ) -> dict:
     day_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
     day_end = now.replace(hour=17, minute=0, second=0, microsecond=0)
     cutoff = min(now, day_end)
-    interval_start = max(day_start, cutoff - timedelta(minutes=30))
-    counted_times = [timestamp for timestamp in entry_times if day_start <= timestamp <= cutoff]
+    completed_end = day_end if final else cutoff.replace(minute=0, second=0, microsecond=0)
+    completed_end = max(day_start, completed_end)
+    counted_times = [timestamp for timestamp in entry_times if day_start <= timestamp < completed_end]
+    verified = recording_counts or {}
 
-    last_hour = 16 if final or cutoff.hour >= 17 else max(6, cutoff.hour)
     hourly_counts = []
-    for hour in range(6, last_hour + 1):
+    for hour in range(6, completed_end.hour):
         hour_start = day_start.replace(hour=hour)
         hour_end = hour_start + timedelta(hours=1)
+        live_count = sum(hour_start <= timestamp < hour_end for timestamp in counted_times)
+        recording_count = verified.get(hour)
         hourly_counts.append({
             "hour": f"{hour_start.strftime('%I:%M %p')} - {hour_end.strftime('%I:%M %p')}",
-            "count": sum(hour_start <= timestamp < hour_end for timestamp in counted_times),
+            "count": max(live_count, recording_count)
+            if recording_count is not None else live_count,
+            "recording_verified": recording_count is not None,
         })
 
-    peak = max(hourly_counts, key=lambda item: item["count"])
+    peak = max(hourly_counts, key=lambda item: item["count"], default={"hour": "N/A", "count": 0})
+    latest = hourly_counts[-1] if hourly_counts else {
+        "hour": "No completed hour", "count": 0,
+    }
+    verified_hours = sum(item["recording_verified"] for item in hourly_counts)
     return {
-        "interval_entries": sum(
-            interval_start <= timestamp <= cutoff for timestamp in counted_times
-        ),
-        "total_entries": len(counted_times),
-        "interval_display": (
-            f"{interval_start.strftime('%I:%M %p')} - "
-            f"{cutoff.strftime('%I:%M %p')} IST"
-        ),
+        "interval_entries": latest["count"],
+        "total_entries": sum(item["count"] for item in hourly_counts),
+        "interval_display": f"{latest['hour']} IST",
         "hourly_counts": hourly_counts,
         "peak_hour": peak["hour"] if peak["count"] else "N/A",
         "peak_count": peak["count"],
+        "recording_verified_hours": verified_hours,
+        "completed_hours": len(hourly_counts),
         "is_final": final,
     }
 
@@ -2881,6 +2991,7 @@ async def send_reconciliation_report(*, final: bool = False):
     db = await _get_db()
     try:
         gate_entries = await _get_gate_entries(db, today, direction="IN")
+        recording_counts = await _get_cpplus_hourly_recounts(db, today)
     finally:
         await db.close()
 
@@ -2898,7 +3009,9 @@ async def send_reconciliation_report(*, final: bool = False):
             return None
 
     entry_times = [timestamp for entry in cpplus_entries if (timestamp := _entry_time(entry))]
-    report = _build_cpplus_head_count_report(entry_times, now, final=final)
+    report = _build_cpplus_head_count_report(
+        entry_times, now, final=final, recording_counts=recording_counts,
+    )
     interval_entries = report["interval_entries"]
     total_entries = report["total_entries"]
 
