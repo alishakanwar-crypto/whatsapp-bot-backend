@@ -3313,7 +3313,7 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
 
 
 async def _lookup_snapshot_parent_child_class(sender_phone: str) -> list[dict]:
-    results = await _lookup_parent_child_class(sender_phone)
+    general_results = await _lookup_parent_child_class(sender_phone)
     phone_digits = re.sub(r"\D", "", sender_phone)
     last10 = phone_digits[-10:] if len(phone_digits) >= 10 else phone_digits
 
@@ -3325,13 +3325,11 @@ async def _lookup_snapshot_parent_child_class(sender_phone: str) -> list[dict]:
             "WHERE father_mobile LIKE ? OR mother_mobile LIKE ?",
             (f"%{last10}%", f"%{last10}%"),
         )
-        existing = {
-            (result["student_name"].upper().strip(), result["grade"])
-            for result in results
-        }
+        results = []
+        snapshot_names = set()
         for row in await cursor.fetchall():
-            key = (row[0].upper().strip(), row[1])
-            if key in existing:
+            normalized_name = row[0].upper().strip()
+            if normalized_name in snapshot_names:
                 continue
             parent_phones = []
             for raw in (row[2] or "", row[3] or ""):
@@ -3344,7 +3342,17 @@ async def _lookup_snapshot_parent_child_class(sender_phone: str) -> list[dict]:
                 "grade": row[1],
                 "parent_phones": parent_phones,
             })
-            existing.add(key)
+            snapshot_names.add(normalized_name)
+
+        for result in general_results:
+            normalized_name = result["student_name"].upper().strip()
+            matches_snapshot = any(
+                normalized_name in snapshot_name
+                or snapshot_name in normalized_name
+                for snapshot_name in snapshot_names
+            )
+            if not matches_snapshot:
+                results.append(result)
         return results
     finally:
         await db.close()
@@ -3698,7 +3706,7 @@ async def detect_and_handle_snapshot_request(
         if not location and not multi_locations:
             # Admin didn't specify a location — try auto-detecting their child's class
             # (admins can also be parents)
-            children = await _lookup_parent_child_class(sender)
+            children = await _lookup_snapshot_parent_child_class(sender)
             if len(children) == 1:
                 location = _grade_to_camera_key(children[0]["grade"])
                 logger.info(f"Admin {sender} auto-detected as parent of {children[0]['student_name']} ({location})")
