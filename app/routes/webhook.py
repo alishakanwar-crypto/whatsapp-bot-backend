@@ -3376,6 +3376,19 @@ def _grade_to_camera_key(grade: str) -> str:
     return g
 
 
+def _restrict_parent_snapshot_location(
+    requested_location: str | None, children: list[dict]
+) -> str | None:
+    allowed_locations = {
+        _grade_to_camera_key(child["grade"]) for child in children
+    }
+    if len(allowed_locations) == 1:
+        return next(iter(allowed_locations))
+    if requested_location in allowed_locations:
+        return requested_location
+    return None
+
+
 def _extract_classroom_from_message(message_text: str) -> str | None:
     """Extract classroom name from message text.
 
@@ -3502,23 +3515,17 @@ async def _extract_classroom_for_queue(
 
     Tries message text first, then parent's registered child grade.
     """
-    # Try explicit classroom from message
     loc = _extract_classroom_from_message(message_text)
-    if loc:
-        return loc
 
-    # Try location keywords for admin
     if is_admin:
+        if loc:
+            return loc
         loc2 = _extract_location_from_message(message_text)
         if loc2:
             return loc2
 
-    # Fall back to parent's child grade
     children = await _lookup_snapshot_parent_child_class(sender)
-    if len(children) == 1:
-        return _grade_to_camera_key(children[0]["grade"])
-
-    return None
+    return _restrict_parent_snapshot_location(loc, children)
 
 
 _CHILD_ABSENT_RE = re.compile(
@@ -3748,6 +3755,14 @@ async def detect_and_handle_snapshot_request(
                     f"Inferred section: {location} for parent {sender} "
                     f"(child: {matching[0]['student_name']})"
                 )
+
+        requested_location = location
+        location = _restrict_parent_snapshot_location(location, children)
+        if requested_location and location and requested_location != location:
+            logger.warning(
+                f"Overriding disallowed snapshot location {requested_location} for "
+                f"parent {sender} with ward classroom {location}"
+            )
 
         if not location:
             if len(children) == 1:

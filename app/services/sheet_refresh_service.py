@@ -59,11 +59,6 @@ PI_SHEET_BOT_ENABLED_STUDENTS = {
     for name in os.getenv("PI_SHEET_BOT_ENABLED_STUDENTS", "").split(",")
     if name.strip()
 }
-PI_SHEET_SNAPSHOT_ENABLED_STUDENTS = {
-    " ".join(name.upper().split())
-    for name in os.getenv("PI_SHEET_SNAPSHOT_ENABLED_STUDENTS", "").split(",")
-    if name.strip()
-}
 
 # Known male teachers (for honorific)
 MALE_TEACHERS = {"shyam manohar", "tarun dhall", "christy joseph", "deepak"}
@@ -799,11 +794,6 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         not PI_SHEET_BOT_ENABLED_STUDENTS
                         or normalized_name in PI_SHEET_BOT_ENABLED_STUDENTS
                     )
-                    snapshot_enabled = (
-                        normalized_name in PI_SHEET_SNAPSHOT_ENABLED_STUDENTS
-                    )
-                    if not bot_enabled and not snapshot_enabled:
-                        continue
 
                     grade = (
                         row[grade_col].strip()
@@ -833,8 +823,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     }
                     if bot_enabled:
                         active_students.append(student)
-                    if snapshot_enabled:
-                        snapshot_students.append(student)
+                    snapshot_students.append(student)
 
             except Exception as e:
                 logger.warning(f"PI SHEET TAB gid={gid}: {e}")
