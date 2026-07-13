@@ -1162,6 +1162,59 @@ SEED_CAMERA_MAPPING = {
     },
 }
 
+SEED_CAMERA_MAPPING.update({
+    "NUR-3": {
+        "dvr_index": 1, "channel": 22, "description": "NUR-3 C1", "cam_type": "C1",
+        "all_cameras": [
+            {"dvr_index": 1, "channel": 22, "description": "NUR-3 C1", "cam_type": "C1"},
+            {"dvr_index": 1, "channel": 26, "description": "NUR-3 C2", "cam_type": "C2"},
+        ],
+    },
+    "PREP-1": {
+        "dvr_index": 1, "channel": 33, "description": "PREP-1 C1", "cam_type": "C1",
+        "all_cameras": [
+            {"dvr_index": 1, "channel": 33, "description": "PREP-1 C1", "cam_type": "C1"},
+            {"dvr_index": 1, "channel": 40, "description": "PREP-1 C2", "cam_type": "C2"},
+        ],
+    },
+    "DANCE ROOM BASEMENT": {
+        "dvr_index": 2, "channel": 18, "description": "DANCE ROOM BASEMENT", "cam_type": "",
+    },
+    "ASSEMBLY AREA": {
+        "dvr_index": 2, "channel": 21, "description": "ASSEMBLY AREA", "cam_type": "",
+        "all_cameras": [
+            {"dvr_index": 2, "channel": 21, "description": "ASSEMBLY AREA", "cam_type": ""},
+            {"dvr_index": 3, "channel": 40, "description": "ASSEMBLY AREA", "cam_type": ""},
+        ],
+    },
+    "SPORTS ROOM": {
+        "dvr_index": 2, "channel": 22, "description": "SPORTS ROOM", "cam_type": "",
+        "all_cameras": [
+            {"dvr_index": 2, "channel": 22, "description": "SPORTS ROOM", "cam_type": ""},
+            {"dvr_index": 3, "channel": 34, "description": "SPORTS ROOM", "cam_type": ""},
+        ],
+    },
+    "3rd Floor Gallery 1": {
+        "dvr_index": 2, "channel": 17, "description": "3rd Floor Gallery 1", "cam_type": "",
+    },
+    "3rd Floor Gallery 2": {
+        "dvr_index": 2, "channel": 21, "description": "3rd Floor Gallery 2", "cam_type": "",
+    },
+    "G11D C1": {
+        "dvr_index": 2, "channel": 26, "description": "G11D C1", "cam_type": "C1",
+    },
+    "3rd Floor T.Staff": {
+        "dvr_index": 2, "channel": 28, "description": "3rd Floor T.Staff", "cam_type": "",
+    },
+    "YOGA  ROOM": {
+        "dvr_index": 3, "channel": 36, "description": "YOGA  ROOM", "cam_type": "",
+    },
+})
+for _obsolete_location in (
+    "PREP 1", "DVR4 SPORTS ROOM", "YOGA ROOM", "DVR4 ASSEMBLY AREA",
+):
+    SEED_CAMERA_MAPPING.pop(_obsolete_location, None)
+
 # ---------------------------------------------------------------------------
 # Homework Google Doc mapping — one doc per class/section
 # Created in BOT-HOMEWORK@ppischool.in Drive folder "PPIS CW_HW_ 2026-27"
