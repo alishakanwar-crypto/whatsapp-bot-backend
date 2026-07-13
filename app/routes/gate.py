@@ -2995,6 +2995,25 @@ async def send_reconciliation_report(*, final: bool = False):
     finally:
         await db.close()
 
+    latest_completed_hour = 16 if final else min(now.hour - 1, 16)
+    if latest_completed_hour >= 6:
+        for waited_minutes in range(16):
+            if latest_completed_hour in recording_counts:
+                break
+            if waited_minutes == 15:
+                logger.error(
+                    "[GATE] CP Plus report skipped: recording recount for %02d:00-%02d:00 "
+                    "did not arrive within 15 minutes",
+                    latest_completed_hour, latest_completed_hour + 1,
+                )
+                return
+            await asyncio.sleep(60)
+            db = await _get_db()
+            try:
+                recording_counts = await _get_cpplus_hourly_recounts(db, today)
+            finally:
+                await db.close()
+
     cpplus_entries = [
         entry for entry in gate_entries
         if _is_cpplus_camera(entry.get("camera", ""))
