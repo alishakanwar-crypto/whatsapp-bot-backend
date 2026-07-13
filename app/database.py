@@ -89,6 +89,16 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS snapshot_access_students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_name TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                father_mobile TEXT DEFAULT '',
+                mother_mobile TEXT DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_name, grade)
+            );
+
             CREATE TABLE IF NOT EXISTS leave_applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 parent_phone TEXT NOT NULL,

@@ -59,6 +59,11 @@ PI_SHEET_BOT_ENABLED_STUDENTS = {
     for name in os.getenv("PI_SHEET_BOT_ENABLED_STUDENTS", "").split(",")
     if name.strip()
 }
+PI_SHEET_SNAPSHOT_ENABLED_STUDENTS = {
+    " ".join(name.upper().split())
+    for name in os.getenv("PI_SHEET_SNAPSHOT_ENABLED_STUDENTS", "").split(",")
+    if name.strip()
+}
 
 # Known male teachers (for honorific)
 MALE_TEACHERS = {"shyam manohar", "tarun dhall", "christy joseph", "deepak"}
@@ -671,6 +676,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
     - Replaces all rows in pi_sheet_students
     """
     active_students: list[dict] = []
+    snapshot_students: list[dict] = []
 
     async with httpx.AsyncClient() as client:
         for gid in PI_SHEET_GRADE_GIDS:
@@ -789,10 +795,14 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         continue
 
                     normalized_name = " ".join(name.upper().split())
-                    if (
-                        PI_SHEET_BOT_ENABLED_STUDENTS
-                        and normalized_name not in PI_SHEET_BOT_ENABLED_STUDENTS
-                    ):
+                    bot_enabled = (
+                        not PI_SHEET_BOT_ENABLED_STUDENTS
+                        or normalized_name in PI_SHEET_BOT_ENABLED_STUDENTS
+                    )
+                    snapshot_enabled = (
+                        normalized_name in PI_SHEET_SNAPSHOT_ENABLED_STUDENTS
+                    )
+                    if not bot_enabled and not snapshot_enabled:
                         continue
 
                     grade = (
@@ -815,14 +825,16 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         else ""
                     )
 
-                    active_students.append(
-                        {
-                            "name": name,
-                            "grade": grade,
-                            "father_phone": fp,
-                            "mother_phone": mp,
-                        }
-                    )
+                    student = {
+                        "name": name,
+                        "grade": grade,
+                        "father_phone": fp,
+                        "mother_phone": mp,
+                    }
+                    if bot_enabled:
+                        active_students.append(student)
+                    if snapshot_enabled:
+                        snapshot_students.append(student)
 
             except Exception as e:
                 logger.warning(f"PI SHEET TAB gid={gid}: {e}")
@@ -939,6 +951,20 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 "(student_name, grade, father_name, mother_name, "
                 "father_mobile, mother_mobile, address, transport) "
                 "VALUES (?, ?, '', '', ?, ?, '', '')",
+                (s["name"], s["grade"], s["father_phone"], s["mother_phone"]),
+            )
+
+        await db.execute("DELETE FROM snapshot_access_students")
+        snapshot_keys: set[tuple[str, str]] = set()
+        for s in snapshot_students:
+            key = (s["name"].upper().strip(), s["grade"])
+            if key in snapshot_keys:
+                continue
+            snapshot_keys.add(key)
+            await db.execute(
+                "INSERT INTO snapshot_access_students "
+                "(student_name, grade, father_mobile, mother_mobile) "
+                "VALUES (?, ?, ?, ?)",
                 (s["name"], s["grade"], s["father_phone"], s["mother_phone"]),
             )
 
