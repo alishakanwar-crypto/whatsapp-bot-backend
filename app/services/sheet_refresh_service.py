@@ -728,6 +728,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
 
                 # --- Parse student rows ---
                 in_withdrawal = False
+                snapshot_only_withdrawal = False
                 for i in range(header_idx + 1, len(rows)):
                     row = rows[i]
                     row_text = ",".join(row).strip().lower()
@@ -735,14 +736,6 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     if not row_text or row_text.replace(",", "").strip() == "":
                         continue
 
-                    # Detect withdrawal section markers.
-                    # A marker row is any row whose first non-empty cell
-                    # contains "withdraw" (covers "Withdrawal 2025-26",
-                    # "Withdrawals in Session 2023-24", "Potential
-                    # Withdrawal 2023-24", etc.).  Once we enter a
-                    # withdrawal section, every subsequent row is skipped
-                    # (withdrawn students are never followed by active
-                    # students in these sheets).
                     first_cell = ""
                     for cell in row:
                         if cell.strip():
@@ -750,9 +743,12 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                             break
                     if "withdraw" in first_cell:
                         in_withdrawal = True
+                        snapshot_only_withdrawal = (
+                            "withdrawal 2026-27" in first_cell
+                        )
                         continue
 
-                    if in_withdrawal:
+                    if in_withdrawal and not snapshot_only_withdrawal:
                         continue
 
                     if name_col >= len(row):
@@ -782,7 +778,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         if ct.startswith("withdraw") or ct.startswith("(withdraw"):
                             _is_inline_withdrawn = True
                             break
-                    if _is_inline_withdrawn:
+                    if _is_inline_withdrawn and not snapshot_only_withdrawal:
                         logger.debug(
                             f"PI SHEET TAB gid={gid}: skipping withdrawn "
                             f"student '{name}' (inline marker)"
@@ -821,7 +817,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         "father_phone": fp,
                         "mother_phone": mp,
                     }
-                    if bot_enabled:
+                    if bot_enabled and not in_withdrawal:
                         active_students.append(student)
                     snapshot_students.append(student)
 
