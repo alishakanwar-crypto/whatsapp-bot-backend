@@ -3312,6 +3312,52 @@ async def _lookup_parent_child_class(sender_phone: str) -> list[dict]:
         await db.close()
 
 
+async def _lookup_snapshot_parent_child_class(sender_phone: str) -> list[dict]:
+    general_results = await _lookup_parent_child_class(sender_phone)
+    phone_digits = re.sub(r"\D", "", sender_phone)
+    last10 = phone_digits[-10:] if len(phone_digits) >= 10 else phone_digits
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT student_name, grade, father_mobile, mother_mobile "
+            "FROM snapshot_access_students "
+            "WHERE father_mobile LIKE ? OR mother_mobile LIKE ?",
+            (f"%{last10}%", f"%{last10}%"),
+        )
+        results = []
+        snapshot_names = set()
+        for row in await cursor.fetchall():
+            normalized_name = row[0].upper().strip()
+            if normalized_name in snapshot_names:
+                continue
+            parent_phones = []
+            for raw in (row[2] or "", row[3] or ""):
+                for segment in raw.split(","):
+                    digits = re.sub(r"\D", "", segment)
+                    if len(digits) >= 10:
+                        parent_phones.append(f"91{digits[-10:]}")
+            results.append({
+                "student_name": row[0],
+                "grade": row[1],
+                "parent_phones": parent_phones,
+            })
+            snapshot_names.add(normalized_name)
+
+        for result in general_results:
+            normalized_name = result["student_name"].upper().strip()
+            matches_snapshot = any(
+                normalized_name in snapshot_name
+                or snapshot_name in normalized_name
+                for snapshot_name in snapshot_names
+            )
+            if not matches_snapshot:
+                results.append(result)
+        return results
+    finally:
+        await db.close()
+
+
 def _grade_to_camera_key(grade: str) -> str:
     """Convert a PI-sheet grade name to a camera mapping key.
 
@@ -3336,6 +3382,19 @@ def _grade_to_camera_key(grade: str) -> str:
     if "POPSICLE" in g_upper:
         return "Popsicles"
     return g
+
+
+def _restrict_parent_snapshot_location(
+    requested_location: str | None, children: list[dict]
+) -> str | None:
+    allowed_locations = {
+        _grade_to_camera_key(child["grade"]) for child in children
+    }
+    if len(allowed_locations) == 1:
+        return next(iter(allowed_locations))
+    if requested_location in allowed_locations:
+        return requested_location
+    return None
 
 
 def _extract_classroom_from_message(message_text: str) -> str | None:
@@ -3452,12 +3511,8 @@ def _is_snapshot_request(message_text: str, is_admin: bool = False) -> bool:
 
 
 async def _is_pi_sheet_parent(sender: str) -> bool:
-    """Check if the sender's phone number is in the PI Sheet (parent database).
-
-    SECURITY: Only PI Sheet parents and admin panel members may receive
-    camera snapshots.  Everyone else is denied.
-    """
-    children = await _lookup_parent_child_class(sender)
+    """Check if the sender's phone number is eligible for camera snapshots."""
+    children = await _lookup_snapshot_parent_child_class(sender)
     return len(children) > 0
 
 
@@ -3468,23 +3523,17 @@ async def _extract_classroom_for_queue(
 
     Tries message text first, then parent's registered child grade.
     """
-    # Try explicit classroom from message
     loc = _extract_classroom_from_message(message_text)
-    if loc:
-        return loc
 
-    # Try location keywords for admin
     if is_admin:
+        if loc:
+            return loc
         loc2 = _extract_location_from_message(message_text)
         if loc2:
             return loc2
 
-    # Fall back to parent's child grade
-    children = await _lookup_parent_child_class(sender)
-    if len(children) == 1:
-        return _grade_to_camera_key(children[0]["grade"])
-
-    return None
+    children = await _lookup_snapshot_parent_child_class(sender)
+    return _restrict_parent_snapshot_location(loc, children)
 
 
 _CHILD_ABSENT_RE = re.compile(
@@ -3657,7 +3706,7 @@ async def detect_and_handle_snapshot_request(
         if not location and not multi_locations:
             # Admin didn't specify a location — try auto-detecting their child's class
             # (admins can also be parents)
-            children = await _lookup_parent_child_class(sender)
+            children = await _lookup_snapshot_parent_child_class(sender)
             if len(children) == 1:
                 location = _grade_to_camera_key(children[0]["grade"])
                 logger.info(f"Admin {sender} auto-detected as parent of {children[0]['student_name']} ({location})")
@@ -3697,7 +3746,7 @@ async def detect_and_handle_snapshot_request(
         location = _extract_classroom_from_message(message_text)
 
         # Look up the parent's children (needed for fallback and section inference)
-        children = await _lookup_parent_child_class(sender)
+        children = await _lookup_snapshot_parent_child_class(sender)
 
         # If grade extracted without section (e.g. "GRADE 9"), try to infer
         # section from the parent's registered children.
@@ -3714,6 +3763,14 @@ async def detect_and_handle_snapshot_request(
                     f"Inferred section: {location} for parent {sender} "
                     f"(child: {matching[0]['student_name']})"
                 )
+
+        requested_location = location
+        location = _restrict_parent_snapshot_location(location, children)
+        if requested_location and location and requested_location != location:
+            logger.warning(
+                f"Overriding disallowed snapshot location {requested_location} for "
+                f"parent {sender} with ward classroom {location}"
+            )
 
         if not location:
             if len(children) == 1:
