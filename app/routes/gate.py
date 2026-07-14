@@ -22,7 +22,7 @@ Endpoints:
     GET  /api/gate/reconciliation/{date} — full reconciliation data
 
 Scheduled:
-    Every 30 min, 6 AM – 5 PM IST — reconciliation report sent on WhatsApp
+    Hourly reports plus one 6 PM final report are sent on WhatsApp.
 
 All timestamps use IST (Asia/Kolkata, UTC+05:30).
 """
@@ -83,7 +83,7 @@ GATE_REPORT_WHATSAPP_PHONES = [
     ).split(",") if p.strip()
 ]
 GATE_REPORT_WHATSAPP_TEMPLATE = os.environ.get(
-    "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_cpplus_head_count_report"
+    "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_cpplus_hourly_head_count_report_v2"
 )
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
