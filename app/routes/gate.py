@@ -1472,6 +1472,12 @@ async def receive_cpplus_hourly_recount(request: Request):
             "camera_sd_recording",
             "school_pc_recording",
         }
+        or (
+            source == "camera_native_counter"
+            and os.environ.get(
+                "CPPLUS_NATIVE_COUNTER_TRUSTED", "0"
+            ).lower() not in {"1", "true", "yes"}
+        )
     ):
         raise HTTPException(status_code=400, detail="Invalid recount hour or count")
 
