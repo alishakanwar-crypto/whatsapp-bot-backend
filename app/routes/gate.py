@@ -2802,6 +2802,7 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     peak_count = report.get("peak_count", 0)
     recording_verified_hours = report.get("recording_verified_hours", 0)
     completed_hours = report.get("completed_hours", 0)
+    latest_hour_verified = report.get("latest_hour_verified", False)
     is_final = report.get("is_final", False)
 
     pdf = FPDF()
@@ -2849,6 +2850,16 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
         0, 8, f"{recording_verified_hours}/{completed_hours}", border=1,
         fill=True, align="C", new_x="LMARGIN", new_y="NEXT",
     )
+    pdf.set_fill_color(255, 242, 204)
+    verification_status = (
+        "CAMERA VERIFIED" if latest_hour_verified
+        else "LIVE AI - NOT YET CAMERA-VERIFIED"
+    )
+    pdf.cell(120, 8, "  Latest Hour Status", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(
+        0, 8, verification_status, border=1, fill=True, align="C",
+        new_x="LMARGIN", new_y="NEXT",
+    )
     pdf.ln(5)
 
     pdf.set_fill_color(47, 84, 150)
@@ -2869,16 +2880,21 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(48, 6, "Counting method:", new_x="RIGHT")
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(0, 6, "Camera-native or complete-video count cross-checked with live", new_x="LMARGIN", new_y="NEXT")
+    counting_method = (
+        "Trusted camera count where available; live AI otherwise"
+        if recording_verified_hours
+        else "Live AI line-crossing count (not camera-verified)"
+    )
+    pdf.cell(0, 6, counting_method, new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(90, 90, 90)
     pdf.multi_cell(
         0, 4,
-        "Completed hours use the higher of the trusted camera count and live "
-        "tracked crossings. OUT crossings, identities, faces, vehicles, animals "
-        "and other cameras are excluded.",
+        "Hours without a trusted camera result show the live AI count and are "
+        "explicitly unverified. OUT crossings, identities, faces, vehicles, "
+        "animals and other cameras are excluded.",
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.set_text_color(0, 0, 0)
@@ -3009,6 +3025,7 @@ def _build_cpplus_head_count_report(
         "peak_count": peak["count"],
         "recording_verified_hours": verified_hours,
         "completed_hours": len(hourly_counts),
+        "latest_hour_verified": latest.get("recording_verified", False),
         "is_final": final,
     }
 
@@ -3028,23 +3045,15 @@ async def send_reconciliation_report(*, final: bool = False):
         await db.close()
 
     latest_completed_hour = 16 if final else min(now.hour - 1, 16)
-    if latest_completed_hour >= 6:
-        for waited_minutes in range(16):
-            if latest_completed_hour in recording_counts:
-                break
-            if waited_minutes == 15:
-                logger.error(
-                    "[GATE] CP Plus report skipped: recording recount for %02d:00-%02d:00 "
-                    "did not arrive within 15 minutes",
-                    latest_completed_hour, latest_completed_hour + 1,
-                )
-                return
-            await asyncio.sleep(60)
-            db = await _get_db()
-            try:
-                recording_counts = await _get_cpplus_hourly_recounts(db, today)
-            finally:
-                await db.close()
+    if (
+        latest_completed_hour >= 6
+        and latest_completed_hour not in recording_counts
+    ):
+        logger.warning(
+            "[GATE] CP Plus camera recount unavailable for %02d:00-%02d:00; "
+            "sending explicitly unverified live-AI fallback",
+            latest_completed_hour, latest_completed_hour + 1,
+        )
 
     cpplus_entries = [
         entry for entry in gate_entries
