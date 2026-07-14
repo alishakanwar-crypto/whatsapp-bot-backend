@@ -1453,6 +1453,7 @@ async def receive_cpplus_hourly_recount(request: Request):
         hour_end = str(body["hour_end"])
         in_count = int(body["in_count"])
         processed_frames = int(body.get("processed_frames", 0))
+        source = str(body.get("source", "school_pc_recording"))
         start_dt = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S")
         end_dt = datetime.strptime(hour_end, "%Y-%m-%d %H:%M:%S")
     except (KeyError, TypeError, ValueError) as exc:
@@ -1466,6 +1467,7 @@ async def receive_cpplus_hourly_recount(request: Request):
         or not 6 <= start_dt.hour < 17
         or in_count < 0
         or processed_frames < 0
+        or source not in {"camera_sd_recording", "school_pc_recording"}
     ):
         raise HTTPException(status_code=400, detail="Invalid recount hour or count")
 
@@ -1475,7 +1477,7 @@ async def receive_cpplus_hourly_recount(request: Request):
         "hour_end": hour_end,
         "in_count": in_count,
         "processed_frames": processed_frames,
-        "source": "camera_recording",
+        "source": source,
         "verified_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
     }
     db = await _get_db()
@@ -1485,8 +1487,8 @@ async def receive_cpplus_hourly_recount(request: Request):
         await db.close()
 
     logger.info(
-        "[GATE] Stored CP Plus recording recount %s: IN=%d frames=%d",
-        hour_start, in_count, processed_frames,
+        "[GATE] Stored CP Plus recording recount %s: IN=%d frames=%d source=%s",
+        hour_start, in_count, processed_frames, source,
     )
     return {"status": "ok", "recount": recount}
 
