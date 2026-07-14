@@ -1467,7 +1467,11 @@ async def receive_cpplus_hourly_recount(request: Request):
         or not 6 <= start_dt.hour < 17
         or in_count < 0
         or processed_frames < 0
-        or source not in {"camera_sd_recording", "school_pc_recording"}
+        or source not in {
+            "camera_native_counter",
+            "camera_sd_recording",
+            "school_pc_recording",
+        }
     ):
         raise HTTPException(status_code=400, detail="Invalid recount hour or count")
 
