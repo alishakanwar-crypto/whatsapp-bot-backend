@@ -1492,6 +1492,26 @@ async def receive_cpplus_hourly_recount(request: Request):
     }
     db = await _get_db()
     try:
+        if source == "camera_native_counter":
+            cur = await db.execute(
+                "SELECT camera FROM gate_entries "
+                "WHERE date = ? AND direction = 'IN' "
+                "AND timestamp >= ? AND timestamp < ?",
+                (date, hour_start, hour_end),
+            )
+            live_count = sum(
+                _is_cpplus_camera(row[0]) for row in await cur.fetchall()
+            )
+            if in_count < live_count:
+                logger.error(
+                    "[GATE] Rejected CP Plus native undercount %s: "
+                    "camera=%d live=%d",
+                    hour_start, in_count, live_count,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Camera-native count is below live CP Plus crossings",
+                )
         await _store_cpplus_hourly_recount(db, recount)
     finally:
         await db.close()
@@ -2824,7 +2844,7 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     pdf.cell(0, 9, peak_value, border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_fill_color(242, 242, 242)
     pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(120, 8, "  Recording-Verified Hours", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(120, 8, "  Camera-Verified Hours", border=1, fill=True, new_x="RIGHT")
     pdf.cell(
         0, 8, f"{recording_verified_hours}/{completed_hours}", border=1,
         fill=True, align="C", new_x="LMARGIN", new_y="NEXT",
@@ -2849,14 +2869,14 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(48, 6, "Counting method:", new_x="RIGHT")
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(0, 6, "Stored-video replay cross-checked with live", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, "Camera-native or complete-video count cross-checked with live", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(90, 90, 90)
     pdf.multi_cell(
         0, 4,
-        "Completed hours use the higher of the stored-video recount and live "
+        "Completed hours use the higher of the trusted camera count and live "
         "tracked crossings. OUT crossings, identities, faces, vehicles, animals "
         "and other cameras are excluded.",
         new_x="LMARGIN", new_y="NEXT",
