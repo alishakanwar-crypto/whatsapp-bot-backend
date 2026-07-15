@@ -190,6 +190,58 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await db.close()
 
+    async def test_trusted_native_count_sends_one_correction(self):
+        async def open_db():
+            return await aiosqlite.connect(self.db_path)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            await db.execute(
+                "INSERT INTO cpplus_hourly_recounts "
+                "(date, hour_start, hour_end, in_count, processed_frames, "
+                "source, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "2026-07-15",
+                    "2026-07-15 10:00:00",
+                    "2026-07-15 11:00:00",
+                    7,
+                    0,
+                    "camera_native_counter",
+                    "2026-07-15 11:02:00",
+                ),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        recount = {
+            "date": "2026-07-15",
+            "hour_start": "2026-07-15 10:00:00",
+            "hour_end": "2026-07-15 11:00:00",
+            "in_count": 7,
+            "processed_frames": 0,
+            "source": "camera_native_counter",
+            "verified_at": "2026-07-15 11:02:00",
+        }
+        send = AsyncMock(return_value=True)
+
+        with (
+            patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate, "GATE_REPORT_WHATSAPP_PHONES", ["phone-a"]),
+            patch.object(gate, "_generate_cpplus_head_count_pdf", return_value=b"PDF"),
+            patch.object(
+                gate,
+                "upload_media_bytes_cloud",
+                AsyncMock(return_value="document-id"),
+            ),
+            patch.object(gate, "send_cloud_template_message", send),
+        ):
+            await gate._send_verified_cpplus_correction(recount)
+            await gate._send_verified_cpplus_correction(recount)
+
+        self.assertEqual(send.await_count, 1)
+        self.assertEqual(send.await_args.kwargs["body_params"][1], "7")
+
     async def test_retry_does_not_resend_successful_recipient(self):
         async def open_db():
             return await aiosqlite.connect(self.db_path)
