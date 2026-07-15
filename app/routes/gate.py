@@ -3164,7 +3164,11 @@ async def _release_cpplus_correction_claims(
 
 async def _send_verified_cpplus_correction(recount: dict) -> None:
     """Send one verified follow-up per recipient for a completed recount hour."""
-    if recount["source"] not in {"camera_sd_recording", "school_pc_recording"}:
+    if recount["source"] not in {
+        "camera_native_counter",
+        "camera_sd_recording",
+        "school_pc_recording",
+    }:
         return
     date = recount["date"]
     hour_start = recount["hour_start"]
@@ -3330,7 +3334,8 @@ async def send_pending_cpplus_corrections() -> None:
             "SELECT date, hour_start, hour_end, in_count, processed_frames, "
             "source, verified_at FROM cpplus_hourly_recounts "
             "WHERE date = ? AND source IN "
-            "('camera_sd_recording', 'school_pc_recording') ORDER BY hour_start",
+            "('camera_native_counter', 'camera_sd_recording', "
+            "'school_pc_recording') ORDER BY hour_start",
             (today,),
         )
         rows = await cursor.fetchall()
