@@ -711,14 +711,14 @@ def start_scheduler() -> None:
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
     # --- Gate Head Count Reports (hourly + final daily) ---
-    # Completed hours through 3:00-4:00 PM are reported at :55.
+    # Completed hours through 3:00-4:00 PM are reported on the hour.
     # The 6:00 PM final report covers the last 4:00-5:00 PM hour.
     # IST → UTC: subtract 5h30m.
     from app.routes.gate import (
         send_final_cpplus_report_sync,
         send_reconciliation_report_sync,
     )
-    for ist_minutes in range(7 * 60 + 55, 16 * 60 + 56, 60):
+    for ist_minutes in range(7 * 60, 16 * 60 + 1, 60):
         utc_total = (ist_minutes - 330) % (24 * 60)  # subtract 5:30, wrap across midnight
         utc_h, utc_m = divmod(utc_total, 60)
         ist_h, ist_min = divmod(ist_minutes, 60)
@@ -735,7 +735,7 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info(
-        "Scheduled completed-hour gate reports 7:55 AM - 4:55 PM IST "
+        "Scheduled completed-hour gate reports 7:00 AM - 4:00 PM IST "
         "and one final daily report at 6:00 PM IST (30-min report disabled)"
     )
 
