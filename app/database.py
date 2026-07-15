@@ -401,6 +401,16 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_cpplus_recounts_date
                 ON cpplus_hourly_recounts (date);
 
+            CREATE TABLE IF NOT EXISTS cpplus_native_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hour_start TEXT NOT NULL,
+                hour_end TEXT NOT NULL,
+                in_count INTEGER NOT NULL,
+                received_at TEXT NOT NULL,
+                UNIQUE(date, hour_start)
+            );
+
             CREATE TABLE IF NOT EXISTS cpplus_recount_corrections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,

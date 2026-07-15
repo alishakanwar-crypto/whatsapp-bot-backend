@@ -1480,15 +1480,12 @@ async def receive_cpplus_hourly_recount(request: Request):
             "camera_sd_recording",
             "school_pc_recording",
         }
-        or (
-            source == "camera_native_counter"
-            and os.environ.get(
-                "CPPLUS_NATIVE_COUNTER_TRUSTED", "0"
-            ).lower() not in {"1", "true", "yes"}
-        )
     ):
         raise HTTPException(status_code=400, detail="Invalid recount hour or count")
 
+    native_trusted = os.environ.get(
+        "CPPLUS_NATIVE_COUNTER_TRUSTED", "0"
+    ).lower() in {"1", "true", "yes"}
     recount = {
         "date": date,
         "hour_start": hour_start,
@@ -1501,6 +1498,26 @@ async def receive_cpplus_hourly_recount(request: Request):
     db = await _get_db()
     try:
         if source == "camera_native_counter":
+            await db.execute(
+                "INSERT INTO cpplus_native_observations "
+                "(date, hour_start, hour_end, in_count, received_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(date, hour_start) DO UPDATE SET "
+                "hour_end = excluded.hour_end, "
+                "in_count = excluded.in_count, "
+                "received_at = excluded.received_at",
+                (date, hour_start, hour_end, in_count, recount["verified_at"]),
+            )
+            await db.commit()
+            if not native_trusted:
+                logger.warning(
+                    "[GATE] Quarantined CP Plus native count %s: IN=%d",
+                    hour_start, in_count,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Camera-native count stored for validation",
+                )
             cur = await db.execute(
                 "SELECT camera FROM gate_entries "
                 "WHERE date = ? AND direction = 'IN' "
