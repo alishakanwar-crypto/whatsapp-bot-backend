@@ -53,6 +53,15 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     verified_at TEXT NOT NULL,
                     UNIQUE(date, hour_start)
                 );
+                CREATE TABLE cpplus_native_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    hour_start TEXT NOT NULL,
+                    hour_end TEXT NOT NULL,
+                    in_count INTEGER NOT NULL,
+                    received_at TEXT NOT NULL,
+                    UNIQUE(date, hour_start)
+                );
                 CREATE TABLE cpplus_recount_corrections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     date TEXT NOT NULL,
@@ -93,6 +102,46 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         os.unlink(self.db_path)
+
+    async def test_untrusted_native_count_is_captured_but_not_accepted(self):
+        async def open_db():
+            return await aiosqlite.connect(self.db_path)
+
+        request = AsyncMock()
+        request.json.return_value = {
+            "date": "2026-07-15",
+            "hour_start": "2026-07-15 10:00:00",
+            "hour_end": "2026-07-15 11:00:00",
+            "in_count": 7,
+            "processed_frames": 0,
+            "source": "camera_native_counter",
+        }
+
+        with (
+            patch.object(gate, "_get_db", new=open_db),
+            patch.dict(os.environ, {"CPPLUS_NATIVE_COUNTER_TRUSTED": "0"}),
+            self.assertRaises(gate.HTTPException) as raised,
+        ):
+            await gate.receive_cpplus_hourly_recount(request)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            observation = await db.execute_fetchall(
+                "SELECT in_count FROM cpplus_native_observations "
+                "WHERE date = ? AND hour_start = ?",
+                ("2026-07-15", "2026-07-15 10:00:00"),
+            )
+            recount = await db.execute_fetchall(
+                "SELECT in_count FROM cpplus_hourly_recounts "
+                "WHERE date = ? AND hour_start = ?",
+                ("2026-07-15", "2026-07-15 10:00:00"),
+            )
+        finally:
+            await db.close()
+
+        self.assertEqual(observation, [(7,)])
+        self.assertEqual(recount, [])
 
     async def test_verified_correction_targets_recount_hour_and_sends_once(self):
         async def open_db():
