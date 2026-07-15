@@ -3344,6 +3344,26 @@ async def _lookup_snapshot_parent_child_class(sender_phone: str) -> list[dict]:
             })
             snapshot_names.add(normalized_name)
 
+        grant_cursor = await db.execute(
+            "SELECT student_name, grade, phone FROM snapshot_access_grants "
+            "WHERE phone LIKE ?",
+            (f"%{last10}",),
+        )
+        for student_name, grade, phone in await grant_cursor.fetchall():
+            normalized_name = student_name.upper().strip()
+            if normalized_name in snapshot_names:
+                continue
+            grant_digits = re.sub(r"\D", "", phone)
+            parent_phones = (
+                [f"91{grant_digits[-10:]}"] if len(grant_digits) >= 10 else []
+            )
+            results.append({
+                "student_name": student_name,
+                "grade": grade,
+                "parent_phones": parent_phones,
+            })
+            snapshot_names.add(normalized_name)
+
         for result in general_results:
             normalized_name = result["student_name"].upper().strip()
             matches_snapshot = any(
