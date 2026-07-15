@@ -711,7 +711,8 @@ def start_scheduler() -> None:
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
     # --- Gate Head Count Reports (hourly + final daily) ---
-    # Completed hours through 3:00-4:00 PM are reported on the hour.
+    # Completed hours through 3:00-4:00 PM are reported 15 seconds after
+    # the hour so the camera can publish its final native counter boundary.
     # The 6:00 PM final report covers the last 4:00-5:00 PM hour.
     # IST → UTC: subtract 5h30m.
     from app.routes.gate import (
@@ -725,7 +726,7 @@ def start_scheduler() -> None:
         ist_h, ist_min = divmod(ist_minutes, 60)
         scheduler.add_job(
             send_reconciliation_report_sync,
-            trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
+            trigger=CronTrigger(hour=utc_h, minute=utc_m, second=15),
             id=f"gate_report_{ist_h:02d}{ist_min:02d}",
             replace_existing=True,
         )
@@ -742,8 +743,9 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info(
-        "Scheduled completed-hour gate reports 7:00 AM - 4:00 PM IST, "
-        "verified correction retries every 5 minutes, and one final daily "
+        "Scheduled completed-hour gate reports 15 seconds after each hour "
+        "from 7:00 AM - 4:00 PM IST, verified correction retries every 5 "
+        "minutes, and one final daily "
         "report at 6:00 PM IST (30-min report disabled)"
     )
 
