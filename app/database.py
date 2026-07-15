@@ -99,6 +99,18 @@ async def init_db():
                 UNIQUE(student_name, grade)
             );
 
+            CREATE TABLE IF NOT EXISTS snapshot_access_grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_name TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_name, grade, phone)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_snapshot_access_grants_phone
+                ON snapshot_access_grants (phone);
+
             CREATE TABLE IF NOT EXISTS leave_applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 parent_phone TEXT NOT NULL,
