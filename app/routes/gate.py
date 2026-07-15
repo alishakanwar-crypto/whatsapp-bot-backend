@@ -44,6 +44,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from app.routes.agent_config import verify_agent_secret
+from app.services.whatsapp_service import (
+    send_cloud_template_message,
+    upload_media_bytes_cloud,
+)
 
 logger = logging.getLogger("app.gate")
 
@@ -84,6 +88,10 @@ GATE_REPORT_WHATSAPP_PHONES = [
 ]
 GATE_REPORT_WHATSAPP_TEMPLATE = os.environ.get(
     "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_cpplus_hourly_head_count_report_v2"
+)
+GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE = os.environ.get(
+    "GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE",
+    "ppis_cpplus_verified_head_count_correction",
 )
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
@@ -1520,6 +1528,7 @@ async def receive_cpplus_hourly_recount(request: Request):
         "[GATE] Stored CP Plus recording recount %s: IN=%d frames=%d source=%s",
         hour_start, in_count, processed_frames, source,
     )
+    asyncio.create_task(_send_verified_cpplus_correction(recount))
     return {"status": "ok", "recount": recount}
 
 
@@ -3117,6 +3126,215 @@ async def send_reconciliation_report(*, final: bool = False):
         "final " if final else "", time_display, interval_entries, total_entries,
         report["peak_hour"], report["peak_count"],
     )
+
+
+async def _release_cpplus_correction_claims(
+    date: str, hour_start: str, phones: list[str]
+) -> None:
+    if not phones:
+        return
+    db = await _get_db()
+    try:
+        await db.executemany(
+            "DELETE FROM cpplus_recount_corrections "
+            "WHERE date = ? AND hour_start = ? AND phone = ? AND sent_at = ''",
+            [(date, hour_start, phone) for phone in phones],
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _send_verified_cpplus_correction(recount: dict) -> None:
+    """Send one verified follow-up per recipient for a completed recount hour."""
+    if recount["source"] not in {"camera_sd_recording", "school_pc_recording"}:
+        return
+    date = recount["date"]
+    hour_start = recount["hour_start"]
+    hour_end = recount["hour_end"]
+    start_dt = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=IST
+    )
+    end_dt = datetime.strptime(hour_end, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=IST
+    )
+
+    claimed_at = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    stale_before = (
+        datetime.now(IST) - timedelta(minutes=15)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    claimed_phones = []
+    db = await _get_db()
+    try:
+        await db.execute(
+            "DELETE FROM cpplus_recount_corrections "
+            "WHERE sent_at = '' AND claimed_at < ?",
+            (stale_before,),
+        )
+        for phone in GATE_REPORT_WHATSAPP_PHONES:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO cpplus_recount_corrections "
+                "(date, hour_start, phone, claimed_at, sent_at) "
+                "VALUES (?, ?, ?, ?, '')",
+                (date, hour_start, phone, claimed_at),
+            )
+            if cursor.rowcount:
+                claimed_phones.append(phone)
+        await db.commit()
+        if not claimed_phones:
+            return
+        gate_entries = await _get_gate_entries(db, date, direction="IN")
+        recording_counts = await _get_cpplus_hourly_recounts(db, date)
+    finally:
+        await db.close()
+
+    cpplus_entries = [
+        entry for entry in gate_entries
+        if _is_cpplus_camera(entry.get("camera", ""))
+    ]
+    entry_times = []
+    for entry in cpplus_entries:
+        try:
+            entry_times.append(
+                datetime.strptime(
+                    entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=IST)
+            )
+        except (TypeError, ValueError):
+            continue
+
+    provisional_count = sum(
+        start_dt <= timestamp < end_dt for timestamp in entry_times
+    )
+    report = _build_cpplus_head_count_report(
+        entry_times,
+        end_dt,
+        recording_counts=recording_counts,
+    )
+    if not report["latest_hour_verified"]:
+        logger.error(
+            "[GATE] Refusing correction without verified recount for %s",
+            hour_start,
+        )
+        await _release_cpplus_correction_claims(
+            date, hour_start, claimed_phones
+        )
+        return
+
+    generated_at = datetime.now(IST)
+    date_display = start_dt.strftime("%d-%m-%Y")
+    pdf_bytes = _generate_cpplus_head_count_pdf(
+        report,
+        date_display,
+        generated_at.strftime("%I:%M %p"),
+    )
+    pdf_filename = (
+        f"CPPlus_Verified_Correction_{date}_{start_dt.strftime('%H%M')}.pdf"
+    )
+
+    try:
+        doc_id = await upload_media_bytes_cloud(
+            pdf_bytes, "application/pdf", pdf_filename
+        )
+        if not doc_id:
+            logger.error(
+                "[GATE] CP Plus verified correction PDF upload failed for %s",
+                hour_start,
+            )
+            await _release_cpplus_correction_claims(
+                date, hour_start, claimed_phones
+            )
+            return
+
+        interval_display = (
+            f"{date_display} {start_dt.strftime('%I:%M %p')} - "
+            f"{end_dt.strftime('%I:%M %p')} IST"
+        )
+        body_params = [
+            interval_display,
+            str(report["interval_entries"]),
+            str(report["total_entries"]),
+            str(provisional_count),
+        ]
+        for phone in claimed_phones:
+            sent = await send_cloud_template_message(
+                phone,
+                GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE,
+                body_params=body_params,
+                header_document_id=doc_id,
+                header_document_filename=pdf_filename,
+            )
+            db = await _get_db()
+            try:
+                if sent:
+                    await db.execute(
+                        "UPDATE cpplus_recount_corrections SET sent_at = ? "
+                        "WHERE date = ? AND hour_start = ? AND phone = ?",
+                        (
+                            datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                            date,
+                            hour_start,
+                            phone,
+                        ),
+                    )
+                else:
+                    await db.execute(
+                        "DELETE FROM cpplus_recount_corrections "
+                        "WHERE date = ? AND hour_start = ? AND phone = ? "
+                        "AND sent_at = ''",
+                        (date, hour_start, phone),
+                    )
+                await db.commit()
+            finally:
+                await db.close()
+            logger.info(
+                "[GATE] CP Plus verified correction %s → %s: %s",
+                hour_start,
+                phone,
+                "OK" if sent else "FAILED",
+            )
+    except Exception as exc:
+        await _release_cpplus_correction_claims(
+            date, hour_start, claimed_phones
+        )
+        logger.error(
+            "[GATE] CP Plus verified correction failed for %s: %s",
+            hour_start,
+            exc,
+        )
+
+
+async def send_pending_cpplus_corrections() -> None:
+    """Retry unsent verified corrections for recounts completed today."""
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    db = await _get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT date, hour_start, hour_end, in_count, processed_frames, "
+            "source, verified_at FROM cpplus_hourly_recounts "
+            "WHERE date = ? AND source IN "
+            "('camera_sd_recording', 'school_pc_recording') ORDER BY hour_start",
+            (today,),
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    for row in rows:
+        await _send_verified_cpplus_correction({
+            "date": row[0],
+            "hour_start": row[1],
+            "hour_end": row[2],
+            "in_count": row[3],
+            "processed_frames": row[4],
+            "source": row[5],
+            "verified_at": row[6],
+        })
+
+
+def send_pending_cpplus_corrections_sync() -> None:
+    """Sync wrapper for retrying verified recount corrections."""
+    asyncio.run(send_pending_cpplus_corrections())
 
 
 def send_reconciliation_report_sync():

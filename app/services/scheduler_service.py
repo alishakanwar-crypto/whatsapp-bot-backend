@@ -716,6 +716,7 @@ def start_scheduler() -> None:
     # IST → UTC: subtract 5h30m.
     from app.routes.gate import (
         send_final_cpplus_report_sync,
+        send_pending_cpplus_corrections_sync,
         send_reconciliation_report_sync,
     )
     for ist_minutes in range(7 * 60, 16 * 60 + 1, 60):
@@ -734,9 +735,16 @@ def start_scheduler() -> None:
         id="gate_final_daily_report",
         replace_existing=True,
     )
+    scheduler.add_job(
+        send_pending_cpplus_corrections_sync,
+        trigger=IntervalTrigger(minutes=5),
+        id="gate_verified_correction_retry",
+        replace_existing=True,
+    )
     logger.info(
-        "Scheduled completed-hour gate reports 7:00 AM - 4:00 PM IST "
-        "and one final daily report at 6:00 PM IST (30-min report disabled)"
+        "Scheduled completed-hour gate reports 7:00 AM - 4:00 PM IST, "
+        "verified correction retries every 5 minutes, and one final daily "
+        "report at 6:00 PM IST (30-min report disabled)"
     )
 
     # --- Mood & Temperament Reports — PERMANENTLY DISABLED ---
