@@ -22,6 +22,50 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(report["interval_entries"], 2)
         self.assertFalse(report["latest_hour_verified"])
+        self.assertFalse(gate._is_fully_camera_verified(report))
+
+    def test_non_cpplus_observations_keep_overlapping_sources_separate(self):
+        start = datetime(2026, 7, 15, 9, tzinfo=gate.IST)
+        end = datetime(2026, 7, 15, 10, tzinfo=gate.IST)
+        observations = gate._build_non_cpplus_camera_observations(
+            [
+                {
+                    "camera": "ENTRY GATE-1",
+                    "direction": "IN",
+                    "timestamp": "2026-07-15 09:05:00",
+                },
+                {
+                    "camera": "Reception C1",
+                    "direction": "IN",
+                    "timestamp": "2026-07-15 09:07:00",
+                },
+                {
+                    "camera": "DISPERSAL EXIT",
+                    "direction": "OUT",
+                    "timestamp": "2026-07-15 09:09:00",
+                },
+                {
+                    "camera": "DISPERSAL EXIT",
+                    "direction": "IN",
+                    "timestamp": "2026-07-15 09:09:30",
+                },
+                {
+                    "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                    "direction": "IN",
+                    "timestamp": "2026-07-15 09:10:00",
+                },
+            ],
+            start,
+            end,
+        )
+        by_camera = {item["camera"]: item for item in observations}
+
+        self.assertEqual(by_camera["ENTRY GATE-1"]["in_count"], 1)
+        self.assertEqual(by_camera["Reception C1"]["in_count"], 1)
+        self.assertEqual(by_camera["DISPERSAL EXIT"]["in_count"], 0)
+        self.assertEqual(by_camera["DISPERSAL EXIT"]["out_count"], 1)
+        self.assertNotIn("ENTRY GATE-OUTSIDE (CP Plus)", by_camera)
+        self.assertIn("GALLERY MID", by_camera)
 
     async def asyncSetUp(self):
         handle, self.db_path = tempfile.mkstemp(suffix=".db")
@@ -82,19 +126,22 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     ("2026-07-15", "2026-07-15 09:30:00", "Other camera"),
                 ],
             )
-            await db.execute(
+            await db.executemany(
                 "INSERT INTO cpplus_hourly_recounts "
                 "(date, hour_start, hour_end, in_count, processed_frames, "
                 "source, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    "2026-07-15",
-                    "2026-07-15 09:00:00",
-                    "2026-07-15 10:00:00",
-                    31,
-                    7200,
-                    "school_pc_recording",
-                    "2026-07-15 10:25:00",
-                ),
+                [
+                    (
+                        "2026-07-15",
+                        f"2026-07-15 {hour:02d}:00:00",
+                        f"2026-07-15 {hour + 1:02d}:00:00",
+                        count,
+                        7200,
+                        "school_pc_recording",
+                        "2026-07-15 10:25:00",
+                    )
+                    for hour, count in ((6, 5), (7, 7), (8, 9), (9, 31))
+                ],
             )
             await db.commit()
         finally:
@@ -175,10 +222,13 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(send.await_count, 2)
         body_params = send.await_args_list[0].kwargs["body_params"]
-        self.assertIn("09:00 AM - 10:00 AM IST", body_params[0])
+        self.assertTrue(body_params[0].startswith("15-07-2026 "))
         self.assertEqual(body_params[1], "31")
-        self.assertEqual(body_params[2], "31")
-        self.assertEqual(body_params[3], "2")
+        self.assertEqual(body_params[2], "52")
+        self.assertEqual(len(body_params), 3)
+        self.assertEqual(
+            send.await_args_list[0].args[1], gate.GATE_REPORT_WHATSAPP_TEMPLATE
+        )
 
         db = await aiosqlite.connect(self.db_path)
         try:
@@ -271,6 +321,10 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(return_value="document-id"),
             ),
             patch.object(gate, "send_cloud_template_message", send),
+            patch.dict(
+                os.environ,
+                {"GATE_VERIFIED_ONLY_START": "2026-07-15 10:30:00"},
+            ),
         ):
             await gate._send_verified_cpplus_correction(recount)
             await gate._send_verified_cpplus_correction(recount)
@@ -278,6 +332,15 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call.args[0] for call in send.await_args_list],
             ["phone-a", "phone-b", "phone-b"],
+        )
+        self.assertTrue(
+            all(
+                call.args[1] == gate.GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE
+                for call in send.await_args_list
+            )
+        )
+        self.assertTrue(
+            all(len(call.kwargs["body_params"]) == 4 for call in send.await_args_list)
         )
 
 

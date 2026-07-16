@@ -22,7 +22,7 @@ Endpoints:
     GET  /api/gate/reconciliation/{date} — full reconciliation data
 
 Scheduled:
-    Hourly reports plus one 6 PM final report are sent on WhatsApp.
+    Verified-only report retries run every five minutes; no provisional report is sent.
 
 All timestamps use IST (Asia/Kolkata, UTC+05:30).
 """
@@ -94,6 +94,25 @@ GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE = os.environ.get(
     "ppis_cpplus_verified_head_count_correction",
 )
 
+
+def _verified_only_policy_applies(hour_end: datetime) -> bool:
+    raw_start = os.environ.get("GATE_VERIFIED_ONLY_START", "")
+    if not raw_start:
+        return True
+    try:
+        policy_start = datetime.strptime(
+            raw_start, "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except ValueError:
+        logger.error(
+            "[GATE] Invalid GATE_VERIFIED_ONLY_START=%r; defaulting to "
+            "verified-only delivery",
+            raw_start,
+        )
+        return True
+    return hour_end >= policy_start
+
+
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
 UNKNOWN_ALERT_PHONES = [
@@ -119,6 +138,49 @@ _CPPLUS_CAMERA_MARKERS = ("CP PLUS", "CPPLUS")
 def _is_cpplus_camera(camera: str) -> bool:
     """True if the camera name identifies the outside CP Plus gate camera."""
     return any(m in (camera or "").upper() for m in _CPPLUS_CAMERA_MARKERS)
+
+
+_NON_CPPLUS_REPORT_CAMERAS = (
+    "ENTRY GATE-1",
+    "ENTRY GATE-2",
+    "GALLERY MID",
+    "Reception C1",
+    "Reception C2",
+    "Reception C3",
+    "Reception C4",
+    "Basement Main Gate",
+    "DISPERSAL EXIT",
+    "TrueFace 3000",
+)
+
+
+def _build_non_cpplus_camera_observations(
+    entries: list[dict], start: datetime, end: datetime
+) -> list[dict]:
+    counts = {
+        camera: {"camera": camera, "in_count": 0, "out_count": 0}
+        for camera in _NON_CPPLUS_REPORT_CAMERAS
+    }
+    for entry in entries:
+        camera = entry.get("camera", "")
+        if camera not in counts:
+            continue
+        try:
+            timestamp = datetime.strptime(
+                entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=IST)
+        except (TypeError, ValueError):
+            continue
+        if not start <= timestamp < end:
+            continue
+        direction = entry.get("direction", "IN")
+        if camera == "DISPERSAL EXIT" and direction != "OUT":
+            continue
+        if direction == "IN":
+            counts[camera]["in_count"] += 1
+        elif direction == "OUT":
+            counts[camera]["out_count"] += 1
+    return list(counts.values())
 
 
 # Recipients for CP Plus outside-gate visitor snapshots (WhatsApp).
@@ -2835,7 +2897,11 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    title = "CP PLUS FINAL DAILY HEAD COUNT" if is_final else "CP PLUS HEAD COUNT REPORT"
+    title = (
+        "PPIS VERIFIED FINAL HEAD COUNT"
+        if is_final
+        else "PPIS VERIFIED HEAD COUNT REPORT"
+    )
     pdf.set_font("Helvetica", "B", 18)
     pdf.cell(0, 12, title, new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.set_font("Helvetica", "", 11)
@@ -2899,34 +2965,67 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
         pdf.cell(0, 6, str(item["count"]), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
 
+    camera_observations = report.get("camera_observations", [])
+    if camera_observations:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  NON-CP-PLUS CAMERA OBSERVATIONS ({interval_display})",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(120, 6, "  Camera", border=1, new_x="RIGHT")
+        pdf.cell(35, 6, "IN", border=1, align="C", new_x="RIGHT")
+        pdf.cell(35, 6, "OUT", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        for observation in camera_observations:
+            pdf.cell(120, 6, f"  {observation['camera']}", border=1, new_x="RIGHT")
+            pdf.cell(
+                35, 6, str(observation["in_count"]), border=1,
+                align="C", new_x="RIGHT",
+            )
+            pdf.cell(
+                35, 6, str(observation["out_count"]), border=1,
+                align="C", new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.multi_cell(
+            0, 4,
+            "All observations are retained per source. Overlapping Gate, Gallery, "
+            "Reception and TrueFace sightings are not blindly added to the verified "
+            "total; independent routes remain separately visible.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
     pdf.set_font("Helvetica", "", 9)
-    pdf.cell(48, 6, "Camera:", new_x="RIGHT")
+    pdf.cell(48, 6, "Verified source:", new_x="RIGHT")
     pdf.set_font("Helvetica", "B", 9)
     pdf.cell(0, 6, "ENTRY GATE-OUTSIDE (CP Plus)", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(48, 6, "Counting method:", new_x="RIGHT")
     pdf.set_font("Helvetica", "B", 9)
-    counting_method = (
-        "Trusted camera count where available; live AI otherwise"
-        if recording_verified_hours
-        else "Live AI line-crossing count (not camera-verified)"
+    pdf.cell(
+        0, 6, "Trusted camera-native or recording count only",
+        new_x="LMARGIN", new_y="NEXT",
     )
-    pdf.cell(0, 6, counting_method, new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(90, 90, 90)
     pdf.multi_cell(
         0, 4,
-        "Hours without a trusted camera result show the live AI count and are "
-        "explicitly unverified. OUT crossings, identities, faces, vehicles, "
-        "animals and other cameras are excluded.",
+        "Reports are withheld until all completed hours have trusted camera results. "
+        "Other camera observations are listed separately so overlapping views do not "
+        "inflate the official verified total.",
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.set_text_color(0, 0, 0)
     pdf.ln(5)
     pdf.set_font("Helvetica", "I", 8)
-    pdf.cell(0, 5, "PPIS CP Plus Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 5, "PPIS Multi-Camera Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
 
     buf = io.BytesIO()
     pdf.output(buf)
@@ -2940,9 +3039,9 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
 
 @router.post("/api/gate/send-report")
 async def trigger_reconciliation_report():
-    """Manual trigger to send the CP Plus head-count report immediately."""
-    await send_reconciliation_report()
-    return {"status": "sent"}
+    """Retry eligible verified-only reports without duplicating recipients."""
+    await send_pending_cpplus_corrections()
+    return {"status": "processed_verified_reports"}
 
 
 @router.post("/api/gate/test-alert")
@@ -3007,6 +3106,14 @@ async def receive_entry_gate_snapshot(request: Request):
 
     logger.info("[GATE] Entry gate snapshot sent to %d/%d recipients", sent_count, len(GATE_SNAPSHOT_PHONES))
     return {"status": "ok", "sent": sent_count, "total": len(GATE_SNAPSHOT_PHONES)}
+
+
+def _is_fully_camera_verified(report: dict) -> bool:
+    return (
+        report.get("completed_hours", 0) > 0
+        and report.get("recording_verified_hours", 0)
+        == report.get("completed_hours", 0)
+    )
 
 
 def _build_cpplus_head_count_report(
@@ -3077,7 +3184,7 @@ async def send_reconciliation_report(*, final: bool = False):
     ):
         logger.warning(
             "[GATE] CP Plus camera recount unavailable for %02d:00-%02d:00; "
-            "sending explicitly unverified live-AI fallback",
+            "verified-only policy is withholding the report",
             latest_completed_hour, latest_completed_hour + 1,
         )
 
@@ -3098,12 +3205,22 @@ async def send_reconciliation_report(*, final: bool = False):
     report = _build_cpplus_head_count_report(
         entry_times, now, final=final, recording_counts=recording_counts,
     )
+    if not _is_fully_camera_verified(report):
+        logger.warning(
+            "[GATE] Verified-only policy withheld %sreport: %d/%d completed "
+            "hours verified",
+            "final " if final else "",
+            report["recording_verified_hours"],
+            report["completed_hours"],
+        )
+        return
+
     interval_entries = report["interval_entries"]
     total_entries = report["total_entries"]
 
     pdf_bytes = _generate_cpplus_head_count_pdf(report, today_display, time_display)
     report_label = "Final_" if final else ""
-    pdf_filename = f"CPPlus_{report_label}Head_Count_{today}_{now.strftime('%H%M')}.pdf"
+    pdf_filename = f"PPIS_Verified_{report_label}Head_Count_{today}_{now.strftime('%H%M')}.pdf"
 
     if GATE_REPORT_WHATSAPP_PHONES:
         try:
@@ -3163,7 +3280,7 @@ async def _release_cpplus_correction_claims(
 
 
 async def _send_verified_cpplus_correction(recount: dict) -> None:
-    """Send one verified follow-up per recipient for a completed recount hour."""
+    """Send one verified-only report per recipient for a completed recount hour."""
     if recount["source"] not in {
         "camera_native_counter",
         "camera_sd_recording",
@@ -3204,14 +3321,15 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         await db.commit()
         if not claimed_phones:
             return
-        gate_entries = await _get_gate_entries(db, date, direction="IN")
+        gate_entries = await _get_gate_entries(db, date)
         recording_counts = await _get_cpplus_hourly_recounts(db, date)
     finally:
         await db.close()
 
     cpplus_entries = [
         entry for entry in gate_entries
-        if _is_cpplus_camera(entry.get("camera", ""))
+        if entry.get("direction") == "IN"
+        and _is_cpplus_camera(entry.get("camera", ""))
     ]
     entry_times = []
     for entry in cpplus_entries:
@@ -3232,16 +3350,22 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         end_dt,
         recording_counts=recording_counts,
     )
-    if not report["latest_hour_verified"]:
+    if not _is_fully_camera_verified(report):
         logger.error(
-            "[GATE] Refusing correction without verified recount for %s",
+            "[GATE] Refusing verified report for %s with only %d/%d completed "
+            "hours verified",
             hour_start,
+            report["recording_verified_hours"],
+            report["completed_hours"],
         )
         await _release_cpplus_correction_claims(
             date, hour_start, claimed_phones
         )
         return
 
+    report["camera_observations"] = _build_non_cpplus_camera_observations(
+        gate_entries, start_dt, end_dt
+    )
     generated_at = datetime.now(IST)
     date_display = start_dt.strftime("%d-%m-%Y")
     pdf_bytes = _generate_cpplus_head_count_pdf(
@@ -3249,8 +3373,10 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         date_display,
         generated_at.strftime("%I:%M %p"),
     )
+    verified_only = _verified_only_policy_applies(end_dt)
+    report_type = "Head_Count" if verified_only else "Correction"
     pdf_filename = (
-        f"CPPlus_Verified_Correction_{date}_{start_dt.strftime('%H%M')}.pdf"
+        f"PPIS_Verified_{report_type}_{date}_{start_dt.strftime('%H%M')}.pdf"
     )
 
     try:
@@ -3259,7 +3385,7 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         )
         if not doc_id:
             logger.error(
-                "[GATE] CP Plus verified correction PDF upload failed for %s",
+                "[GATE] Verified-only head-count PDF upload failed for %s",
                 hour_start,
             )
             await _release_cpplus_correction_claims(
@@ -3267,20 +3393,29 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
             )
             return
 
-        interval_display = (
-            f"{date_display} {start_dt.strftime('%I:%M %p')} - "
-            f"{end_dt.strftime('%I:%M %p')} IST"
-        )
-        body_params = [
-            interval_display,
-            str(report["interval_entries"]),
-            str(report["total_entries"]),
-            str(provisional_count),
-        ]
+        if verified_only:
+            template = GATE_REPORT_WHATSAPP_TEMPLATE
+            body_params = [
+                f"{date_display} {generated_at.strftime('%I:%M %p')} IST",
+                str(report["interval_entries"]),
+                str(report["total_entries"]),
+            ]
+        else:
+            template = GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE
+            interval_display = (
+                f"{date_display} {start_dt.strftime('%I:%M %p')} - "
+                f"{end_dt.strftime('%I:%M %p')} IST"
+            )
+            body_params = [
+                interval_display,
+                str(report["interval_entries"]),
+                str(report["total_entries"]),
+                str(provisional_count),
+            ]
         for phone in claimed_phones:
             sent = await send_cloud_template_message(
                 phone,
-                GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE,
+                template,
                 body_params=body_params,
                 header_document_id=doc_id,
                 header_document_filename=pdf_filename,
@@ -3309,7 +3444,7 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
             finally:
                 await db.close()
             logger.info(
-                "[GATE] CP Plus verified correction %s → %s: %s",
+                "[GATE] Verified-only head-count report %s → %s: %s",
                 hour_start,
                 phone,
                 "OK" if sent else "FAILED",
@@ -3319,14 +3454,14 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
             date, hour_start, claimed_phones
         )
         logger.error(
-            "[GATE] CP Plus verified correction failed for %s: %s",
+            "[GATE] Verified-only head-count report failed for %s: %s",
             hour_start,
             exc,
         )
 
 
 async def send_pending_cpplus_corrections() -> None:
-    """Retry unsent verified corrections for recounts completed today."""
+    """Retry unsent verified-only reports for trusted recounts completed today."""
     today = datetime.now(IST).strftime("%Y-%m-%d")
     db = await _get_db()
     try:
@@ -3521,10 +3656,13 @@ async def live_dashboard_data():
 
 _LIVE_SNAPSHOT_CAMERAS = [
     {"key": "ENTRY GATE-1", "label": "Entry Gate 1"},
-    {"key": "ENTRY GATE- 2", "label": "Entry Gate 2"},
+    {"key": "ENTRY GATE-2", "label": "Entry Gate 2"},
+    {"key": "GALLERY MID", "label": "Gallery Mid"},
     {"key": "Basement Main Gate", "label": "Basement Main Gate"},
     {"key": "Reception C1", "label": "Reception C1"},
     {"key": "Reception C2", "label": "Reception C2"},
+    {"key": "Reception C3", "label": "Reception C3"},
+    {"key": "Reception C4", "label": "Reception C4"},
     {"key": "DISPERSAL EXIT", "label": "Dispersal Exit"},
 ]
 
