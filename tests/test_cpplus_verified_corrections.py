@@ -10,6 +10,51 @@ from app.routes import gate
 
 
 class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
+    def test_headcount_delivery_window_is_6am_through_5pm_ist(self):
+        self.assertFalse(gate._headcount_delivery_window_open(
+            datetime(2026, 7, 16, 5, 59, tzinfo=gate.IST)
+        ))
+        self.assertTrue(gate._headcount_delivery_window_open(
+            datetime(2026, 7, 16, 6, 0, tzinfo=gate.IST)
+        ))
+        self.assertTrue(gate._headcount_delivery_window_open(
+            datetime(2026, 7, 16, 17, 59, tzinfo=gate.IST)
+        ))
+        self.assertFalse(gate._headcount_delivery_window_open(
+            datetime(2026, 7, 16, 18, 0, tzinfo=gate.IST)
+        ))
+        self.assertFalse(gate._headcount_delivery_window_open(
+            datetime(2026, 7, 16, 22, 0, tzinfo=gate.IST)
+        ))
+
+    async def test_verified_report_is_not_sent_at_10pm(self):
+        recount = {
+            "date": "2026-07-16",
+            "hour_start": "2026-07-16 15:00:00",
+            "hour_end": "2026-07-16 16:00:00",
+            "in_count": 34,
+            "processed_frames": 0,
+            "source": "camera_native_counter",
+            "verified_at": "2026-07-16 22:00:00",
+        }
+        open_db = AsyncMock()
+        upload = AsyncMock()
+        send = AsyncMock()
+
+        with (
+            patch.object(
+                gate, "_headcount_delivery_window_open", return_value=False,
+            ),
+            patch.object(gate, "_get_db", open_db),
+            patch.object(gate, "upload_media_bytes_cloud", upload),
+            patch.object(gate, "send_cloud_template_message", send),
+        ):
+            await gate._send_verified_cpplus_correction(recount)
+
+        open_db.assert_not_awaited()
+        upload.assert_not_awaited()
+        send.assert_not_awaited()
+
     def test_report_stays_provisional_without_recount(self):
         entry_times = [
             datetime(2026, 7, 15, 9, 10, tzinfo=gate.IST),
@@ -207,6 +252,9 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         upload = AsyncMock(return_value="document-id")
 
         with (
+            patch.object(
+                gate, "_headcount_delivery_window_open", return_value=True,
+            ),
             patch.object(gate, "_get_db", new=open_db),
             patch.object(
                 gate,
@@ -276,6 +324,9 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         send = AsyncMock(return_value=True)
 
         with (
+            patch.object(
+                gate, "_headcount_delivery_window_open", return_value=True,
+            ),
             patch.object(gate, "_get_db", new=open_db),
             patch.object(gate, "GATE_REPORT_WHATSAPP_PHONES", ["phone-a"]),
             patch.object(gate, "_generate_cpplus_head_count_pdf", return_value=b"PDF"),
@@ -308,6 +359,9 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         send = AsyncMock(side_effect=[True, False, True])
 
         with (
+            patch.object(
+                gate, "_headcount_delivery_window_open", return_value=True,
+            ),
             patch.object(gate, "_get_db", new=open_db),
             patch.object(
                 gate,
