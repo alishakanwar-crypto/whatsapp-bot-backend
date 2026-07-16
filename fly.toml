@@ -1,5 +1,5 @@
 app = "ppis-whatsapp-bot"
-primary_region = "bom"
+primary_region = "sin"
 
 [mounts]
 source = "ppis_data"
