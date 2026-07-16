@@ -3667,7 +3667,9 @@ async def detect_and_handle_snapshot_request(
         )
 
         # Determine the classroom for queuing (best-effort extraction)
-        _queue_classroom = _extract_classroom_for_queue(message_text, sender, is_admin)
+        _queue_classroom = await _extract_classroom_for_queue(
+            message_text, sender, is_admin,
+        )
 
         if _queue_classroom:
             queued = queue_snapshot_request(_queue_classroom, sender, reply_to)
