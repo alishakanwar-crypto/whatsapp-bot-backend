@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import aiosqlite
 
@@ -80,6 +80,37 @@ class SnapshotAccessGrantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             webhook._restrict_parent_snapshot_location("GRADE 4B", children),
             "GRADE 4B",
+        )
+
+    async def test_offline_request_queues_resolved_classroom(self):
+        from app.routes import agent_ws
+
+        queue_request = Mock(return_value=True)
+        with (
+            patch.object(webhook, "_is_snapshot_request", return_value=True),
+            patch.object(webhook, "_is_admin_panel", return_value=True),
+            patch.object(
+                webhook,
+                "_extract_classroom_for_queue",
+                new=AsyncMock(return_value="NUR-1"),
+            ),
+            patch.object(webhook, "send_whatsapp_message", new=AsyncMock()),
+            patch.object(agent_ws, "wait_for_agent", new=AsyncMock(return_value=False)),
+            patch.object(agent_ws, "record_snapshot_failure"),
+            patch.object(
+                agent_ws,
+                "get_health_state",
+                return_value={"consecutive_failures": 1},
+            ),
+            patch.object(agent_ws, "queue_snapshot_request", new=queue_request),
+        ):
+            handled = await webhook.detect_and_handle_snapshot_request(
+                "919876543210", "Show Nursery 1", "919876543210"
+            )
+
+        self.assertTrue(handled)
+        queue_request.assert_called_once_with(
+            "NUR-1", "919876543210", "919876543210"
         )
 
 
