@@ -93,6 +93,21 @@ GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE = os.environ.get(
     "GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE",
     "ppis_cpplus_verified_head_count_correction",
 )
+GATE_REPORT_DELIVERY_START_HOUR = 6
+GATE_REPORT_DELIVERY_END_HOUR = 18
+
+
+def _headcount_delivery_window_open(now: datetime | None = None) -> bool:
+    current = now or datetime.now(IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=IST)
+    else:
+        current = current.astimezone(IST)
+    return (
+        GATE_REPORT_DELIVERY_START_HOUR
+        <= current.hour
+        < GATE_REPORT_DELIVERY_END_HOUR
+    )
 
 
 def _verified_only_policy_applies(hour_end: datetime) -> bool:
@@ -3286,6 +3301,12 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         "camera_sd_recording",
         "school_pc_recording",
     }:
+        return
+    if not _headcount_delivery_window_open():
+        logger.info(
+            "[GATE] Suppressing head-count delivery outside 06:00-17:59 IST: %s",
+            recount["hour_start"],
+        )
         return
     date = recount["date"]
     hour_start = recount["hour_start"]
