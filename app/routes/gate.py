@@ -185,6 +185,46 @@ _ATTENDANCE_NAME_ALIASES = {
     "ALISHA AHUJA": "ALISHA KANWAR",
 }
 
+_CANDIDATE_BOUNDARY_CAMERAS = {
+    "C2": {"ENTRY GATE-1", "ENTRY GATE-2"},
+    "C4": {"Basement Main Gate"},
+}
+_CANDIDATE_IMAGE_DIRECTIONS = {"TOP_TO_BOTTOM", "BOTTOM_TO_TOP"}
+
+
+def _normalize_candidate_boundary_event(entry: dict) -> dict:
+    event_id = str(entry.get("event_id", "")).strip()
+    timestamp = str(entry.get("timestamp", "")).strip()
+    boundary = str(entry.get("boundary", "")).strip().upper()
+    camera = str(entry.get("camera", "")).strip()
+    image_direction = str(entry.get("image_direction", "")).strip().upper()
+    try:
+        line_position = float(entry.get("line_position"))
+        parsed_timestamp = datetime.strptime(
+            timestamp, "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid candidate boundary event") from exc
+
+    if (
+        not event_id
+        or len(event_id) > 64
+        or camera not in _CANDIDATE_BOUNDARY_CAMERAS.get(boundary, set())
+        or image_direction not in _CANDIDATE_IMAGE_DIRECTIONS
+        or not 0 < line_position < 1
+    ):
+        raise ValueError("Invalid candidate boundary event")
+
+    return {
+        "event_id": event_id,
+        "date": parsed_timestamp.strftime("%Y-%m-%d"),
+        "timestamp": timestamp,
+        "boundary": boundary,
+        "camera": camera,
+        "image_direction": image_direction,
+        "line_position": line_position,
+    }
+
 
 def _build_non_cpplus_camera_observations(
     entries: list[dict], start: datetime, end: datetime
@@ -899,6 +939,31 @@ async def _get_visitor_sightings(db, date: str) -> list[dict]:
         }
         for r in await cur.fetchall()
     ]
+
+
+async def _store_candidate_boundary_events(db, entries: list[dict]) -> int:
+    """Store audit-only C2/C4 line crossings without changing headcount."""
+    count = 0
+    for entry in entries:
+        event = _normalize_candidate_boundary_event(entry)
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO candidate_boundary_events "
+            "(event_id, date, timestamp, boundary, camera, image_direction, "
+            "line_position, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event["event_id"],
+                event["date"],
+                event["timestamp"],
+                event["boundary"],
+                event["camera"],
+                event["image_direction"],
+                event["line_position"],
+                "dvr_line_crossing_audit",
+            ),
+        )
+        count += max(cursor.rowcount, 0)
+    await db.commit()
+    return count
 
 
 async def _store_vehicle_entries(db, entries: list[dict]) -> int:
@@ -1983,6 +2048,32 @@ async def receive_visitor_sightings(request: Request):
     cls_str = ", ".join(f"{k}={v}" for k, v in sorted(cls_log.items()))
     logger.info("[GATE] Stored %d DVR visitor sighting(s) [%s]", count, cls_str)
     return {"status": "ok", "stored": count}
+
+
+@router.post(
+    "/api/gate/candidate-boundary-event",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_candidate_boundary_events(request: Request):
+    """Receive audit-only directional crossings for candidate C2/C4 routes."""
+    body = await request.json()
+    entries = body if isinstance(body, list) else [body]
+    if not entries or len(entries) > 500:
+        raise HTTPException(status_code=400, detail="Invalid event batch")
+
+    try:
+        normalized = [_normalize_candidate_boundary_event(entry) for entry in entries]
+    except (AttributeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db = await _get_db()
+    try:
+        count = await _store_candidate_boundary_events(db, normalized)
+    finally:
+        await db.close()
+
+    logger.info("[GATE] Stored %d candidate boundary audit event(s)", count)
+    return {"status": "ok", "stored": count, "official_headcount_changed": False}
 
 
 @router.post("/api/gate/vehicle-entry")
