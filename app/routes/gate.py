@@ -220,6 +220,50 @@ def _build_non_cpplus_camera_observations(
     return list(counts.values())
 
 
+_VEHICLE_TYPE_LABELS = {
+    "bus": "Bus",
+    "car": "Car / Van",
+    "motorcycle": "Scooter / Motorcycle",
+    "truck": "Truck",
+}
+
+
+def _build_vehicle_observations(
+    entries: list[dict], start: datetime, end: datetime
+) -> list[dict]:
+    counts: dict[tuple[str, str], dict] = {}
+    for entry in entries:
+        timestamp = _parse_attendance_event_time(
+            entry.get("timestamp", ""), start.strftime("%Y-%m-%d")
+        )
+        if timestamp is None or not start <= timestamp < end:
+            continue
+        camera = entry.get("camera", "") or "Unknown camera"
+        raw_type = (entry.get("vehicle_type", "vehicle") or "vehicle").lower()
+        vehicle_type = _VEHICLE_TYPE_LABELS.get(
+            raw_type, raw_type.replace("_", " ").title()
+        )
+        key = (camera, vehicle_type)
+        observation = counts.setdefault(
+            key,
+            {
+                "camera": camera,
+                "vehicle_type": vehicle_type,
+                "in_count": 0,
+                "out_count": 0,
+            },
+        )
+        direction = (entry.get("direction", "IN") or "IN").upper()
+        if direction == "IN":
+            observation["in_count"] += 1
+        elif direction == "OUT":
+            observation["out_count"] += 1
+    return sorted(
+        counts.values(),
+        key=lambda item: (item["camera"].upper(), item["vehicle_type"].upper()),
+    )
+
+
 def _canonical_attendance_name(name: str) -> str:
     normalized = re.sub(r"[^A-Z0-9]+", " ", (name or "").upper()).strip()
     return _ATTENDANCE_NAME_ALIASES.get(normalized, normalized)
@@ -3260,6 +3304,59 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
         )
         pdf.ln(4)
 
+    vehicle_observations = report.get("vehicle_observations")
+    if vehicle_observations is not None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  VEHICLE FLOW OBSERVATIONS ({interval_display}) - NOT PEOPLE",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        if vehicle_observations:
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.cell(80, 6, "  Camera", border=1, new_x="RIGHT")
+            pdf.cell(60, 6, "Vehicle type", border=1, new_x="RIGHT")
+            pdf.cell(25, 6, "IN", border=1, align="C", new_x="RIGHT")
+            pdf.cell(
+                25, 6, "OUT", border=1, align="C",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+            pdf.set_font("Helvetica", "", 7)
+            for observation in vehicle_observations:
+                pdf.cell(
+                    80, 6, f"  {observation['camera']}",
+                    border=1, new_x="RIGHT",
+                )
+                pdf.cell(
+                    60, 6, observation["vehicle_type"],
+                    border=1, new_x="RIGHT",
+                )
+                pdf.cell(
+                    25, 6, str(observation["in_count"]), border=1,
+                    align="C", new_x="RIGHT",
+                )
+                pdf.cell(
+                    25, 6, str(observation["out_count"]), border=1,
+                    align="C", new_x="LMARGIN", new_y="NEXT",
+                )
+        else:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(
+                0, 6, "No vehicle crossing events were reported for this interval.",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "Vehicles remain separate from human headcount. Passenger numbers are "
+            "never inferred, and observations from overlapping cameras are shown per "
+            "source rather than added as unique vehicles.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
     attendance = report.get("all_source_attendance")
     if attendance is not None:
         def safe_text(value: object) -> str:
@@ -3677,6 +3774,7 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         registered_people = await _get_all_teachers(db)
         contact_categories = await _get_contact_categories(db)
         pending_review_count = await _get_pending_attendance_reviews(db, date)
+        vehicle_entries = await _get_vehicle_entries(db, date)
     finally:
         await db.close()
 
@@ -3730,6 +3828,9 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         date,
         end_dt,
         pending_review_count,
+    )
+    report["vehicle_observations"] = _build_vehicle_observations(
+        vehicle_entries, start_dt, end_dt
     )
     generated_at = datetime.now(IST)
     date_display = start_dt.strftime("%d-%m-%Y")
