@@ -111,6 +111,168 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_camera["DISPERSAL EXIT"]["out_count"], 1)
         self.assertNotIn("ENTRY GATE-OUTSIDE (CP Plus)", by_camera)
         self.assertIn("GALLERY MID", by_camera)
+        self.assertEqual(
+            by_camera["ENTRY GATE-1"]["role"], "C2 candidate / validator"
+        )
+        self.assertEqual(
+            by_camera["Basement Main Gate"]["role"], "C4 candidate boundary"
+        )
+
+    def test_all_source_attendance_deduplicates_identity_and_preserves_sources(self):
+        cutoff = datetime(2026, 7, 17, 9, 0, tzinfo=gate.IST)
+        result = gate._build_all_source_attendance(
+            attendance_records=[
+                {
+                    "person_id": "STUDENT_A_GRADE4B",
+                    "name": "Student A",
+                    "grade": "GRADE4B",
+                    "camera_label": "Grade 4B C1",
+                    "confidence": 0.94,
+                    "status": "present",
+                    "logged_at": "2026-07-17T07:20:00+05:30",
+                },
+                {
+                    "person_id": "TEACHER_ALISHA",
+                    "name": "Alisha Ahuja",
+                    "grade": "",
+                    "camera_label": "ENTRY GATE-1",
+                    "confidence": 0.96,
+                    "status": "present",
+                    "logged_at": "2026-07-17T07:10:00+05:30",
+                },
+            ],
+            trueface_records=[
+                {
+                    "pin": "42",
+                    "name": "Alisha Kanwar",
+                    "arrival_time": "07:05:00",
+                    "departure_time": None,
+                }
+            ],
+            dvr_sightings=[
+                {
+                    "person_id": "TEACHER_ALISHA",
+                    "name": "Alisha Kanwar",
+                    "camera": "ENTRY GATE-2",
+                    "timestamp": "2026-07-17 07:07:00",
+                    "direction": "IN",
+                },
+                {
+                    "person_id": "TEACHER_ALISHA",
+                    "name": "Alisha Kanwar",
+                    "camera": "Reception C1",
+                    "timestamp": "2026-07-17 07:15:00",
+                    "direction": "IN",
+                },
+                {
+                    "person_id": "TEACHER_ALISHA",
+                    "name": "Alisha Kanwar",
+                    "camera": "TrueFace 3000",
+                    "timestamp": "2026-07-17 07:05:00",
+                    "direction": "IN",
+                },
+            ],
+            gate_entries=[],
+            registered_people=[],
+            contact_categories={},
+            report_date="2026-07-17",
+            cutoff=cutoff,
+            pending_review_count=2,
+        )
+
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["students"], 1)
+        self.assertEqual(result["staff"], 1)
+        self.assertEqual(result["multi_source"], 1)
+        self.assertEqual(result["pending_review"], 2)
+        alisha = next(row for row in result["people"] if row["name"] == "Alisha Kanwar")
+        self.assertEqual(alisha["verification"], "MULTI-SOURCE")
+        self.assertEqual(alisha["first_seen"], "07:05 AM")
+        self.assertEqual(
+            alisha["sources"],
+            ["DVR: ENTRY GATE-2", "DVR: Reception C1", "Face: ENTRY GATE-1", "TrueFace 3000"],
+        )
+
+    def test_attendance_and_boundary_roles_render_in_verified_pdf(self):
+        report = {
+            "total_entries": 12,
+            "interval_entries": 12,
+            "interval_display": "06:00 AM - 07:00 AM IST",
+            "hourly_counts": [
+                {"hour": "06:00 AM - 07:00 AM", "count": 12}
+            ],
+            "peak_hour": "06:00 AM - 07:00 AM",
+            "peak_count": 12,
+            "recording_verified_hours": 1,
+            "completed_hours": 1,
+            "latest_hour_verified": True,
+            "is_final": False,
+            "camera_observations": [
+                {
+                    "camera": "ENTRY GATE-1",
+                    "role": "C2 candidate / validator",
+                    "in_count": 8,
+                    "out_count": 0,
+                }
+            ],
+            "all_source_attendance": {
+                "total": 1,
+                "students": 1,
+                "staff": 0,
+                "multi_source": 1,
+                "pending_review": 0,
+                "cutoff": "07:00 AM",
+                "people": [
+                    {
+                        "name": "Student A",
+                        "category": "Students",
+                        "grade": "GRADE4B",
+                        "first_seen": "06:45 AM",
+                        "last_seen": "06:50 AM",
+                        "occupancy_status": "PRESENT",
+                        "verification": "MULTI-SOURCE",
+                        "sources": ["Face: Grade 4B C1", "DVR: ENTRY GATE-1"],
+                    }
+                ],
+            },
+        }
+
+        pdf = gate._generate_cpplus_head_count_pdf(
+            report, "17-07-2026", "07:02 AM"
+        )
+
+        self.assertTrue(pdf.startswith(b"%PDF"))
+
+    def test_all_source_attendance_uses_matched_gate_identity_and_cutoff(self):
+        result = gate._build_all_source_attendance(
+            attendance_records=[],
+            trueface_records=[],
+            dvr_sightings=[],
+            gate_entries=[
+                {
+                    "matched_pin": "9",
+                    "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                    "timestamp": "2026-07-17 08:45:00",
+                    "direction": "IN",
+                },
+                {
+                    "matched_pin": "9",
+                    "camera": "DISPERSAL EXIT",
+                    "timestamp": "2026-07-17 09:00:00",
+                    "direction": "OUT",
+                },
+            ],
+            registered_people=[{"pin": "9", "name": "Teacher B"}],
+            contact_categories={},
+            report_date="2026-07-17",
+            cutoff=datetime(2026, 7, 17, 9, 0, tzinfo=gate.IST),
+            pending_review_count=0,
+        )
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["people"][0]["verification"], "GATE ID ONLY")
+        self.assertEqual(result["people"][0]["occupancy_status"], "PRESENT")
+        self.assertEqual(result["people"][0]["last_seen"], "08:45 AM")
 
     async def asyncSetUp(self):
         handle, self.db_path = tempfile.mkstemp(suffix=".db")
@@ -159,6 +321,59 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     claimed_at TEXT NOT NULL,
                     sent_at TEXT NOT NULL DEFAULT '',
                     UNIQUE(date, hour_start, phone)
+                );
+                CREATE TABLE attendance_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    person_id TEXT NOT NULL,
+                    student_name TEXT NOT NULL,
+                    grade TEXT NOT NULL DEFAULT '',
+                    camera_label TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'present',
+                    logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE trueface_attendance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pin TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    arrival_time TEXT,
+                    departure_time TEXT
+                );
+                CREATE TABLE teacher_dvr_sightings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    person_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    camera TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 0,
+                    outfit_color TEXT DEFAULT '',
+                    outfit_description TEXT DEFAULT '',
+                    outfit_colors_json TEXT DEFAULT '[]',
+                    direction TEXT DEFAULT 'IN'
+                );
+                CREATE TABLE trueface_teachers (
+                    pin TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    phone TEXT DEFAULT ''
+                );
+                CREATE TABLE trueface_contacts (
+                    pin TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    phone TEXT DEFAULT '',
+                    category TEXT DEFAULT 'staff'
+                );
+                CREATE TABLE manual_review_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    person_id TEXT NOT NULL,
+                    matched_name TEXT NOT NULL DEFAULT '',
+                    grade TEXT NOT NULL DEFAULT '',
+                    camera_label TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    snapshot_path TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
