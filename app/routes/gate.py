@@ -190,6 +190,43 @@ _CANDIDATE_BOUNDARY_CAMERAS = {
     "C4": {"Basement Main Gate"},
 }
 _CANDIDATE_IMAGE_DIRECTIONS = {"TOP_TO_BOTTOM", "BOTTOM_TO_TOP"}
+_CANDIDATE_REPORT_CAMERAS = (
+    ("C2", "ENTRY GATE-1"),
+    ("C2", "ENTRY GATE-2"),
+    ("C4", "Basement Main Gate"),
+)
+
+
+def _build_candidate_boundary_observations(
+    entries: list[dict], start: datetime, end: datetime
+) -> list[dict]:
+    observations = {
+        (boundary, camera): {
+            "boundary": boundary,
+            "camera": camera,
+            "top_to_bottom": 0,
+            "bottom_to_top": 0,
+        }
+        for boundary, camera in _CANDIDATE_REPORT_CAMERAS
+    }
+    for entry in entries:
+        key = (entry.get("boundary", ""), entry.get("camera", ""))
+        if key not in observations:
+            continue
+        try:
+            timestamp = datetime.strptime(
+                entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=IST)
+        except (TypeError, ValueError):
+            continue
+        if not start <= timestamp < end:
+            continue
+        image_direction = entry.get("image_direction", "")
+        if image_direction == "TOP_TO_BOTTOM":
+            observations[key]["top_to_bottom"] += 1
+        elif image_direction == "BOTTOM_TO_TOP":
+            observations[key]["bottom_to_top"] += 1
+    return list(observations.values())
 
 
 def _normalize_candidate_boundary_event(entry: dict) -> dict:
@@ -999,6 +1036,24 @@ async def _get_vehicle_entries(db, date: str) -> list[dict]:
         {"id": r[0], "timestamp": r[1], "camera": r[2],
          "direction": r[3], "vehicle_type": r[4], "snapshot": r[5] if len(r) > 5 else ""}
         for r in await cur.fetchall()
+    ]
+
+
+async def _get_candidate_boundary_events(db, date: str) -> list[dict]:
+    cursor = await db.execute(
+        "SELECT timestamp, boundary, camera, image_direction, line_position "
+        "FROM candidate_boundary_events WHERE date = ? ORDER BY timestamp",
+        (date,),
+    )
+    return [
+        {
+            "timestamp": row[0],
+            "boundary": row[1],
+            "camera": row[2],
+            "image_direction": row[3],
+            "line_position": row[4],
+        }
+        for row in await cursor.fetchall()
     ]
 
 
@@ -3395,6 +3450,49 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
         )
         pdf.ln(4)
 
+    candidate_observations = report.get("candidate_boundary_observations")
+    if candidate_observations is not None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  PHASE 2 DIRECTIONAL AUDIT ({interval_display})",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.cell(20, 6, "  Route", border=1, new_x="RIGHT")
+        pdf.cell(70, 6, "Camera", border=1, new_x="RIGHT")
+        pdf.cell(50, 6, "Top to bottom", border=1, align="C", new_x="RIGHT")
+        pdf.cell(
+            50, 6, "Bottom to top", border=1, align="C",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.set_font("Helvetica", "", 7)
+        for observation in candidate_observations:
+            pdf.cell(
+                20, 6, f"  {observation['boundary']}", border=1,
+                new_x="RIGHT",
+            )
+            pdf.cell(70, 6, observation["camera"], border=1, new_x="RIGHT")
+            pdf.cell(
+                50, 6, str(observation["top_to_bottom"]), border=1,
+                align="C", new_x="RIGHT",
+            )
+            pdf.cell(
+                50, 6, str(observation["bottom_to_top"]), border=1,
+                align="C", new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "Audit only: these are raw image-direction crossings, not confirmed campus "
+            "IN/OUT. Entry Gate 1 and 2 overlap and are kept separate. No Phase 2 "
+            "value is added to the official CP Plus C1 headcount.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
     vehicle_observations = report.get("vehicle_observations")
     if vehicle_observations is not None:
         pdf.set_fill_color(47, 84, 150)
@@ -3704,6 +3802,7 @@ async def send_reconciliation_report(*, final: bool = False):
     try:
         gate_entries = await _get_gate_entries(db, today, direction="IN")
         recording_counts = await _get_cpplus_hourly_recounts(db, today)
+        candidate_boundary_events = await _get_candidate_boundary_events(db, today)
     finally:
         await db.close()
 
@@ -3747,6 +3846,16 @@ async def send_reconciliation_report(*, final: bool = False):
 
     interval_entries = report["interval_entries"]
     total_entries = report["total_entries"]
+    interval_start = now.replace(
+        hour=latest_completed_hour, minute=0, second=0, microsecond=0
+    )
+    report["candidate_boundary_observations"] = (
+        _build_candidate_boundary_observations(
+            candidate_boundary_events,
+            interval_start,
+            interval_start + timedelta(hours=1),
+        )
+    )
 
     pdf_bytes = _generate_cpplus_head_count_pdf(report, today_display, time_display)
     report_label = "Final_" if final else ""
@@ -3866,6 +3975,7 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         contact_categories = await _get_contact_categories(db)
         pending_review_count = await _get_pending_attendance_reviews(db, date)
         vehicle_entries = await _get_vehicle_entries(db, date)
+        candidate_boundary_events = await _get_candidate_boundary_events(db, date)
     finally:
         await db.close()
 
@@ -3922,6 +4032,11 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
     )
     report["vehicle_observations"] = _build_vehicle_observations(
         vehicle_entries, start_dt, end_dt
+    )
+    report["candidate_boundary_observations"] = (
+        _build_candidate_boundary_observations(
+            candidate_boundary_events, start_dt, end_dt
+        )
     )
     generated_at = datetime.now(IST)
     date_display = start_dt.strftime("%d-%m-%Y")
