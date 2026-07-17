@@ -118,6 +118,47 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             by_camera["Basement Main Gate"]["role"], "C4 candidate boundary"
         )
 
+    def test_candidate_boundary_observations_are_hourly_and_non_additive(self):
+        start = datetime(2026, 7, 18, 6, 0, tzinfo=gate.IST)
+        end = datetime(2026, 7, 18, 7, 0, tzinfo=gate.IST)
+        observations = gate._build_candidate_boundary_observations(
+            [
+                {
+                    "timestamp": "2026-07-18 06:10:00",
+                    "boundary": "C2",
+                    "camera": "ENTRY GATE-1",
+                    "image_direction": "TOP_TO_BOTTOM",
+                },
+                {
+                    "timestamp": "2026-07-18 06:11:00",
+                    "boundary": "C2",
+                    "camera": "ENTRY GATE-1",
+                    "image_direction": "BOTTOM_TO_TOP",
+                },
+                {
+                    "timestamp": "2026-07-18 06:12:00",
+                    "boundary": "C4",
+                    "camera": "Basement Main Gate",
+                    "image_direction": "BOTTOM_TO_TOP",
+                },
+                {
+                    "timestamp": "2026-07-18 07:00:00",
+                    "boundary": "C2",
+                    "camera": "ENTRY GATE-2",
+                    "image_direction": "TOP_TO_BOTTOM",
+                },
+            ],
+            start,
+            end,
+        )
+        by_camera = {row["camera"]: row for row in observations}
+
+        self.assertEqual(len(observations), 3)
+        self.assertEqual(by_camera["ENTRY GATE-1"]["top_to_bottom"], 1)
+        self.assertEqual(by_camera["ENTRY GATE-1"]["bottom_to_top"], 1)
+        self.assertEqual(by_camera["ENTRY GATE-2"]["top_to_bottom"], 0)
+        self.assertEqual(by_camera["Basement Main Gate"]["bottom_to_top"], 1)
+
     def test_vehicle_observations_stay_separate_by_camera_and_type(self):
         start = datetime(2026, 7, 17, 7, 0, tzinfo=gate.IST)
         end = datetime(2026, 7, 17, 8, 0, tzinfo=gate.IST)
@@ -272,6 +313,26 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     "in_count": 2,
                     "out_count": 1,
                 }
+            ],
+            "candidate_boundary_observations": [
+                {
+                    "boundary": "C2",
+                    "camera": "ENTRY GATE-1",
+                    "top_to_bottom": 2,
+                    "bottom_to_top": 1,
+                },
+                {
+                    "boundary": "C2",
+                    "camera": "ENTRY GATE-2",
+                    "top_to_bottom": 0,
+                    "bottom_to_top": 0,
+                },
+                {
+                    "boundary": "C4",
+                    "camera": "Basement Main Gate",
+                    "top_to_bottom": 1,
+                    "bottom_to_top": 0,
+                },
             ],
             "all_source_attendance": {
                 "total": 1,
