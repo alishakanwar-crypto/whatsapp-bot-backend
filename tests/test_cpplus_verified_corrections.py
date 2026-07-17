@@ -118,6 +118,56 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             by_camera["Basement Main Gate"]["role"], "C4 candidate boundary"
         )
 
+    def test_vehicle_observations_stay_separate_by_camera_and_type(self):
+        start = datetime(2026, 7, 17, 7, 0, tzinfo=gate.IST)
+        end = datetime(2026, 7, 17, 8, 0, tzinfo=gate.IST)
+        observations = gate._build_vehicle_observations(
+            [
+                {
+                    "timestamp": "2026-07-17 07:10:00",
+                    "camera": "ENTRY GATE-1",
+                    "direction": "IN",
+                    "vehicle_type": "car",
+                },
+                {
+                    "timestamp": "2026-07-17 07:10:03",
+                    "camera": "ENTRY GATE-2",
+                    "direction": "IN",
+                    "vehicle_type": "car",
+                },
+                {
+                    "timestamp": "2026-07-17T07:20:00+05:30",
+                    "camera": "ENTRY GATE-1",
+                    "direction": "OUT",
+                    "vehicle_type": "motorcycle",
+                },
+                {
+                    "timestamp": "2026-07-17 08:00:00",
+                    "camera": "ENTRY GATE-1",
+                    "direction": "IN",
+                    "vehicle_type": "bus",
+                },
+            ],
+            start,
+            end,
+        )
+
+        self.assertEqual(len(observations), 3)
+        by_key = {
+            (row["camera"], row["vehicle_type"]): row
+            for row in observations
+        }
+        self.assertEqual(
+            by_key[("ENTRY GATE-1", "Car / Van")]["in_count"], 1
+        )
+        self.assertEqual(
+            by_key[("ENTRY GATE-1", "Scooter / Motorcycle")]["out_count"], 1
+        )
+        self.assertEqual(
+            by_key[("ENTRY GATE-2", "Car / Van")]["in_count"], 1
+        )
+        self.assertNotIn(("ENTRY GATE-1", "Bus"), by_key)
+
     def test_all_source_attendance_deduplicates_identity_and_preserves_sources(self):
         cutoff = datetime(2026, 7, 17, 9, 0, tzinfo=gate.IST)
         result = gate._build_all_source_attendance(
@@ -213,6 +263,14 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     "role": "C2 candidate / validator",
                     "in_count": 8,
                     "out_count": 0,
+                }
+            ],
+            "vehicle_observations": [
+                {
+                    "camera": "ENTRY GATE-1",
+                    "vehicle_type": "Car / Van",
+                    "in_count": 2,
+                    "out_count": 1,
                 }
             ],
             "all_source_attendance": {
@@ -374,6 +432,15 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     snapshot_path TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE vehicle_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    camera TEXT NOT NULL,
+                    direction TEXT NOT NULL DEFAULT 'IN',
+                    vehicle_type TEXT NOT NULL DEFAULT 'car',
+                    snapshot TEXT DEFAULT ''
                 );
                 """
             )
