@@ -435,6 +435,22 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_vehicle_entries_date
                 ON vehicle_entries (date);
 
+            CREATE TABLE IF NOT EXISTS candidate_boundary_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT UNIQUE NOT NULL,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                boundary TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                image_direction TEXT NOT NULL,
+                line_position REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT 'dvr_line_crossing_audit',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_candidate_boundary_events_date
+                ON candidate_boundary_events (date);
+
             CREATE TABLE IF NOT EXISTS gate_daily_summary (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT UNIQUE NOT NULL,

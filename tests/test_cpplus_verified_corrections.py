@@ -442,6 +442,17 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     vehicle_type TEXT NOT NULL DEFAULT 'car',
                     snapshot TEXT DEFAULT ''
                 );
+                CREATE TABLE candidate_boundary_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT UNIQUE NOT NULL,
+                    date TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    boundary TEXT NOT NULL,
+                    camera TEXT NOT NULL,
+                    image_direction TEXT NOT NULL,
+                    line_position REAL NOT NULL,
+                    source TEXT NOT NULL
+                );
                 """
             )
             await db.executemany(
@@ -476,6 +487,53 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         os.unlink(self.db_path)
+
+    async def test_candidate_boundary_events_are_audit_only_and_idempotent(self):
+        event = {
+            "event_id": "audit-event-1",
+            "timestamp": "2026-07-17 13:45:00",
+            "boundary": "C4",
+            "camera": "Basement Main Gate",
+            "image_direction": "TOP_TO_BOTTOM",
+            "line_position": 0.5,
+        }
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            first = await gate._store_candidate_boundary_events(db, [event])
+            second = await gate._store_candidate_boundary_events(db, [event])
+            rows = await db.execute_fetchall(
+                "SELECT boundary, camera, image_direction, source "
+                "FROM candidate_boundary_events"
+            )
+            gate_rows = await db.execute_fetchall(
+                "SELECT COUNT(*) FROM gate_entries"
+            )
+        finally:
+            await db.close()
+
+        self.assertEqual(first, 1)
+        self.assertEqual(second, 0)
+        self.assertEqual(
+            rows,
+            [(
+                "C4",
+                "Basement Main Gate",
+                "TOP_TO_BOTTOM",
+                "dvr_line_crossing_audit",
+            )],
+        )
+        self.assertEqual(gate_rows, [(3,)])
+
+    def test_candidate_boundary_event_rejects_wrong_camera_mapping(self):
+        with self.assertRaises(ValueError):
+            gate._normalize_candidate_boundary_event({
+                "event_id": "audit-event-2",
+                "timestamp": "2026-07-17 13:46:00",
+                "boundary": "C4",
+                "camera": "ENTRY GATE-1",
+                "image_direction": "TOP_TO_BOTTOM",
+                "line_position": 0.5,
+            })
 
     async def test_untrusted_native_count_is_captured_but_not_accepted(self):
         async def open_db():
