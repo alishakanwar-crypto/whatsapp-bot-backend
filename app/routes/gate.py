@@ -168,12 +168,34 @@ _NON_CPPLUS_REPORT_CAMERAS = (
     "TrueFace 3000",
 )
 
+_CAMERA_REPORT_ROLES = {
+    "ENTRY GATE-1": "C2 candidate / validator",
+    "ENTRY GATE-2": "C2 candidate / validator",
+    "GALLERY MID": "Overlap validator",
+    "Reception C1": "Overlap validator",
+    "Reception C2": "Overlap validator",
+    "Reception C3": "Overlap validator",
+    "Reception C4": "Overlap validator",
+    "Basement Main Gate": "C4 candidate boundary",
+    "DISPERSAL EXIT": "OUT boundary validator",
+    "TrueFace 3000": "Identity / attendance",
+}
+
+_ATTENDANCE_NAME_ALIASES = {
+    "ALISHA AHUJA": "ALISHA KANWAR",
+}
+
 
 def _build_non_cpplus_camera_observations(
     entries: list[dict], start: datetime, end: datetime
 ) -> list[dict]:
     counts = {
-        camera: {"camera": camera, "in_count": 0, "out_count": 0}
+        camera: {
+            "camera": camera,
+            "role": _CAMERA_REPORT_ROLES[camera],
+            "in_count": 0,
+            "out_count": 0,
+        }
         for camera in _NON_CPPLUS_REPORT_CAMERAS
     }
     for entry in entries:
@@ -196,6 +218,207 @@ def _build_non_cpplus_camera_observations(
         elif direction == "OUT":
             counts[camera]["out_count"] += 1
     return list(counts.values())
+
+
+def _canonical_attendance_name(name: str) -> str:
+    normalized = re.sub(r"[^A-Z0-9]+", " ", (name or "").upper()).strip()
+    return _ATTENDANCE_NAME_ALIASES.get(normalized, normalized)
+
+
+def _parse_attendance_event_time(value: str, report_date: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=IST)
+        return parsed.astimezone(IST)
+    except ValueError:
+        pass
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            clock = datetime.strptime(raw, fmt)
+            day = datetime.strptime(report_date, "%Y-%m-%d")
+            return day.replace(
+                hour=clock.hour, minute=clock.minute, second=clock.second,
+                tzinfo=IST,
+            )
+        except ValueError:
+            continue
+    return None
+
+
+def _build_all_source_attendance(
+    attendance_records: list[dict],
+    trueface_records: list[dict],
+    dvr_sightings: list[dict],
+    gate_entries: list[dict],
+    registered_people: list[dict],
+    contact_categories: dict[str, str],
+    report_date: str,
+    cutoff: datetime,
+    pending_review_count: int,
+) -> dict:
+    people: dict[str, dict] = {}
+    pin_names = {
+        str(person.get("pin", "")): person.get("name", "")
+        for person in registered_people
+        if person.get("pin") and person.get("name")
+    }
+
+    def add_evidence(
+        *, name: str, source: str, source_type: str, timestamp: str,
+        category: str, grade: str = "", direction: str = "IN",
+        person_id: str = "", name_priority: int = 0,
+    ) -> None:
+        key = _canonical_attendance_name(name)
+        event_time = _parse_attendance_event_time(timestamp, report_date)
+        if not key or event_time is None or event_time >= cutoff:
+            return
+        person = people.setdefault(key, {
+            "name": name.strip(),
+            "name_priority": name_priority,
+            "category": category,
+            "grade": grade,
+            "person_ids": set(),
+            "sources": set(),
+            "source_types": set(),
+            "events": [],
+        })
+        if name_priority > person["name_priority"]:
+            person["name"] = name.strip()
+            person["name_priority"] = name_priority
+        if category == "Students" or person["category"] != "Students":
+            person["category"] = category
+        if grade:
+            person["grade"] = grade
+        if person_id:
+            person["person_ids"].add(person_id)
+        person["sources"].add(source)
+        person["source_types"].add(source_type)
+        person["events"].append({
+            "time": event_time,
+            "direction": direction.upper(),
+            "source": source,
+        })
+
+    for record in attendance_records:
+        if (record.get("status") or "present").lower() != "present":
+            continue
+        person_id = record.get("person_id", "")
+        grade = record.get("grade", "")
+        category = (
+            "Teachers/Staff" if person_id.upper().startswith("TEACHER_")
+            else "Students"
+        )
+        camera = record.get("camera_label", "") or "Classroom face recognition"
+        add_evidence(
+            name=record.get("name", ""),
+            source=f"Face: {camera}",
+            source_type="face_camera",
+            timestamp=record.get("logged_at", ""),
+            category=category,
+            grade=grade,
+            person_id=person_id,
+            name_priority=2,
+        )
+
+    for record in trueface_records:
+        name = record.get("name", "")
+        raw_category = contact_categories.get(
+            _canonical_attendance_name(name), "staff"
+        )
+        category = _normalize_category(raw_category, name=name)
+        add_evidence(
+            name=name,
+            source="TrueFace 3000",
+            source_type="trueface",
+            timestamp=record.get("arrival_time", ""),
+            category=category,
+            person_id=record.get("pin", ""),
+            name_priority=3,
+        )
+        if record.get("departure_time"):
+            add_evidence(
+                name=name,
+                source="TrueFace 3000",
+                source_type="trueface",
+                timestamp=record["departure_time"],
+                category=category,
+                direction="OUT",
+                person_id=record.get("pin", ""),
+                name_priority=3,
+            )
+
+    for sighting in dvr_sightings:
+        camera = sighting.get("camera", "") or "DVR face recognition"
+        if camera == "TrueFace 3000":
+            continue
+        add_evidence(
+            name=sighting.get("name", ""),
+            source=f"DVR: {camera}",
+            source_type="dvr",
+            timestamp=sighting.get("timestamp", ""),
+            category="Teachers/Staff",
+            direction=sighting.get("direction", "IN"),
+            person_id=sighting.get("person_id", ""),
+            name_priority=1,
+        )
+
+    for entry in gate_entries:
+        pin = str(entry.get("matched_pin", ""))
+        name = pin_names.get(pin, "")
+        if not name:
+            continue
+        add_evidence(
+            name=name,
+            source=f"Gate ID: {entry.get('camera', 'Unknown')}",
+            source_type="gate_identity",
+            timestamp=entry.get("timestamp", ""),
+            category="Teachers/Staff",
+            direction=entry.get("direction", "IN"),
+            person_id=pin,
+            name_priority=2,
+        )
+
+    rows = []
+    for person in people.values():
+        events = sorted(person["events"], key=lambda event: event["time"])
+        source_types = person["source_types"]
+        if len(source_types) > 1:
+            verification = "MULTI-SOURCE"
+        elif "trueface" in source_types:
+            verification = "TRUEFACE ONLY"
+        elif "face_camera" in source_types:
+            verification = "FACE CAMERA ONLY"
+        elif "dvr" in source_types:
+            verification = "DVR ONLY"
+        else:
+            verification = "GATE ID ONLY"
+        rows.append({
+            "name": person["name"],
+            "category": person["category"],
+            "grade": person["grade"],
+            "first_seen": events[0]["time"].strftime("%I:%M %p"),
+            "last_seen": events[-1]["time"].strftime("%I:%M %p"),
+            "occupancy_status": (
+                "EXITED" if events[-1]["direction"] == "OUT" else "PRESENT"
+            ),
+            "verification": verification,
+            "sources": sorted(person["sources"]),
+            "evidence_count": len(events),
+        })
+    rows.sort(key=lambda row: (row["category"] != "Students", row["name"].upper()))
+    return {
+        "people": rows,
+        "total": len(rows),
+        "students": sum(row["category"] == "Students" for row in rows),
+        "staff": sum(row["category"] != "Students" for row in rows),
+        "multi_source": sum(row["verification"] == "MULTI-SOURCE" for row in rows),
+        "pending_review": pending_review_count,
+        "cutoff": cutoff.strftime("%I:%M %p"),
+    }
 
 
 # Recipients for CP Plus outside-gate visitor snapshots (WhatsApp).
@@ -423,6 +646,33 @@ async def _get_gate_entries_with_crops(db, date: str) -> list[dict]:
     ]
 
 
+async def _get_face_attendance_records(db, date: str) -> list[dict]:
+    cur = await db.execute(
+        "SELECT person_id, student_name, grade, camera_label, confidence, "
+        "status, logged_at FROM attendance_records "
+        "WHERE substr(logged_at, 1, 10) = ? ORDER BY logged_at",
+        (date,),
+    )
+    return [
+        {
+            "person_id": row[0], "name": row[1], "grade": row[2],
+            "camera_label": row[3], "confidence": row[4],
+            "status": row[5], "logged_at": row[6],
+        }
+        for row in await cur.fetchall()
+    ]
+
+
+async def _get_pending_attendance_reviews(db, date: str) -> int:
+    cur = await db.execute(
+        "SELECT COUNT(*) FROM manual_review_queue WHERE status = 'pending' "
+        "AND date(created_at, '+5 hours', '+30 minutes') = ?",
+        (date,),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else 0
+
+
 async def _get_trueface_attendance(db, date: str) -> list[dict]:
     """Get all TrueFace attendance records for a date."""
     cur = await db.execute(
@@ -459,7 +709,7 @@ async def _get_contact_categories(db) -> dict[str, str]:
     )
     result: dict[str, str] = {}
     for r in await cur.fetchall():
-        name = (r[0] or "").upper().strip()
+        name = _canonical_attendance_name(r[0] or "")
         category = (r[1] or "staff").lower().strip()
         if name:
             result[name] = category
@@ -690,16 +940,8 @@ async def _reconcile(db, date: str) -> dict:
     unique_gate_out = len(gate_out)
 
     # ── CATEGORY 1: VERIFIED STAFF ──
-    # Name aliases: DVR name → TrueFace canonical name (for people registered
-    # under different names on different systems)
-    _NAME_ALIASES: dict[str, str] = {
-        "ALISHA AHUJA": "ALISHA KANWAR",
-    }
-
     def _canonical(name: str) -> str:
-        """Return canonical (TrueFace) name, resolving aliases."""
-        upper = name.upper().strip()
-        return _NAME_ALIASES.get(upper, upper)
+        return _canonical_attendance_name(name)
 
     # Build TrueFace lookup by name
     tf_by_name: dict[str, dict] = {}
@@ -2986,31 +3228,116 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
         pdf.set_text_color(255, 255, 255)
         pdf.set_font("Helvetica", "B", 10)
         pdf.cell(
-            0, 8, f"  NON-CP-PLUS CAMERA OBSERVATIONS ({interval_display})",
+            0, 8, f"  BOUNDARY AND VALIDATION OBSERVATIONS ({interval_display})",
             new_x="LMARGIN", new_y="NEXT", fill=True,
         )
         pdf.set_text_color(0, 0, 0)
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.cell(120, 6, "  Camera", border=1, new_x="RIGHT")
-        pdf.cell(35, 6, "IN", border=1, align="C", new_x="RIGHT")
-        pdf.cell(35, 6, "OUT", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.cell(70, 6, "  Camera / Source", border=1, new_x="RIGHT")
+        pdf.cell(70, 6, "Role", border=1, new_x="RIGHT")
+        pdf.cell(25, 6, "IN", border=1, align="C", new_x="RIGHT")
+        pdf.cell(25, 6, "OUT", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 7)
         for observation in camera_observations:
-            pdf.cell(120, 6, f"  {observation['camera']}", border=1, new_x="RIGHT")
+            pdf.cell(70, 6, f"  {observation['camera']}", border=1, new_x="RIGHT")
+            pdf.cell(70, 6, observation["role"], border=1, new_x="RIGHT")
             pdf.cell(
-                35, 6, str(observation["in_count"]), border=1,
+                25, 6, str(observation["in_count"]), border=1,
                 align="C", new_x="RIGHT",
             )
             pdf.cell(
-                35, 6, str(observation["out_count"]), border=1,
+                25, 6, str(observation["out_count"]), border=1,
                 align="C", new_x="LMARGIN", new_y="NEXT",
             )
         pdf.set_font("Helvetica", "I", 8)
         pdf.multi_cell(
             0, 4,
-            "All observations are retained per source. Overlapping Gate, Gallery, "
-            "Reception and TrueFace sightings are not blindly added to the verified "
-            "total; independent routes remain separately visible.",
+            "Boundary strategy: CP Plus C1 is the current official entry counter. "
+            "Entry Gate 1/2 (C2) and Basement Main Gate (C4) become additive only "
+            "after each is confirmed as a constrained independent route. Gallery, "
+            "Reception and Dispersal validate movement and are never blindly added.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
+    attendance = report.get("all_source_attendance")
+    if attendance is not None:
+        def safe_text(value: object) -> str:
+            return str(value).encode("latin-1", "replace").decode("latin-1")
+
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8,
+            f"  DEDUPLICATED NAMED ATTENDANCE THROUGH {attendance['cutoff']} IST",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(38, 7, "Unique named", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Students", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Staff", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Multi-source", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Review pending", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        summary_values = (
+            attendance["total"], attendance["students"], attendance["staff"],
+            attendance["multi_source"], attendance["pending_review"],
+        )
+        for index, value in enumerate(summary_values):
+            pdf.cell(
+                38, 7, str(value), border=1, align="C",
+                new_x="LMARGIN" if index == len(summary_values) - 1 else "RIGHT",
+                new_y="NEXT" if index == len(summary_values) - 1 else "TOP",
+            )
+        pdf.ln(2)
+
+        people = attendance["people"]
+        if people:
+            widths = (55, 35, 25, 25, 25, 25)
+            headers = ("Name", "Role / Grade", "First", "Last", "State", "Evidence")
+            pdf.set_font("Helvetica", "B", 6.5)
+            for index, (width, header) in enumerate(zip(widths, headers)):
+                pdf.cell(
+                    width, 6, header, border=1, align="C",
+                    new_x="LMARGIN" if index == len(widths) - 1 else "RIGHT",
+                    new_y="NEXT" if index == len(widths) - 1 else "TOP",
+                )
+            pdf.set_font("Helvetica", "", 6.5)
+            for person in people:
+                role = person["grade"] or person["category"]
+                values = (
+                    safe_text(person["name"]), safe_text(role),
+                    person["first_seen"], person["last_seen"],
+                    person["occupancy_status"], person["verification"],
+                )
+                for index, (width, value) in enumerate(zip(widths, values)):
+                    pdf.cell(
+                        width, 6, value[:36], border=1,
+                        new_x="LMARGIN" if index == len(widths) - 1 else "RIGHT",
+                        new_y="NEXT" if index == len(widths) - 1 else "TOP",
+                    )
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "", 7)
+            for person in people:
+                sources = "; ".join(person["sources"])
+                pdf.multi_cell(
+                    0, 4, safe_text(f"{person['name']}: {sources}"),
+                    new_x="LMARGIN", new_y="NEXT",
+                )
+        else:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(
+                0, 6, "No accepted named attendance evidence was available by this cutoff.",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "Each reliably identified person appears once; all contributing identity "
+            "sources remain listed. Anonymous camera observations stay separate because "
+            "they cannot be safely matched to a named person.",
             new_x="LMARGIN", new_y="NEXT",
         )
         pdf.ln(4)
@@ -3344,6 +3671,12 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
             return
         gate_entries = await _get_gate_entries(db, date)
         recording_counts = await _get_cpplus_hourly_recounts(db, date)
+        face_attendance = await _get_face_attendance_records(db, date)
+        trueface_attendance = await _get_trueface_attendance(db, date)
+        dvr_sightings = await _get_teacher_sightings(db, date)
+        registered_people = await _get_all_teachers(db)
+        contact_categories = await _get_contact_categories(db)
+        pending_review_count = await _get_pending_attendance_reviews(db, date)
     finally:
         await db.close()
 
@@ -3386,6 +3719,17 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
 
     report["camera_observations"] = _build_non_cpplus_camera_observations(
         gate_entries, start_dt, end_dt
+    )
+    report["all_source_attendance"] = _build_all_source_attendance(
+        face_attendance,
+        trueface_attendance,
+        dvr_sightings,
+        gate_entries,
+        registered_people,
+        contact_categories,
+        date,
+        end_dt,
+        pending_review_count,
     )
     generated_at = datetime.now(IST)
     date_display = start_dt.strftime("%d-%m-%Y")
