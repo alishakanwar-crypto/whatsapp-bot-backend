@@ -284,6 +284,34 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             ["DVR: ENTRY GATE-2", "DVR: Reception C1", "Face: ENTRY GATE-1", "TrueFace 3000"],
         )
 
+    def test_segment_replay_verification_is_non_additive(self):
+        matching = gate._build_c1_recording_verification(
+            40,
+            {
+                "school_pc_segment_recording": {
+                    "in_count": 42,
+                    "processed_frames": 7200,
+                }
+            },
+        )
+        mismatch = gate._build_c1_recording_verification(
+            40,
+            {
+                "school_pc_segment_recording": {
+                    "in_count": 46,
+                    "processed_frames": 7200,
+                }
+            },
+        )
+        pending = gate._build_c1_recording_verification(40, {})
+
+        self.assertEqual(matching["official_count"], 40)
+        self.assertEqual(matching["segment_count"], 42)
+        self.assertEqual(matching["status"], "COUNTS AGREE")
+        self.assertEqual(mismatch["difference"], 6)
+        self.assertEqual(mismatch["status"], "DIFFERENCE REQUIRES REVIEW")
+        self.assertEqual(pending["status"], "RECORDING CHECK PENDING")
+
     def test_attendance_and_boundary_roles_render_in_verified_pdf(self):
         report = {
             "total_entries": 12,
@@ -298,6 +326,13 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             "completed_hours": 1,
             "latest_hour_verified": True,
             "is_final": False,
+            "c1_recording_verification": {
+                "official_count": 12,
+                "segment_count": 11,
+                "difference": -1,
+                "tolerance": 2,
+                "status": "COUNTS AGREE",
+            },
             "camera_observations": [
                 {
                     "camera": "ENTRY GATE-1",
@@ -431,6 +466,17 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     in_count INTEGER NOT NULL,
                     received_at TEXT NOT NULL,
                     UNIQUE(date, hour_start)
+                );
+                CREATE TABLE cpplus_hourly_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    hour_start TEXT NOT NULL,
+                    hour_end TEXT NOT NULL,
+                    in_count INTEGER NOT NULL,
+                    processed_frames INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    UNIQUE(date, hour_start, source)
                 );
                 CREATE TABLE cpplus_recount_corrections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -596,6 +642,43 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 "line_position": 0.5,
             })
 
+    async def test_in_hour_segment_replay_is_stored_without_changing_official_count(self):
+        async def open_db():
+            return await aiosqlite.connect(self.db_path)
+
+        request = AsyncMock()
+        request.json.return_value = {
+            "date": "2026-07-15",
+            "hour_start": "2026-07-15 10:00:00",
+            "hour_end": "2026-07-15 11:00:00",
+            "in_count": 29,
+            "processed_frames": 7200,
+            "source": "school_pc_segment_recording",
+        }
+
+        with patch.object(gate, "_get_db", new=open_db):
+            result = await gate.receive_cpplus_hourly_recount(request)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            observation = await db.execute_fetchall(
+                "SELECT in_count, processed_frames, source "
+                "FROM cpplus_hourly_observations "
+                "WHERE date = ? AND hour_start = ?",
+                ("2026-07-15", "2026-07-15 10:00:00"),
+            )
+            official = await db.execute_fetchall(
+                "SELECT in_count FROM cpplus_hourly_recounts "
+                "WHERE date = ? AND hour_start = ?",
+                ("2026-07-15", "2026-07-15 10:00:00"),
+            )
+        finally:
+            await db.close()
+
+        self.assertFalse(result["official"])
+        self.assertEqual(observation, [(29, 7200, "school_pc_segment_recording")])
+        self.assertEqual(official, [])
+
     async def test_untrusted_native_count_is_captured_but_not_accepted(self):
         async def open_db():
             return await aiosqlite.connect(self.db_path)
@@ -707,6 +790,20 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                     0,
                     "camera_native_counter",
                     "2026-07-15 11:02:00",
+                ),
+            )
+            await db.execute(
+                "INSERT INTO cpplus_hourly_observations "
+                "(date, hour_start, hour_end, in_count, processed_frames, "
+                "source, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "2026-07-15",
+                    "2026-07-15 10:00:00",
+                    "2026-07-15 11:00:00",
+                    8,
+                    7200,
+                    "school_pc_segment_recording",
+                    "2026-07-15 11:01:30",
                 ),
             )
             await db.commit()

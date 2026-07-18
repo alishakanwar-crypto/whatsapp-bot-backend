@@ -95,6 +95,10 @@ GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE = os.environ.get(
 )
 GATE_REPORT_DELIVERY_START_HOUR = 6
 GATE_REPORT_DELIVERY_END_HOUR = 18
+CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS = max(
+    0, int(os.environ.get("CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS", "120"))
+)
+CPPLUS_SEGMENT_VERIFICATION_POLL_SECONDS = 5
 
 
 def _headcount_delivery_window_open(now: datetime | None = None) -> bool:
@@ -724,6 +728,101 @@ async def _get_cpplus_hourly_recounts(db, date: str) -> dict[int, int]:
             continue
         counts[hour] = int(in_count)
     return counts
+
+
+async def _store_cpplus_hourly_observation(db, recount: dict) -> None:
+    await db.execute(
+        "INSERT INTO cpplus_hourly_observations "
+        "(date, hour_start, hour_end, in_count, processed_frames, source, received_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(date, hour_start, source) DO UPDATE SET "
+        "hour_end = excluded.hour_end, in_count = excluded.in_count, "
+        "processed_frames = excluded.processed_frames, "
+        "received_at = excluded.received_at",
+        (
+            recount["date"], recount["hour_start"], recount["hour_end"],
+            recount["in_count"], recount["processed_frames"],
+            recount["source"], recount["verified_at"],
+        ),
+    )
+    await db.commit()
+
+
+async def _get_cpplus_hourly_observations(db, date: str) -> dict[int, dict[str, dict]]:
+    cursor = await db.execute(
+        "SELECT hour_start, in_count, processed_frames, source, received_at "
+        "FROM cpplus_hourly_observations WHERE date = ? "
+        "ORDER BY hour_start, source",
+        (date,),
+    )
+    observations: dict[int, dict[str, dict]] = {}
+    for hour_start, in_count, processed_frames, source, received_at in await cursor.fetchall():
+        try:
+            hour = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").hour
+        except (TypeError, ValueError):
+            continue
+        observations.setdefault(hour, {})[str(source)] = {
+            "in_count": int(in_count),
+            "processed_frames": int(processed_frames),
+            "received_at": str(received_at),
+        }
+    return observations
+
+
+async def _wait_for_cpplus_segment_observation(
+    date: str, hour_start: str,
+) -> bool:
+    deadline = (
+        asyncio.get_running_loop().time()
+        + CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS
+    )
+    while True:
+        db = await _get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT 1 FROM cpplus_hourly_observations "
+                "WHERE date = ? AND hour_start = ? "
+                "AND source = 'school_pc_segment_recording' LIMIT 1",
+                (date, hour_start),
+            )
+            if await cursor.fetchone() is not None:
+                return True
+        finally:
+            await db.close()
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(
+            min(CPPLUS_SEGMENT_VERIFICATION_POLL_SECONDS, remaining)
+        )
+
+
+def _build_c1_recording_verification(
+    official_count: int, observations: dict[str, dict]
+) -> dict:
+    segment = observations.get("school_pc_segment_recording")
+    if segment is None:
+        return {
+            "official_count": official_count,
+            "segment_count": None,
+            "difference": None,
+            "tolerance": max(2, (official_count + 19) // 20),
+            "status": "RECORDING CHECK PENDING",
+        }
+    segment_count = int(segment["in_count"])
+    difference = segment_count - official_count
+    tolerance = max(2, (official_count + 19) // 20)
+    return {
+        "official_count": official_count,
+        "segment_count": segment_count,
+        "difference": difference,
+        "tolerance": tolerance,
+        "status": (
+            "COUNTS AGREE"
+            if abs(difference) <= tolerance
+            else "DIFFERENCE REQUIRES REVIEW"
+        ),
+    }
 
 
 async def _get_gate_entries(db, date: str, direction: str | None = None) -> list[dict]:
@@ -1962,6 +2061,7 @@ async def receive_cpplus_hourly_recount(request: Request):
             "camera_native_counter",
             "camera_sd_recording",
             "school_pc_recording",
+            "school_pc_segment_recording",
         }
     ):
         raise HTTPException(status_code=400, detail="Invalid recount hour or count")
@@ -1980,6 +2080,13 @@ async def receive_cpplus_hourly_recount(request: Request):
     }
     db = await _get_db()
     try:
+        await _store_cpplus_hourly_observation(db, recount)
+        if source == "school_pc_segment_recording":
+            logger.info(
+                "[GATE] Stored non-additive in-hour recording check %s: IN=%d frames=%d",
+                hour_start, in_count, processed_frames,
+            )
+            return {"status": "ok", "observation": recount, "official": False}
         if source == "camera_native_counter":
             await db.execute(
                 "INSERT INTO cpplus_native_observations "
@@ -3401,6 +3508,42 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     )
     pdf.ln(5)
 
+    c1_verification = report.get("c1_recording_verification")
+    if c1_verification is not None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  C1 IN-HOUR RECORDING CHECK ({interval_display})",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "", 8)
+        segment_count = c1_verification["segment_count"]
+        difference = c1_verification["difference"]
+        rows = (
+            ("  Official CP Plus C1 count", c1_verification["official_count"]),
+            ("  Five-minute segment replay", "Pending" if segment_count is None else segment_count),
+            ("  Difference", "Pending" if difference is None else f"{difference:+d}"),
+            ("  Agreement tolerance", f"+/-{c1_verification['tolerance']}"),
+            ("  Verification status", c1_verification["status"]),
+        )
+        for label, value in rows:
+            pdf.cell(120, 6, label, border=1, new_x="RIGHT")
+            pdf.cell(
+                0, 6, str(value), border=1, align="C",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "The replay is an independent non-additive check. It never increases the "
+            "official total automatically; differences above the displayed tolerance "
+            "require recording review.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
     pdf.set_fill_color(47, 84, 150)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 11)
@@ -3802,6 +3945,7 @@ async def send_reconciliation_report(*, final: bool = False):
     try:
         gate_entries = await _get_gate_entries(db, today, direction="IN")
         recording_counts = await _get_cpplus_hourly_recounts(db, today)
+        hourly_observations = await _get_cpplus_hourly_observations(db, today)
         candidate_boundary_events = await _get_candidate_boundary_events(db, today)
     finally:
         await db.close()
@@ -3855,6 +3999,10 @@ async def send_reconciliation_report(*, final: bool = False):
             interval_start,
             interval_start + timedelta(hours=1),
         )
+    )
+    report["c1_recording_verification"] = _build_c1_recording_verification(
+        report["interval_entries"],
+        hourly_observations.get(latest_completed_hour, {}),
     )
 
     pdf_bytes = _generate_cpplus_head_count_pdf(report, today_display, time_display)
@@ -3941,6 +4089,15 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
     end_dt = datetime.strptime(hour_end, "%Y-%m-%d %H:%M:%S").replace(
         tzinfo=IST
     )
+    if recount["source"] == "camera_native_counter":
+        segment_ready = await _wait_for_cpplus_segment_observation(
+            date, hour_start,
+        )
+        if not segment_ready:
+            logger.warning(
+                "[GATE] In-hour recording check still pending after %ds for %s",
+                CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS, hour_start,
+            )
 
     claimed_at = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
     stale_before = (
@@ -3976,6 +4133,7 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         pending_review_count = await _get_pending_attendance_reviews(db, date)
         vehicle_entries = await _get_vehicle_entries(db, date)
         candidate_boundary_events = await _get_candidate_boundary_events(db, date)
+        hourly_observations = await _get_cpplus_hourly_observations(db, date)
     finally:
         await db.close()
 
@@ -4037,6 +4195,9 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         _build_candidate_boundary_observations(
             candidate_boundary_events, start_dt, end_dt
         )
+    )
+    report["c1_recording_verification"] = _build_c1_recording_verification(
+        report["interval_entries"], hourly_observations.get(start_dt.hour, {}),
     )
     generated_at = datetime.now(IST)
     date_display = start_dt.strftime("%d-%m-%Y")
