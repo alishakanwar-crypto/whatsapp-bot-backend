@@ -41,6 +41,9 @@ CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 CHAIRMAN_TEMPLATE = os.environ.get(
     "TRUEFACE_CHAIRMAN_TEMPLATE", "ppis_chairman_teacher_arrival"
 )
+CHAIRMAN_TEXT_TEMPLATE = os.environ.get(
+    "TRUEFACE_CHAIRMAN_TEXT_TEMPLATE", "ppis_chairman_teacher_arrival_text"
+)
 
 # Kill switch: set TRUEFACE_WHATSAPP_DISABLED=true to suppress all WhatsApp sends
 WHATSAPP_DISABLED = os.environ.get("TRUEFACE_WHATSAPP_DISABLED", "").lower() in ("true", "1", "yes")
@@ -357,11 +360,7 @@ async def _get_db_photo_b64(name: str) -> str:
 async def _notify_chairman_arrival(
     name: str, time_str: str, photo_b64: str = "",
 ) -> bool:
-    """Send arrival notification with face photo to the chairman.
-
-    The template requires an IMAGE header. If no live photo was captured
-    from the device, we fall back to the stored database photo.
-    """
+    """Send an arrival notification to the chairman."""
     if WHATSAPP_DISABLED:
         logger.info("[TRUEFACE] WhatsApp DISABLED — skipping chairman notify for %s", name)
         return False
@@ -384,26 +383,31 @@ async def _notify_chairman_arrival(
         CHAIRMAN_PHONE, display_name, time_str, photo_source,
     )
 
-    if not image_b64:
-        logger.warning("[TRUEFACE] No photo available for %s — skipping chairman notify", name)
-        return False
-
     header_image_id = None
-    try:
-        header_image_id = await upload_base64_image_cloud(image_b64)
-        if header_image_id:
-            logger.info("[TRUEFACE] Uploaded %s photo, media_id=%s", photo_source, header_image_id)
-        else:
-            logger.warning("[TRUEFACE] Photo upload failed for %s", name)
-            return False
-    except Exception as e:
-        logger.warning("[TRUEFACE] Photo upload error: %s", e)
-        return False
+    if image_b64:
+        try:
+            header_image_id = await upload_base64_image_cloud(image_b64)
+            if header_image_id:
+                logger.info(
+                    "[TRUEFACE] Uploaded %s photo, media_id=%s",
+                    photo_source, header_image_id,
+                )
+            else:
+                logger.warning(
+                    "[TRUEFACE] Photo upload failed for %s; using text fallback",
+                    name,
+                )
+        except Exception as e:
+            logger.warning(
+                "[TRUEFACE] Photo upload error for %s; using text fallback: %s",
+                name, e,
+            )
 
+    template_name = CHAIRMAN_TEMPLATE if header_image_id else CHAIRMAN_TEXT_TEMPLATE
     try:
         ok = await send_cloud_template_message(
             to=CHAIRMAN_PHONE,
-            template_name=CHAIRMAN_TEMPLATE,
+            template_name=template_name,
             language_code="en",
             body_params=[display_name, time_str],
             header_image_id=header_image_id,
