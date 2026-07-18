@@ -3431,6 +3431,15 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     return buf.getvalue()
 
 
+def _cpplus_report_header_lines(
+    interval_display: str, date_display: str, time_display: str,
+) -> tuple[str, str]:
+    return (
+        f"PP International School  |  REPORTING INTERVAL: {interval_display}",
+        f"Generated: {date_display} at {time_display} IST",
+    )
+
+
 def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
                                      time_display: str) -> bytes:
     """Generate a CP Plus IN-only report without face analysis."""
@@ -3458,13 +3467,20 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
     )
     pdf.set_font("Helvetica", "B", 18)
     pdf.cell(0, 12, title, new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.set_font("Helvetica", "", 11)
+    interval_line, generated_line = _cpplus_report_header_lines(
+        interval_display, date_display, time_display,
+    )
+    pdf.set_font("Helvetica", "B", 11)
     pdf.cell(
-        0, 7,
-        f"PP International School  |  Date: {date_display}  |  {time_display} IST",
+        0, 7, interval_line,
         new_x="LMARGIN", new_y="NEXT", align="C",
     )
-    pdf.ln(6)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(
+        0, 6, generated_line,
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
+    pdf.ln(4)
 
     pdf.set_fill_color(47, 84, 150)
     pdf.set_text_color(255, 255, 255)
