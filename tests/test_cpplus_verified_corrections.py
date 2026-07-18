@@ -27,6 +27,21 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             datetime(2026, 7, 16, 22, 0, tzinfo=gate.IST)
         ))
 
+    def test_report_header_separates_interval_from_generation_time(self):
+        interval_line, generated_line = gate._cpplus_report_header_lines(
+            "08:00 AM - 09:00 AM IST", "18-07-2026", "11:06 AM",
+        )
+
+        self.assertEqual(
+            interval_line,
+            "PP International School  |  REPORTING INTERVAL: "
+            "08:00 AM - 09:00 AM IST",
+        )
+        self.assertEqual(
+            generated_line,
+            "Generated: 18-07-2026 at 11:06 AM IST",
+        )
+
     async def test_verified_report_is_not_sent_at_10pm(self):
         recount = {
             "date": "2026-07-16",
