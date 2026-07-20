@@ -9,9 +9,13 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.services.whatsapp_service import send_whatsapp_message
+from app.services.whatsapp_service import _send_cloud_text, send_whatsapp_message
 from app.services.sheet_refresh_service import refresh_teacher_data_sync, populate_parent_phones_sync, refresh_pi_sheet_full_sync
 from app.services.email_polling_service import poll_homework_emails_sync
+from app.services.showcase_reminder_service import (
+    IST as SHOWCASE_IST,
+    send_showcase_reminders_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -854,6 +858,26 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled daily homework doc clear at 3:00 PM IST (9:30 UTC)")
 
+    # Musical Showcase reminders at 9:00 AM IST, three days before each event.
+    # The service also accepts two-day lead time when a three-day run was missed.
+    scheduler.add_job(
+        send_showcase_reminders_sync,
+        trigger=CronTrigger(
+            hour=9, minute=0, second=0, timezone=SHOWCASE_IST,
+        ),
+        id="musical_showcase_reminders",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_showcase_reminders_sync,
+        trigger=DateTrigger(
+            run_date=datetime.now(SHOWCASE_IST) + timedelta(seconds=45),
+        ),
+        id="musical_showcase_reminders_initial",
+        replace_existing=True,
+    )
+    logger.info("Scheduled musical showcase reminders at 9:00 AM IST")
+
     # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
     # for reference only. No job scheduled.
 
@@ -872,8 +896,6 @@ def _send_teacher_cwhw_reminder_sync() -> None:
 
 async def _send_teacher_cwhw_reminder() -> None:
     """Send the approved reminder message to all 36 class teachers via WhatsApp."""
-    from app.services.whatsapp_service import send_cloud_template_message, _send_cloud_text
-
     _TEACHER_PHONES = [
         # (Grade, Teacher Name, Phone Numbers)
         ("Popsicles", "Sanya Mehra / Anu", ["9289234655"]),

@@ -47,6 +47,18 @@ async def init_db():
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS showcase_reminder_deliveries (
+                event_date TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'generated',
+                claimed_at TEXT NOT NULL,
+                accepted_at TEXT NOT NULL DEFAULT '',
+                status_updated_at TEXT NOT NULL DEFAULT '',
+                wa_message_id TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_showcase_reminder_message_id
+                ON showcase_reminder_deliveries (wa_message_id);
+
             INSERT OR IGNORE INTO settings (key, value) VALUES (
                 'system_prompt',
                 'You are a helpful AI assistant responding via WhatsApp/SMS for PP International School (PPIS), a CBSE affiliated Senior Secondary School in Pitampura, New Delhi. Keep your responses concise and friendly. Use simple formatting suitable for messaging apps. You are bilingual — you can understand and respond in both English and Hindi. If the parent writes in Hindi (Devanagari script or Hinglish/romanized Hindi), respond in Hindi. If they write in English, respond in English. Always be polite and helpful.'
