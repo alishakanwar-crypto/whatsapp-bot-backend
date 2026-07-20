@@ -48,12 +48,14 @@ async def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS showcase_reminder_deliveries (
-                event_date TEXT PRIMARY KEY,
+                event_date TEXT NOT NULL,
+                recipient TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'generated',
                 claimed_at TEXT NOT NULL,
                 accepted_at TEXT NOT NULL DEFAULT '',
                 status_updated_at TEXT NOT NULL DEFAULT '',
-                wa_message_id TEXT NOT NULL DEFAULT ''
+                wa_message_id TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (event_date, recipient)
             );
 
             CREATE INDEX IF NOT EXISTS idx_showcase_reminder_message_id
@@ -683,6 +685,55 @@ async def init_db():
             )
         except Exception:
             pass  # column already exists
+
+        showcase_columns = await db.execute(
+            "PRAGMA table_info(showcase_reminder_deliveries)"
+        )
+        column_names = {row[1] for row in await showcase_columns.fetchall()}
+        if "recipient" not in column_names:
+            legacy_recipient = os.getenv(
+                "SHOWCASE_REMINDER_PHONE", "918076455224",
+            )
+            await db.commit()
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "DROP TABLE IF EXISTS showcase_reminder_deliveries_v2"
+                )
+                await db.execute("""
+                    CREATE TABLE showcase_reminder_deliveries_v2 (
+                        event_date TEXT NOT NULL,
+                        recipient TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'generated',
+                        claimed_at TEXT NOT NULL,
+                        accepted_at TEXT NOT NULL DEFAULT '',
+                        status_updated_at TEXT NOT NULL DEFAULT '',
+                        wa_message_id TEXT NOT NULL DEFAULT '',
+                        PRIMARY KEY (event_date, recipient)
+                    )
+                """)
+                await db.execute(
+                    "INSERT INTO showcase_reminder_deliveries_v2 "
+                    "(event_date, recipient, status, claimed_at, accepted_at, "
+                    "status_updated_at, wa_message_id) "
+                    "SELECT event_date, ?, status, claimed_at, accepted_at, "
+                    "status_updated_at, wa_message_id "
+                    "FROM showcase_reminder_deliveries",
+                    (legacy_recipient,),
+                )
+                await db.execute("DROP TABLE showcase_reminder_deliveries")
+                await db.execute(
+                    "ALTER TABLE showcase_reminder_deliveries_v2 "
+                    "RENAME TO showcase_reminder_deliveries"
+                )
+                await db.execute(
+                    "CREATE INDEX idx_showcase_reminder_message_id "
+                    "ON showcase_reminder_deliveries (wa_message_id)"
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
 
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()

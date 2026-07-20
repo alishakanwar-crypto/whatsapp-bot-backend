@@ -12,8 +12,13 @@ from app.services import whatsapp_service
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
-SHOWCASE_REMINDER_PHONE = os.environ.get(
-    "SHOWCASE_REMINDER_PHONE", "918076455224",
+SHOWCASE_REMINDER_PHONES = tuple(
+    phone.strip()
+    for phone in os.environ.get(
+        "SHOWCASE_REMINDER_PHONES",
+        f"{os.environ.get('SHOWCASE_REMINDER_PHONE', '918076455224')},919599488106",
+    ).split(",")
+    if phone.strip()
 )
 SHOWCASE_REMINDER_TEMPLATE = os.environ.get(
     "SHOWCASE_REMINDER_TEMPLATE", "ppis_musical_showcase_reminder",
@@ -75,16 +80,21 @@ def format_showcase_details(showcases: list[Showcase]) -> str:
     )
 
 
-def _claim_reminder(event_date: date, now: datetime) -> bool:
+def _claim_reminder(event_date: date, recipient: str, now: datetime) -> bool:
     with sqlite3.connect(DB_PATH) as db:
         cursor = db.execute(
             "INSERT INTO showcase_reminder_deliveries "
-            "(event_date, status, claimed_at) VALUES (?, 'generated', ?) "
-            "ON CONFLICT(event_date) DO UPDATE SET "
+            "(event_date, recipient, status, claimed_at) "
+            "VALUES (?, ?, 'generated', ?) "
+            "ON CONFLICT(event_date, recipient) DO UPDATE SET "
             "status = 'generated', claimed_at = excluded.claimed_at, "
             "accepted_at = '', status_updated_at = '', wa_message_id = '' "
             "WHERE showcase_reminder_deliveries.status = 'failed'",
-            (event_date.isoformat(), now.strftime("%d-%m-%Y %H:%M:%S IST")),
+            (
+                event_date.isoformat(),
+                recipient,
+                now.strftime("%d-%m-%Y %H:%M:%S IST"),
+            ),
         )
         db.commit()
         return cursor.rowcount == 1
@@ -92,6 +102,7 @@ def _claim_reminder(event_date: date, now: datetime) -> bool:
 
 def _finish_reminder(
     event_date: date,
+    recipient: str,
     sent: bool,
     now: datetime,
     wa_message_id: str,
@@ -103,15 +114,22 @@ def _finish_reminder(
                 "UPDATE showcase_reminder_deliveries SET "
                 "status = 'accepted', accepted_at = ?, "
                 "status_updated_at = ?, wa_message_id = ? "
-                "WHERE event_date = ?",
-                (timestamp, timestamp, wa_message_id, event_date.isoformat()),
+                "WHERE event_date = ? AND recipient = ?",
+                (
+                    timestamp,
+                    timestamp,
+                    wa_message_id,
+                    event_date.isoformat(),
+                    recipient,
+                ),
             )
         else:
             db.execute(
                 "UPDATE showcase_reminder_deliveries SET "
                 "status = 'failed', status_updated_at = ? "
-                "WHERE event_date = ? AND status = 'generated'",
-                (timestamp, event_date.isoformat()),
+                "WHERE event_date = ? AND recipient = ? "
+                "AND status = 'generated'",
+                (timestamp, event_date.isoformat(), recipient),
             )
         db.commit()
 
@@ -120,41 +138,46 @@ async def send_showcase_reminders(now: datetime | None = None) -> int:
     current = now or datetime.now(IST)
     sent_count = 0
     for event_date, showcases in sorted(due_showcases(current.date()).items()):
-        if not _claim_reminder(event_date, current):
-            continue
-        try:
-            sent = await whatsapp_service.send_cloud_template_message(
-                to=SHOWCASE_REMINDER_PHONE,
-                template_name=SHOWCASE_REMINDER_TEMPLATE,
-                language_code="en",
-                body_params=[
-                    event_date.strftime("%d %B %Y"),
-                    format_showcase_details(showcases),
-                ],
+        details = format_showcase_details(showcases)
+        for recipient in SHOWCASE_REMINDER_PHONES:
+            if not _claim_reminder(event_date, recipient, current):
+                continue
+            try:
+                sent = await whatsapp_service.send_cloud_template_message(
+                    to=recipient,
+                    template_name=SHOWCASE_REMINDER_TEMPLATE,
+                    language_code="en",
+                    body_params=[event_date.strftime("%d %B %Y"), details],
+                )
+            except Exception:
+                logger.exception(
+                    "Musical showcase reminder errored for %s, recipient ending %s",
+                    event_date.isoformat(),
+                    recipient[-4:],
+                )
+                sent = False
+            _finish_reminder(
+                event_date,
+                recipient,
+                sent,
+                datetime.now(IST),
+                whatsapp_service.last_cloud_template_message_id,
             )
-        except Exception:
-            logger.exception(
-                "Musical showcase reminder errored for %s",
-                event_date.isoformat(),
-            )
-            sent = False
-        _finish_reminder(
-            event_date,
-            sent,
-            datetime.now(IST),
-            whatsapp_service.last_cloud_template_message_id,
-        )
-        if sent:
-            sent_count += 1
-            logger.info(
-                "Musical showcase reminder accepted for %s (%d item(s))",
-                event_date.isoformat(), len(showcases),
-            )
-        else:
-            logger.error(
-                "Musical showcase reminder failed for %s",
-                event_date.isoformat(),
-            )
+            if sent:
+                sent_count += 1
+                logger.info(
+                    "Musical showcase reminder accepted for %s, recipient ending "
+                    "%s (%d item(s))",
+                    event_date.isoformat(),
+                    recipient[-4:],
+                    len(showcases),
+                )
+            else:
+                logger.error(
+                    "Musical showcase reminder failed for %s, recipient ending %s",
+                    event_date.isoformat(),
+                    recipient[-4:],
+                )
     return sent_count
 
 
