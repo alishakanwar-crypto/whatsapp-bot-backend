@@ -5,6 +5,7 @@ import sqlite3
 import httpx
 
 logger = logging.getLogger(__name__)
+last_cloud_template_message_id = ""
 
 # ---------------------------------------------------------------------------
 # Credential cache from DB (avoids async DB call on every message)
@@ -278,6 +279,8 @@ async def send_cloud_template_message(
     (uploaded media ID) or ``header_document_url`` (public URL), and
     optionally ``header_document_filename``.
     """
+    global last_cloud_template_message_id
+    last_cloud_template_message_id = ""
     token = get_cloud_token()
     phone_id = get_cloud_phone_id()
     if not token or not phone_id:
@@ -348,9 +351,10 @@ async def send_cloud_template_message(
             response = await client.post(url, headers=headers, json=payload, timeout=30.0)
             data = response.json()
             if "messages" in data:
+                last_cloud_template_message_id = data["messages"][0]["id"]
                 logger.info(
                     f"Cloud API template '{template_name}' sent to {recipient}, "
-                    f"id: {data['messages'][0]['id'][:30]}"
+                    f"id: {last_cloud_template_message_id[:30]}"
                 )
                 return True
             err_code = ""

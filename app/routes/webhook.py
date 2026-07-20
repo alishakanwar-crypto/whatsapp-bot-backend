@@ -1,5 +1,8 @@
+import os
 import re
 import logging
+from datetime import datetime
+
 from fastapi import APIRouter, Request, Response
 
 from app.database import get_db
@@ -14,6 +17,10 @@ from app.services.whatsapp_service import (
     forward_file_by_url,
 )
 from app.services.sms_service import parse_incoming_sms, send_sms
+from app.services.showcase_reminder_service import (
+    IST as SHOWCASE_IST,
+    record_showcase_delivery_status,
+)
 from app.services.email_service import send_email_async
 from app.services.bulk_service import pause_for_bot_reply, resume_after_bot_reply
 from app.services.openai_service import (
@@ -34,7 +41,6 @@ from app.services.subject_teacher_service import (
 )
 
 # School images stored as local files for direct upload
-import os
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 SCHOOL_IMAGES = [
     {
@@ -5165,6 +5171,25 @@ async def _try_register_teacher_face(
     return True
 
 
+async def _record_showcase_statuses(body: dict) -> None:
+    if body.get("object") != "whatsapp_business_account":
+        return
+    for entry in body.get("entry", []):
+        for change in entry.get("changes", []):
+            for status in change.get("value", {}).get("statuses", []):
+                try:
+                    occurred_at = datetime.fromtimestamp(
+                        int(status["timestamp"]), tz=SHOWCASE_IST,
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+                await record_showcase_delivery_status(
+                    status.get("id", ""),
+                    status.get("status", ""),
+                    occurred_at,
+                )
+
+
 @router.post("/webhook/cloud")
 async def receive_cloud_api_message(request: Request):
     """Handle incoming WhatsApp messages from Meta Cloud API webhook."""
@@ -5193,6 +5218,8 @@ async def receive_cloud_api_message(request: Request):
     except Exception as e:
         logger.error(f"[LAW MINISTER] Forward failed: {e}")
     # ── End Law Minister routing ──────────────────────────────────────
+
+    await _record_showcase_statuses(body)
 
     # Still need to handle webhook verification even when disabled
     if not BOT_ENABLED:
