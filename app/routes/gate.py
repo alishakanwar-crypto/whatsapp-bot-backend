@@ -159,6 +159,39 @@ def _is_cpplus_camera(camera: str) -> bool:
     return any(m in (camera or "").upper() for m in _CPPLUS_CAMERA_MARKERS)
 
 
+def _official_cpplus_count_start() -> datetime | None:
+    raw_start = os.environ.get("CPPLUS_OFFICIAL_COUNT_START", "").strip()
+    if not raw_start:
+        return None
+    try:
+        return datetime.strptime(raw_start, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=IST
+        )
+    except ValueError:
+        logger.error(
+            "[GATE] Invalid CPPLUS_OFFICIAL_COUNT_START=%r; retaining all C1 events",
+            raw_start,
+        )
+        return None
+
+
+def _official_cpplus_entry(entry: dict) -> bool:
+    if not _is_cpplus_camera(entry.get("camera", "")):
+        return False
+    count_start = _official_cpplus_count_start()
+    if count_start is None:
+        return True
+    try:
+        timestamp = datetime.strptime(
+            entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except (TypeError, ValueError):
+        return False
+    if timestamp.date() < count_start.date():
+        return True
+    return timestamp >= count_start
+
+
 _NON_CPPLUS_REPORT_CAMERAS = (
     "ENTRY GATE-1",
     "ENTRY GATE-2",
@@ -1191,8 +1224,8 @@ async def _reconcile(db, date: str) -> dict:
     # Head-count reconciliation counts ONLY the CP Plus outside-gate camera
     # (per school directive). DVR ENTRY/DISPERSAL/BASEMENT channels are not
     # counted toward the gate entry/exit totals.
-    gate_in_entry = [e for e in gate_in_all if _is_cpplus_camera(e["camera"])]
-    gate_out_entry = [e for e in gate_out_all if _is_cpplus_camera(e["camera"])]
+    gate_in_entry = [e for e in gate_in_all if _official_cpplus_entry(e)]
+    gate_out_entry = [e for e in gate_out_all if _official_cpplus_entry(e)]
     raw_gate_in = len(gate_in_entry)
     raw_gate_out = len(gate_out_entry)
 
@@ -1695,8 +1728,13 @@ async def _reconcile(db, date: str) -> dict:
     )
     await db.commit()
 
+    count_start = _official_cpplus_count_start()
     return {
         "date": date,
+        "official_count_start": (
+            count_start.strftime("%d-%m-%Y %H:%M:%S IST")
+            if count_start else "06:00 IST daily"
+        ),
         # ── ENTRY SUMMARY ──
         "total_entries": total_entries,  # unique gate IN (baseline)
         "total_exits": total_exits,     # unique gate OUT
@@ -2259,18 +2297,25 @@ async def receive_vehicle_entries(request: Request):
 
 @router.get("/api/gate/status")
 async def gate_status():
-    """Get today's running head count totals."""
+    """Get today's official running C1 head-count totals."""
     today = datetime.now(IST).strftime("%Y-%m-%d")
     db = await _get_db()
     try:
-        gate_in = await _get_gate_entries(db, today, direction="IN")
-        gate_out = await _get_gate_entries(db, today, direction="OUT")
+        gate_in_all = await _get_gate_entries(db, today, direction="IN")
+        gate_out_all = await _get_gate_entries(db, today, direction="OUT")
         trueface = await _get_trueface_attendance(db, today)
         dvr_sightings = await _get_teacher_sightings(db, today)
         visitor_sightings = await _get_visitor_sightings(db, today)
         vehicle_entries = await _get_vehicle_entries(db, today)
     finally:
         await db.close()
+
+    gate_in = _deduplicate_gate_entries([
+        entry for entry in gate_in_all if _official_cpplus_entry(entry)
+    ])
+    gate_out = _deduplicate_gate_entries([
+        entry for entry in gate_out_all if _official_cpplus_entry(entry)
+    ])
 
     # Count unique teachers seen on DVR
     dvr_unique = len({s["person_id"] for s in dvr_sightings})
@@ -2288,8 +2333,13 @@ async def gate_status():
     from collections import Counter
     vehicle_types = dict(Counter(v["vehicle_type"] for v in vehicles_in))
 
+    count_start = _official_cpplus_count_start()
     return {
         "date": today,
+        "official_count_start": (
+            count_start.strftime("%d-%m-%Y %H:%M:%S IST")
+            if count_start else "06:00 IST daily"
+        ),
         "gate_in": len(gate_in),
         "gate_out": len(gate_out),
         "trueface_identified": len(trueface),
@@ -3909,31 +3959,54 @@ def _build_cpplus_head_count_report(
     *,
     final: bool = False,
     recording_counts: dict[int, int] | None = None,
+    count_start: datetime | None = None,
 ) -> dict:
     day_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
     day_end = now.replace(hour=17, minute=0, second=0, microsecond=0)
+    effective_start = day_start
+    if count_start and count_start.date() == now.date():
+        effective_start = max(day_start, count_start)
     cutoff = min(now, day_end)
-    completed_end = day_end if final else cutoff.replace(minute=0, second=0, microsecond=0)
+    completed_end = day_end if final else cutoff.replace(
+        minute=0, second=0, microsecond=0
+    )
     completed_end = max(day_start, completed_end)
-    counted_times = [timestamp for timestamp in entry_times if day_start <= timestamp < completed_end]
+    counted_times = [
+        timestamp for timestamp in entry_times
+        if effective_start <= timestamp < completed_end
+    ]
     verified = recording_counts or {}
 
     hourly_counts = []
-    for hour in range(6, completed_end.hour):
-        hour_start = day_start.replace(hour=hour)
-        hour_end = hour_start + timedelta(hours=1)
-        live_count = sum(hour_start <= timestamp < hour_end for timestamp in counted_times)
-        recording_count = verified.get(hour)
+    hour_start = effective_start.replace(minute=0, second=0, microsecond=0)
+    while hour_start < completed_end:
+        hour_end = min(hour_start + timedelta(hours=1), completed_end)
+        interval_start = max(hour_start, effective_start)
+        live_count = sum(
+            interval_start <= timestamp < hour_end for timestamp in counted_times
+        )
+        is_full_hour = interval_start == hour_start and (
+            hour_end - hour_start == timedelta(hours=1)
+        )
+        recording_count = verified.get(hour_start.hour) if is_full_hour else None
         hourly_counts.append({
-            "hour": f"{hour_start.strftime('%I:%M %p')} - {hour_end.strftime('%I:%M %p')}",
+            "hour": (
+                f"{interval_start.strftime('%I:%M %p')} - "
+                f"{hour_end.strftime('%I:%M %p')}"
+            ),
             "count": max(live_count, recording_count)
             if recording_count is not None else live_count,
             "recording_verified": recording_count is not None,
         })
+        hour_start += timedelta(hours=1)
 
-    peak = max(hourly_counts, key=lambda item: item["count"], default={"hour": "N/A", "count": 0})
+    peak = max(
+        hourly_counts,
+        key=lambda item: item["count"],
+        default={"hour": "N/A", "count": 0},
+    )
     latest = hourly_counts[-1] if hourly_counts else {
-        "hour": "No completed hour", "count": 0,
+        "hour": "No completed interval", "count": 0,
     }
     verified_hours = sum(item["recording_verified"] for item in hourly_counts)
     return {
@@ -3946,6 +4019,9 @@ def _build_cpplus_head_count_report(
         "recording_verified_hours": verified_hours,
         "completed_hours": len(hourly_counts),
         "latest_hour_verified": latest.get("recording_verified", False),
+        "official_count_start": effective_start.strftime(
+            "%d-%m-%Y %H:%M:%S IST"
+        ),
         "is_final": final,
     }
 
@@ -3978,8 +4054,7 @@ async def send_reconciliation_report(*, final: bool = False):
         )
 
     cpplus_entries = [
-        entry for entry in gate_entries
-        if _is_cpplus_camera(entry.get("camera", ""))
+        entry for entry in gate_entries if _official_cpplus_entry(entry)
     ]
 
     def _entry_time(entry: dict) -> datetime | None:
@@ -3992,7 +4067,11 @@ async def send_reconciliation_report(*, final: bool = False):
 
     entry_times = [timestamp for entry in cpplus_entries if (timestamp := _entry_time(entry))]
     report = _build_cpplus_head_count_report(
-        entry_times, now, final=final, recording_counts=recording_counts,
+        entry_times,
+        now,
+        final=final,
+        recording_counts=recording_counts,
+        count_start=_official_cpplus_count_start(),
     )
     if not _is_fully_camera_verified(report):
         logger.warning(
@@ -4059,7 +4138,7 @@ async def send_reconciliation_report(*, final: bool = False):
             logger.error("[GATE] CP Plus head-count WhatsApp error: %s", e)
 
     logger.info(
-        "[GATE] CP Plus %shead-count report at %s: interval=%d, since_6am=%d, peak=%s (%d)",
+        "[GATE] CP Plus %shead-count report at %s: interval=%d, official_total=%d, peak=%s (%d)",
         "final " if final else "", time_display, interval_entries, total_entries,
         report["peak_hour"], report["peak_count"],
     )
@@ -4155,8 +4234,7 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
 
     cpplus_entries = [
         entry for entry in gate_entries
-        if entry.get("direction") == "IN"
-        and _is_cpplus_camera(entry.get("camera", ""))
+        if entry.get("direction") == "IN" and _official_cpplus_entry(entry)
     ]
     entry_times = []
     for entry in cpplus_entries:
@@ -4176,6 +4254,7 @@ async def _send_verified_cpplus_correction(recount: dict) -> None:
         entry_times,
         end_dt,
         recording_counts=recording_counts,
+        count_start=_official_cpplus_count_start(),
     )
     if not _is_fully_camera_verified(report):
         logger.error(
@@ -4411,6 +4490,7 @@ async def live_dashboard_data():
     return {
         "timestamp": now.strftime("%d-%m-%Y %H:%M:%S IST"),
         "date": today,
+        "official_count_start": recon.get("official_count_start", ""),
         # Per school spec
         "entry_summary": {
             "total_persons_entered": total_entries,

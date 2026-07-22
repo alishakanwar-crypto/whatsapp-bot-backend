@@ -27,6 +27,65 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             datetime(2026, 7, 16, 22, 0, tzinfo=gate.IST)
         ))
 
+    def test_official_c1_cutover_filters_only_same_day_pre_cutover_events(self):
+        before = {
+            "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+            "timestamp": "2026-07-22 16:20:59",
+        }
+        at_cutover = {
+            "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+            "timestamp": "2026-07-22 16:21:00",
+        }
+        historical = {
+            "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+            "timestamp": "2026-07-21 08:00:00",
+        }
+        overlapping_camera = {
+            "camera": "ENTRY GATE-1",
+            "timestamp": "2026-07-22 16:22:00",
+        }
+
+        with patch.dict(
+            os.environ,
+            {"CPPLUS_OFFICIAL_COUNT_START": "2026-07-22 16:21:00"},
+        ):
+            self.assertFalse(gate._official_cpplus_entry(before))
+            self.assertTrue(gate._official_cpplus_entry(at_cutover))
+            self.assertTrue(gate._official_cpplus_entry(historical))
+            self.assertFalse(gate._official_cpplus_entry(overlapping_camera))
+
+    def test_mid_hour_cutover_never_adds_full_hour_recording_count(self):
+        count_start = datetime(2026, 7, 22, 16, 21, tzinfo=gate.IST)
+        report = gate._build_cpplus_head_count_report(
+            [
+                datetime(2026, 7, 22, 16, 10, tzinfo=gate.IST),
+                datetime(2026, 7, 22, 16, 30, tzinfo=gate.IST),
+                datetime(2026, 7, 22, 16, 45, tzinfo=gate.IST),
+            ],
+            datetime(2026, 7, 22, 17, 0, tzinfo=gate.IST),
+            final=True,
+            recording_counts={16: 20},
+            count_start=count_start,
+        )
+
+        self.assertEqual(report["total_entries"], 2)
+        self.assertEqual(report["interval_entries"], 2)
+        self.assertEqual(report["interval_display"], "04:21 PM - 05:00 PM IST")
+        self.assertFalse(report["latest_hour_verified"])
+        self.assertEqual(report["completed_hours"], 1)
+
+    def test_cutover_does_not_change_later_daily_six_am_start(self):
+        report = gate._build_cpplus_head_count_report(
+            [datetime(2026, 7, 23, 6, 15, tzinfo=gate.IST)],
+            datetime(2026, 7, 23, 7, 0, tzinfo=gate.IST),
+            recording_counts={6: 1},
+            count_start=datetime(2026, 7, 22, 16, 21, tzinfo=gate.IST),
+        )
+
+        self.assertEqual(report["total_entries"], 1)
+        self.assertEqual(report["interval_display"], "06:00 AM - 07:00 AM IST")
+        self.assertTrue(report["latest_hour_verified"])
+
     def test_report_header_separates_interval_from_generation_time(self):
         interval_line, generated_line = gate._cpplus_report_header_lines(
             "08:00 AM - 09:00 AM IST", "18-07-2026", "11:06 AM",
