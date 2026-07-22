@@ -29,19 +29,25 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_plan_preserves_all_26_source_rows(self):
-        self.assertEqual(len(reminders.SHOWCASES), 26)
-        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 13)
+    def test_plan_preserves_all_46_final_source_rows(self):
+        self.assertEqual(len(reminders.SHOWCASES), 46)
+        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 20)
+        self.assertTrue(
+            any(
+                item.grade_class == "Nursery"
+                and item.event_date == date(2026, 9, 11)
+                for item in reminders.SHOWCASES
+            )
+        )
 
-    def test_selects_two_or_three_day_lead_time_and_groups_same_date(self):
+    def test_selects_exactly_two_day_lead_time_and_groups_same_date(self):
         due = reminders.due_showcases(date(2026, 7, 28))
 
-        self.assertEqual(set(due), {date(2026, 7, 30), date(2026, 7, 31)})
+        self.assertEqual(set(due), {date(2026, 7, 30)})
         self.assertEqual(len(due[date(2026, 7, 30)]), 2)
-        self.assertEqual(len(due[date(2026, 7, 31)]), 3)
 
     def test_formats_all_same_day_showcases_in_one_message(self):
-        due = reminders.due_showcases(date(2026, 7, 28))
+        due = reminders.due_showcases(date(2026, 7, 29))
 
         details = reminders.format_showcase_details(due[date(2026, 7, 31)])
 
@@ -51,7 +57,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sends_one_template_and_deduplicates_event_date(self):
         send = AsyncMock(return_value=True)
-        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 7, 21, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
@@ -85,13 +91,13 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     async def test_sends_only_missing_recipient_for_claimed_event_date(self):
         first_recipient = "919999995224"
         second_recipient = "919999998106"
-        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 7, 21, 9, 0, tzinfo=reminders.IST)
         with sqlite3.connect(self.db_path) as db:
             db.execute(
                 "INSERT INTO showcase_reminder_deliveries "
                 "(event_date, recipient, status, claimed_at) "
                 "VALUES ('2026-07-23', ?, 'delivered', "
-                "'20-07-2026 09:00:00 IST')",
+                "'21-07-2026 09:00:00 IST')",
                 (first_recipient,),
             )
         send = AsyncMock(return_value=True)
@@ -140,7 +146,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 "INSERT INTO showcase_reminder_deliveries "
                 "(event_date, status, claimed_at) "
                 "VALUES ('2026-07-23', 'delivered', "
-                "'20-07-2026 09:00:00 IST')"
+                "'21-07-2026 09:00:00 IST')"
             )
 
         with (
@@ -168,7 +174,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_send_is_released_for_retry(self):
         send = AsyncMock(side_effect=[False, True])
-        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 7, 21, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
@@ -221,7 +227,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 "INSERT INTO showcase_reminder_deliveries "
                 "(event_date, recipient, status, claimed_at, wa_message_id) "
                 "VALUES ('2026-07-23', '919999995224', 'accepted', "
-                "'20-07-2026 09:00:00 IST', ?)",
+                "'21-07-2026 09:00:00 IST', ?)",
                 ("wamid-showcase-test",),
             )
 
