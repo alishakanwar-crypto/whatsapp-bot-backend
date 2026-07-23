@@ -31,12 +31,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import logging
 import os
 import re
-from datetime import datetime, timezone, timedelta
+import sqlite3
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -46,12 +49,13 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from app.routes.agent_config import verify_agent_secret
 from app.services.whatsapp_service import (
     send_cloud_template_message,
+    send_cloud_text,
     upload_media_bytes_cloud,
 )
 
 logger = logging.getLogger("app.gate")
 
-IST = timezone(timedelta(hours=5, minutes=30))
+IST = ZoneInfo("Asia/Kolkata")
 router = APIRouter()
 
 # Parent vs Vendor is a heuristic split of UNRECOGNIZED entries (neither is
@@ -93,6 +97,9 @@ GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE = os.environ.get(
     "GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE",
     "ppis_cpplus_verified_head_count_correction",
 )
+GATE_INTELLIGENCE_ALERT_TEMPLATE = os.environ.get(
+    "GATE_INTELLIGENCE_ALERT_TEMPLATE", "",
+).strip()
 GATE_REPORT_DELIVERY_START_HOUR = 6
 GATE_REPORT_DELIVERY_END_HOUR = 18
 CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS = max(
@@ -152,6 +159,22 @@ _ENTRY_CAMERA_KEYWORDS = ("ENTRY GATE", "DISPERSAL", "BASEMENT")
 # this camera, and every person it detects entering is forwarded as a live
 # WhatsApp snapshot (see _send_cpplus_visitor_snapshot).
 _CPPLUS_CAMERA_MARKERS = ("CP PLUS", "CPPLUS")
+_C1_INTELLIGENCE_EVENT_TYPES = {
+    "congestion_started",
+    "congestion_cleared",
+    "loitering",
+    "vehicle_dwell",
+    "after_hours_movement",
+    "wrong_way",
+    "direction_reversal",
+    "camera_health",
+    "replay_discrepancy",
+}
+_C1_INTELLIGENCE_SEVERITIES = {"info", "warning", "critical"}
+_C1_FORBIDDEN_METADATA_KEYS = {
+    "name", "pin", "face", "crop", "image", "snapshot", "embedding",
+    "phone", "biometric",
+}
 
 
 def _is_cpplus_camera(camera: str) -> bool:
@@ -297,6 +320,64 @@ def _normalize_candidate_boundary_event(entry: dict) -> dict:
         "camera": camera,
         "image_direction": image_direction,
         "line_position": line_position,
+    }
+
+
+def _contains_forbidden_c1_metadata(value: object) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized_key = str(key).strip().lower()
+            if any(part in normalized_key for part in _C1_FORBIDDEN_METADATA_KEYS):
+                return True
+            if _contains_forbidden_c1_metadata(nested):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_forbidden_c1_metadata(item) for item in value)
+    return False
+
+
+def _normalize_c1_intelligence_event(entry: dict) -> dict:
+    event_id = str(entry.get("event_id", "")).strip()
+    timestamp = str(entry.get("timestamp", "")).strip()
+    camera = str(entry.get("camera", "")).strip()
+    event_type = str(entry.get("event_type", "")).strip().lower()
+    severity = str(entry.get("severity", "")).strip().lower()
+    metadata = entry.get("metadata", {})
+    try:
+        parsed_timestamp = datetime.strptime(
+            timestamp, "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+        metadata_json = json.dumps(
+            metadata,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid C1 intelligence event") from exc
+
+    if (
+        not event_id
+        or len(event_id) > 96
+        or not _is_cpplus_camera(camera)
+        or event_type not in _C1_INTELLIGENCE_EVENT_TYPES
+        or severity not in _C1_INTELLIGENCE_SEVERITIES
+        or entry.get("verification_only") is not True
+        or not isinstance(metadata, dict)
+        or len(metadata_json) > 4000
+        or _contains_forbidden_c1_metadata(metadata)
+    ):
+        raise ValueError("Invalid C1 intelligence event")
+
+    return {
+        "event_id": event_id,
+        "date": parsed_timestamp.strftime("%Y-%m-%d"),
+        "timestamp": timestamp,
+        "camera": camera,
+        "event_type": event_type,
+        "severity": severity,
+        "verification_only": True,
+        "metadata": metadata,
+        "metadata_json": metadata_json,
     }
 
 
@@ -1141,40 +1222,271 @@ async def _store_candidate_boundary_events(db, entries: list[dict]) -> int:
     return count
 
 
+async def _store_c1_intelligence_events(db, entries: list[dict]) -> int:
+    stored = 0
+    for entry in entries:
+        event = _normalize_c1_intelligence_event(entry)
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO c1_intelligence_events "
+            "(event_id, date, timestamp, camera, event_type, severity, "
+            "metadata_json, verification_only) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+            (
+                event["event_id"],
+                event["date"],
+                event["timestamp"],
+                event["camera"],
+                event["event_type"],
+                event["severity"],
+                event["metadata_json"],
+            ),
+        )
+        stored += max(cursor.rowcount, 0)
+    await db.commit()
+    return stored
+
+
+async def _get_c1_intelligence_events(db, date: str) -> list[dict]:
+    cursor = await db.execute(
+        "SELECT event_id, timestamp, camera, event_type, severity, "
+        "metadata_json, verification_only FROM c1_intelligence_events "
+        "WHERE date = ? ORDER BY timestamp",
+        (date,),
+    )
+    return [
+        {
+            "event_id": row[0],
+            "timestamp": row[1],
+            "camera": row[2],
+            "event_type": row[3],
+            "severity": row[4],
+            "metadata": json.loads(row[5] or "{}"),
+            "verification_only": bool(row[6]),
+        }
+        for row in await cursor.fetchall()
+    ]
+
+
+async def _get_pending_c1_alert_count(db, date: str) -> int:
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM c1_alert_deliveries delivery "
+        "JOIN c1_intelligence_events event ON event.event_id = delivery.event_id "
+        "WHERE event.date = ? AND delivery.status != 'sent'",
+        (date,),
+    )
+    row = await cursor.fetchone()
+    if not row or not isinstance(row[0], (int, float)):
+        return 0
+    return int(row[0] or 0)
+
+
+def _c1_alert_detail(event: dict) -> str:
+    metadata = event.get("metadata", {})
+    event_type = event["event_type"]
+    if event_type == "camera_health":
+        state = str(metadata.get("state", "unknown")).replace("_", " ")
+        return f"Camera state: {state}"
+    if event_type in {"after_hours_movement", "wrong_way"}:
+        direction = metadata.get(
+            "observed_direction",
+            metadata.get("direction", "unknown"),
+        )
+        return f"Anonymous movement direction: {direction}"
+    if event_type == "congestion_started":
+        return f"People in gate zone: {metadata.get('people', 0)}"
+    if event_type == "congestion_cleared":
+        return "Gate-zone congestion cleared"
+    if event_type in {"loitering", "vehicle_dwell"}:
+        return f"Observed dwell: {metadata.get('dwell_seconds', 0)} seconds"
+    if event_type == "direction_reversal":
+        return (
+            f"Direction changed from {metadata.get('previous_direction', 'unknown')} "
+            f"to {metadata.get('observed_direction', 'unknown')}"
+        )
+    if event_type == "replay_discrepancy":
+        return (
+            f"Live IN {metadata.get('live_in', 0)} vs replay IN "
+            f"{metadata.get('replay_in', 0)}; official count unchanged"
+        )
+    return "Anonymous operational signal"
+
+
+async def _claim_c1_alert(event_id: str, recipient: str, claimed_at: str) -> bool:
+    db = await _get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO c1_alert_deliveries "
+            "(event_id, recipient, status, claimed_at) "
+            "VALUES (?, ?, 'claimed', ?) "
+            "ON CONFLICT(event_id, recipient) DO UPDATE SET "
+            "status = 'claimed', claimed_at = excluded.claimed_at, sent_at = '' "
+            "WHERE c1_alert_deliveries.status = 'failed'",
+            (event_id, recipient, claimed_at),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def _finish_c1_alert(
+    event_id: str,
+    recipient: str,
+    sent: bool,
+    sent_at: str,
+) -> None:
+    db = await _get_db()
+    try:
+        await db.execute(
+            "UPDATE c1_alert_deliveries SET status = ?, sent_at = ? "
+            "WHERE event_id = ? AND recipient = ?",
+            ("sent" if sent else "failed", sent_at if sent else "", event_id, recipient),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _send_c1_intelligence_alerts(events: list[dict]) -> int:
+    sent_count = 0
+    for event in events:
+        alert_type = event["event_type"].replace("_", " ").upper()
+        detail = _c1_alert_detail(event)
+        try:
+            alert_time = datetime.strptime(
+                event["timestamp"], "%Y-%m-%d %H:%M:%S"
+            ).strftime("%d-%m-%Y %H:%M:%S IST")
+        except ValueError:
+            alert_time = event["timestamp"]
+        for recipient in GATE_REPORT_WHATSAPP_PHONES:
+            claimed_at = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
+            if not await _claim_c1_alert(event["event_id"], recipient, claimed_at):
+                continue
+            try:
+                if GATE_INTELLIGENCE_ALERT_TEMPLATE:
+                    sent = await send_cloud_template_message(
+                        recipient,
+                        GATE_INTELLIGENCE_ALERT_TEMPLATE,
+                        body_params=[
+                            alert_type,
+                            alert_time,
+                            detail,
+                        ],
+                    )
+                else:
+                    sent = await send_cloud_text(
+                        recipient,
+                        "PPIS C1 GATE ALERT\n"
+                        f"Type: {alert_type}\n"
+                        f"Time: {alert_time}\n"
+                        f"{detail}\n"
+                        "Anonymous, non-additive operational signal.",
+                    )
+            except Exception:
+                logger.exception(
+                    "[GATE] C1 alert failed for event %s and recipient ending %s",
+                    event["event_id"],
+                    recipient[-4:],
+                )
+                sent = False
+            await _finish_c1_alert(
+                event["event_id"],
+                recipient,
+                sent,
+                datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST"),
+            )
+            sent_count += int(sent)
+    return sent_count
+
+
 async def _store_vehicle_entries(db, entries: list[dict]) -> int:
-    """Store vehicle entry events in the database. Returns count stored."""
+    """Store vehicle events separately from pedestrian headcount."""
     count = 0
     for entry in entries:
-        ts = entry.get("timestamp", "")
-        date_part = ts.split(" ")[0] if " " in ts else datetime.now(IST).strftime("%Y-%m-%d")
-        camera = entry.get("camera", "")
-        direction = entry.get("direction", "IN")
-        vehicle_type = entry.get("vehicle_type", "car")
+        timestamp = str(entry.get("timestamp", "")).strip()
+        camera = str(entry.get("camera", "")).strip()
+        direction = str(entry.get("direction", "IN")).strip().upper()
+        vehicle_type = str(entry.get("vehicle_type", "vehicle")).strip().lower()
+        event_id = str(entry.get("event_id", "")).strip() or None
+        snapshot = str(entry.get("snapshot", ""))
+        try:
+            parsed_timestamp = datetime.strptime(
+                timestamp, "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=IST)
+            dwell_seconds = max(0, int(entry.get("dwell_seconds", 0)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid vehicle event") from exc
+        if (
+            not camera
+            or direction not in {"IN", "OUT"}
+            or vehicle_type not in {"car", "motorcycle", "bus", "truck", "vehicle"}
+            or (event_id is not None and len(event_id) > 96)
+        ):
+            raise ValueError("Invalid vehicle event")
 
-        snapshot = entry.get("snapshot", "")
-
-        await db.execute(
-            "INSERT INTO vehicle_entries (date, timestamp, camera, direction, vehicle_type, snapshot) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (date_part, ts, camera, direction, vehicle_type, snapshot),
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO vehicle_entries "
+            "(date, timestamp, camera, direction, vehicle_type, snapshot, "
+            "event_id, dwell_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                parsed_timestamp.strftime("%Y-%m-%d"),
+                timestamp,
+                camera,
+                direction,
+                vehicle_type,
+                snapshot,
+                event_id,
+                dwell_seconds,
+            ),
         )
-        count += 1
+        count += max(cursor.rowcount, 0)
     await db.commit()
     return count
 
 
 async def _get_vehicle_entries(db, date: str) -> list[dict]:
     """Get all vehicle entries for a date."""
-    cur = await db.execute(
-        "SELECT id, timestamp, camera, direction, vehicle_type, snapshot "
-        "FROM vehicle_entries WHERE date = ? ORDER BY timestamp",
-        (date,),
-    )
-    return [
-        {"id": r[0], "timestamp": r[1], "camera": r[2],
-         "direction": r[3], "vehicle_type": r[4], "snapshot": r[5] if len(r) > 5 else ""}
-        for r in await cur.fetchall()
-    ]
+    try:
+        cursor = await db.execute(
+            "SELECT id, timestamp, camera, direction, vehicle_type, snapshot, "
+            "event_id, dwell_seconds FROM vehicle_entries "
+            "WHERE date = ? ORDER BY timestamp",
+            (date,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row[0],
+                "timestamp": row[1],
+                "camera": row[2],
+                "direction": row[3],
+                "vehicle_type": row[4],
+                "snapshot": row[5] or "",
+                "event_id": row[6] or "",
+                "dwell_seconds": row[7] or 0,
+            }
+            for row in rows
+        ]
+    except sqlite3.OperationalError as exc:
+        if "no such column" not in str(exc).lower():
+            raise
+        cursor = await db.execute(
+            "SELECT id, timestamp, camera, direction, vehicle_type, snapshot "
+            "FROM vehicle_entries WHERE date = ? ORDER BY timestamp",
+            (date,),
+        )
+        return [
+            {
+                "id": row[0],
+                "timestamp": row[1],
+                "camera": row[2],
+                "direction": row[3],
+                "vehicle_type": row[4],
+                "snapshot": row[5] or "",
+                "event_id": "",
+                "dwell_seconds": 0,
+            }
+            for row in await cursor.fetchall()
+        ]
 
 
 async def _get_candidate_boundary_events(db, date: str) -> list[dict]:
@@ -2183,6 +2495,8 @@ async def receive_cpplus_hourly_recount(request: Request):
         hour_start, in_count, processed_frames, source,
     )
     asyncio.create_task(_send_verified_cpplus_correction(recount))
+    if source in {"camera_sd_recording", "school_pc_recording"}:
+        asyncio.create_task(_record_replay_discrepancy(recount))
     return {"status": "ok", "recount": recount}
 
 
@@ -2257,6 +2571,46 @@ async def receive_visitor_sightings(request: Request):
     cls_str = ", ".join(f"{k}={v}" for k, v in sorted(cls_log.items()))
     logger.info("[GATE] Stored %d DVR visitor sighting(s) [%s]", count, cls_str)
     return {"status": "ok", "stored": count}
+
+
+@router.post(
+    "/api/gate/c1-signal",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_c1_intelligence_events(request: Request):
+    """Store anonymous C1 operational signals without changing headcount."""
+    body = await request.json()
+    entries = body if isinstance(body, list) else [body]
+    if not entries or len(entries) > 100:
+        raise HTTPException(status_code=422, detail="Invalid C1 signal batch")
+    try:
+        normalized = [
+            _normalize_c1_intelligence_event(entry)
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if len(normalized) != len(entries):
+        raise HTTPException(status_code=422, detail="Invalid C1 signal batch")
+
+    db = await _get_db()
+    try:
+        stored = await _store_c1_intelligence_events(db, normalized)
+    finally:
+        await db.close()
+    asyncio.create_task(_send_c1_intelligence_alerts(normalized))
+    logger.info(
+        "[GATE] Accepted %d C1 operational signal(s); stored=%d",
+        len(normalized),
+        stored,
+    )
+    return {
+        "status": "ok",
+        "accepted": len(normalized),
+        "stored": stored,
+        "official_count_changed": False,
+    }
 
 
 @router.post(
@@ -4044,6 +4398,70 @@ def _parse_gate_entry_time(entry: dict) -> datetime | None:
         return None
 
 
+async def _record_replay_discrepancy(recount: dict) -> None:
+    try:
+        interval_start = datetime.strptime(
+            f"{recount['date']} {recount['hour_start']}",
+            "%Y-%m-%d %H:%M:%S",
+        ).replace(tzinfo=IST)
+        interval_end = datetime.strptime(
+            f"{recount['date']} {recount['hour_end']}",
+            "%Y-%m-%d %H:%M:%S",
+        ).replace(tzinfo=IST)
+    except (KeyError, TypeError, ValueError):
+        logger.error("[GATE] Invalid recount interval for discrepancy check")
+        return
+
+    db = await _get_db()
+    try:
+        entries = await _get_gate_entries(db, recount["date"])
+    finally:
+        await db.close()
+    live_entries = []
+    for entry in entries:
+        timestamp = _parse_gate_entry_time(entry)
+        if (
+            timestamp is not None
+            and interval_start <= timestamp < interval_end
+            and entry.get("direction", "IN") == "IN"
+            and entry.get("event_id")
+            and _official_cpplus_entry(entry)
+        ):
+            live_entries.append(entry)
+    live_in = len(_deduplicate_gate_entries(live_entries))
+    replay_in = int(recount["in_count"])
+    if live_in == replay_in:
+        return
+
+    event_key = (
+        f"{recount['date']}|{recount['hour_start']}|{recount['source']}|"
+        f"{live_in}|{replay_in}"
+    )
+    signal = _normalize_c1_intelligence_event({
+        "event_id": hashlib.sha256(event_key.encode()).hexdigest(),
+        "timestamp": interval_end.strftime("%Y-%m-%d %H:%M:%S"),
+        "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+        "event_type": "replay_discrepancy",
+        "severity": "warning",
+        "verification_only": True,
+        "metadata": {
+            "hour_start": recount["hour_start"],
+            "hour_end": recount["hour_end"],
+            "live_in": live_in,
+            "replay_in": replay_in,
+            "difference": replay_in - live_in,
+            "source": recount["source"],
+            "official_count_changed": False,
+        },
+    })
+    db = await _get_db()
+    try:
+        await _store_c1_intelligence_events(db, [signal])
+    finally:
+        await db.close()
+    await _send_c1_intelligence_alerts([signal])
+
+
 def _build_event_id_headcount_report(
     entries: list[dict], now: datetime, *, final: bool = False,
 ) -> dict:
@@ -4141,8 +4559,108 @@ def _build_event_id_headcount_report(
     }
 
 
+def _enrich_event_id_headcount_report(
+    report: dict,
+    vehicles: list[dict],
+    signals: list[dict],
+    *,
+    failed_alerts: int = 0,
+) -> dict:
+    report_start = report["report_start"]
+    report_end = report["report_end"]
+    interval_start = report["interval_start"]
+
+    def in_range(entry: dict, start: datetime) -> bool:
+        timestamp = _parse_gate_entry_time(entry)
+        return timestamp is not None and start <= timestamp < report_end
+
+    c1_vehicles = [
+        entry for entry in vehicles
+        if _is_cpplus_camera(entry.get("camera", ""))
+        and in_range(entry, report_start)
+    ]
+    interval_vehicles = [
+        entry for entry in c1_vehicles
+        if in_range(entry, interval_start)
+    ]
+
+    def vehicle_summary(entries: list[dict]) -> dict:
+        by_type: dict[str, int] = {}
+        for entry in entries:
+            vehicle_type = entry.get("vehicle_type", "vehicle")
+            by_type[vehicle_type] = by_type.get(vehicle_type, 0) + 1
+        return {
+            "in": sum(entry.get("direction") == "IN" for entry in entries),
+            "out": sum(entry.get("direction") == "OUT" for entry in entries),
+            "by_type": by_type,
+            "max_dwell_seconds": max(
+                (int(entry.get("dwell_seconds", 0)) for entry in entries),
+                default=0,
+            ),
+        }
+
+    cumulative_signals = [
+        signal for signal in signals if in_range(signal, report_start)
+    ]
+    interval_signals = [
+        signal for signal in cumulative_signals
+        if in_range(signal, interval_start)
+    ]
+
+    def signal_summary(entries: list[dict]) -> dict[str, int]:
+        summary: dict[str, int] = {}
+        for entry in entries:
+            event_type = entry.get("event_type", "unknown")
+            summary[event_type] = summary.get(event_type, 0) + 1
+        return summary
+
+    health_events = [
+        signal
+        for signal in signals
+        if signal.get("event_type") == "camera_health"
+        and (
+            (timestamp := _parse_gate_entry_time(signal)) is not None
+            and timestamp < report_end
+        )
+    ]
+    if health_events:
+        latest_health = health_events[-1].get("metadata", {}).get(
+            "state", "unknown"
+        )
+        health_status = (
+            "healthy"
+            if latest_health in {"healthy", "online"}
+            else str(latest_health)
+        )
+    else:
+        health_status = "no health alert reported"
+
+    replay_discrepancies = [
+        signal for signal in cumulative_signals
+        if signal.get("event_type") == "replay_discrepancy"
+    ]
+    report.update({
+        "interval_vehicles": vehicle_summary(interval_vehicles),
+        "total_vehicles": vehicle_summary(c1_vehicles),
+        "interval_signals": signal_summary(interval_signals),
+        "total_signals": signal_summary(cumulative_signals),
+        "health_status": health_status,
+        "replay_discrepancies": len(replay_discrepancies),
+        "replay_status": (
+            f"{len(replay_discrepancies)} discrepancy event(s); official total unchanged"
+            if replay_discrepancies
+            else "No replay discrepancy flagged"
+        ),
+        "failed_alerts": failed_alerts,
+    })
+    return report
+
+
 def _generate_event_id_headcount_pdf(report: dict) -> bytes:
     from fpdf import FPDF
+
+    if "interval_vehicles" not in report:
+        report = _enrich_event_id_headcount_report(report, [], [])
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -4209,6 +4727,68 @@ def _generate_event_id_headcount_pdf(report: dict) -> bytes:
     row("Total persons entered (IN)", report["total_in"], (226, 239, 218))
     row("Total persons exited (OUT)", report["total_out"], (255, 230, 230))
     row("Total net movement balance", report["net_movement"], (221, 235, 247))
+    pdf.ln(4)
+
+    section("SEPARATE C1 VEHICLE ANALYTICS")
+    interval_vehicles = report["interval_vehicles"]
+    total_vehicles = report["total_vehicles"]
+    vehicle_types = ", ".join(
+        f"{vehicle_type}: {count}"
+        for vehicle_type, count in sorted(total_vehicles["by_type"].items())
+    ) or "None"
+    row(
+        "Interval vehicles (IN / OUT)",
+        f"{interval_vehicles['in']} / {interval_vehicles['out']}",
+        (240, 240, 240),
+    )
+    row(
+        "Cumulative vehicles (IN / OUT)",
+        f"{total_vehicles['in']} / {total_vehicles['out']}",
+        (240, 240, 240),
+    )
+    row("Vehicle types", vehicle_types, (240, 240, 240))
+    row(
+        "Maximum observed vehicle dwell (seconds)",
+        total_vehicles["max_dwell_seconds"],
+        (240, 240, 240),
+    )
+    pdf.ln(4)
+
+    section("ANONYMOUS GATE INTELLIGENCE")
+    signal_counts = ", ".join(
+        f"{event_type.replace('_', ' ')}: {count}"
+        for event_type, count in sorted(report["interval_signals"].items())
+    ) or "None"
+    row("Camera health", report["health_status"], (240, 240, 240))
+    row(
+        "Interval operational signals",
+        sum(report["interval_signals"].values()),
+        (240, 240, 240),
+    )
+    pdf.set_font("Helvetica", "", 8)
+    pdf.multi_cell(
+        0,
+        5,
+        f"Signal breakdown: {signal_counts}",
+        border=1,
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    row(
+        "Replay discrepancy events",
+        report["replay_discrepancies"],
+        (240, 240, 240),
+    )
+    if report["replay_discrepancies"]:
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.multi_cell(
+            0,
+            5,
+            "Replay evidence is verification-only; official totals were not rewritten.",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+    row("Pending/failed alert deliveries", report["failed_alerts"], (240, 240, 240))
     pdf.ln(4)
 
     section("LEGACY AND STORAGE STATUS")
@@ -4299,12 +4879,22 @@ async def send_event_id_headcount_report(
     else:
         current = current.astimezone(IST)
 
+    report_date = current.strftime("%Y-%m-%d")
     db = await _get_db()
     try:
-        entries = await _get_gate_entries(db, current.strftime("%Y-%m-%d"))
+        entries = await _get_gate_entries(db, report_date)
+        vehicles = await _get_vehicle_entries(db, report_date)
+        signals = await _get_c1_intelligence_events(db, report_date)
+        pending_alerts = await _get_pending_c1_alert_count(db, report_date)
     finally:
         await db.close()
     report = _build_event_id_headcount_report(entries, current, final=final)
+    report = _enrich_event_id_headcount_report(
+        report,
+        vehicles,
+        signals,
+        failed_alerts=pending_alerts,
+    )
     pdf_bytes = _generate_event_id_headcount_pdf(report)
     filename = (
         f"PPIS_C1_{'Final' if final else 'Hourly'}_Headcount_"

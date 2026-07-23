@@ -437,13 +437,22 @@ async def _send_cloud_text(to: str, message: str) -> bool:
             if "messages" in data:
                 wa_id = data["messages"][0]["id"]
                 send_whatsapp_message.last_wa_id = wa_id  # type: ignore[attr-defined]
-                logger.info(f"Cloud API message sent to {recipient}, id: {wa_id[:30]}")
+                logger.info(
+                    "Cloud API message sent to recipient ending %s, id: %s",
+                    recipient[-4:],
+                    wa_id[:30],
+                )
                 return True
             logger.error(f"Cloud API send failed: {data}")
             return False
     except Exception as e:
         logger.error(f"Error sending Cloud API message: {e}")
         return False
+
+
+async def send_cloud_text(to: str, message: str) -> bool:
+    """Send freeform text through Meta Cloud API only."""
+    return await _send_cloud_text(to, message)
 
 
 async def _send_green_text(to: str, message: str) -> bool:

@@ -470,11 +470,39 @@ async def init_db():
                 direction TEXT NOT NULL DEFAULT 'IN',
                 vehicle_type TEXT NOT NULL DEFAULT 'car',
                 snapshot TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                event_id TEXT DEFAULT NULL,
+                dwell_seconds INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_vehicle_entries_date
                 ON vehicle_entries (date);
+
+            CREATE TABLE IF NOT EXISTS c1_intelligence_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT UNIQUE NOT NULL,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                verification_only INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_c1_intelligence_date
+                ON c1_intelligence_events (date, timestamp);
+
+            CREATE TABLE IF NOT EXISTS c1_alert_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'claimed',
+                claimed_at TEXT NOT NULL,
+                sent_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(event_id, recipient)
+            );
 
             CREATE TABLE IF NOT EXISTS candidate_boundary_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -686,6 +714,23 @@ async def init_db():
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_entries_event_id "
             "ON gate_entries (event_id) WHERE event_id IS NOT NULL"
+        )
+        try:
+            await db.execute(
+                "ALTER TABLE vehicle_entries ADD COLUMN event_id TEXT DEFAULT NULL"
+            )
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "ALTER TABLE vehicle_entries ADD COLUMN dwell_seconds INTEGER "
+                "NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_entries_event_id "
+            "ON vehicle_entries (event_id) WHERE event_id IS NOT NULL"
         )
 
         # visitor_dvr_sightings: add classification + snapshot + direction columns
