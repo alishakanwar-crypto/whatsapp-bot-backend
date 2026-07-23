@@ -1203,6 +1203,9 @@ SEED_CAMERA_MAPPING.update({
     "G11D C1": {
         "dvr_index": 2, "channel": 26, "description": "G11D C1", "cam_type": "C1",
     },
+    "GRADE 11D": {
+        "dvr_index": 2, "channel": 26, "description": "G11D C1", "cam_type": "C1",
+    },
     "3rd Floor T.Staff": {
         "dvr_index": 2, "channel": 28, "description": "3rd Floor T.Staff", "cam_type": "",
     },
