@@ -4468,7 +4468,7 @@ def _build_event_id_headcount_report(
     current = now.astimezone(IST) if now.tzinfo else now.replace(tzinfo=IST)
     report_end = current.replace(minute=0, second=0, microsecond=0)
     day_start = current.replace(hour=6, minute=0, second=0, microsecond=0)
-    interval_start = day_start if final else max(day_start, report_end - timedelta(hours=1))
+    interval_start = day_start if final else max(day_start, report_end - timedelta(hours=2))
 
     official: list[dict] = []
     for entry in entries:

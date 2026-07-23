@@ -139,8 +139,12 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 datetime(2026, 7, 23, 10, 0, tzinfo=gate.IST),
             )
 
-        self.assertEqual(report["interval_in"], 0)
+        self.assertEqual(report["interval_in"], 1)
         self.assertEqual(report["interval_out"], 2)
+        self.assertEqual(
+            report["interval_start"],
+            datetime(2026, 7, 23, 8, 0, tzinfo=gate.IST),
+        )
         self.assertEqual(report["total_in"], 1)
         self.assertEqual(report["total_out"], 2)
         self.assertEqual(report["net_movement"], -1)

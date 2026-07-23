@@ -714,7 +714,7 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
-    # --- C1 Event-ID Head Count Reports ---
+    # --- C1 Event-ID Head Count Reports (two-hour intervals + final) ---
     from app.routes.gate import (
         send_event_id_headcount_report_sync,
         send_final_event_id_headcount_report_sync,
@@ -729,9 +729,9 @@ def start_scheduler() -> None:
     scheduler.add_job(
         send_event_id_headcount_report_sync,
         trigger=CronTrigger(
-            hour="7-16", minute=0, second=0, timezone=SHOWCASE_IST,
+            hour="8,10,12,14,16", minute=0, second=0, timezone=SHOWCASE_IST,
         ),
-        id="gate_event_id_hourly_report",
+        id="gate_event_id_two_hour_report",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -743,7 +743,7 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info(
-        "Scheduled C1 event-ID reports for completed hours from 6:00 AM "
+        "Scheduled C1 event-ID reports every two hours from 6:00 AM "
         "through 4:00 PM IST, with the final 6:00 AM-5:00 PM report at 5:00 PM"
     )
 
