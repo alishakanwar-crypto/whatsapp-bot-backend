@@ -4076,14 +4076,24 @@ def _build_event_id_headcount_report(
         entry for entry in unique_out
         if interval_start <= _parse_gate_entry_time(entry) < report_end
     ]
-    event_id_rows = [
-        entry for entry in (*unique_in, *unique_out)
+    event_id_in = [
+        entry for entry in unique_in
         if str(entry.get("event_id") or "").strip()
     ]
-    interval_event_id_rows = [
-        entry for entry in (*interval_in, *interval_out)
+    event_id_out = [
+        entry for entry in unique_out
         if str(entry.get("event_id") or "").strip()
     ]
+    interval_event_id_in = [
+        entry for entry in interval_in
+        if str(entry.get("event_id") or "").strip()
+    ]
+    interval_event_id_out = [
+        entry for entry in interval_out
+        if str(entry.get("event_id") or "").strip()
+    ]
+    legacy_in = len(unique_in) - len(event_id_in)
+    legacy_out = len(unique_out) - len(event_id_out)
 
     return {
         "date": current.strftime("%Y-%m-%d"),
@@ -4114,9 +4124,19 @@ def _build_event_id_headcount_report(
         "raw_out": sum(
             entry.get("direction", "IN") == "OUT" for entry in official
         ),
-        "event_id_crossings": len(event_id_rows),
-        "interval_event_id_crossings": len(interval_event_id_rows),
-        "legacy_crossings": len(unique_in) + len(unique_out) - len(event_id_rows),
+        "event_id_in": len(event_id_in),
+        "event_id_out": len(event_id_out),
+        "event_id_net": len(event_id_in) - len(event_id_out),
+        "event_id_crossings": len(event_id_in) + len(event_id_out),
+        "interval_event_id_in": len(interval_event_id_in),
+        "interval_event_id_out": len(interval_event_id_out),
+        "interval_event_id_crossings": (
+            len(interval_event_id_in) + len(interval_event_id_out)
+        ),
+        "legacy_in": legacy_in,
+        "legacy_out": legacy_out,
+        "legacy_net": legacy_in - legacy_out,
+        "legacy_crossings": legacy_in + legacy_out,
         "is_final": final,
     }
 
@@ -4162,25 +4182,41 @@ def _generate_event_id_headcount_pdf(report: dict) -> bytes:
             new_x="LMARGIN", new_y="NEXT",
         )
 
-    section("LATEST INTERVAL")
+    section("LATEST COMPLETED INTERVAL")
     row("Persons entered (IN)", report["interval_in"], (226, 239, 218))
     row("Persons exited (OUT)", report["interval_out"], (255, 230, 230))
     row("Net movement (IN - OUT)", report["interval_net"], (221, 235, 247))
+    pdf.set_font("Helvetica", "I", 9)
+    interval_status = (
+        f"Updated event-ID crossings in this interval: "
+        f"{report['interval_event_id_in']} IN / "
+        f"{report['interval_event_id_out']} OUT."
+        if report["interval_event_id_crossings"]
+        else "No updated event-ID C1 crossing was recorded in this completed hour."
+    )
+    pdf.multi_cell(
+        0, 6, interval_status, new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(3)
+
+    section("UPDATED EVENT-ID COUNT SINCE 6:00 AM IST")
+    row("New event-ID entries (IN)", report["event_id_in"], (226, 239, 218))
+    row("New event-ID exits (OUT)", report["event_id_out"], (255, 230, 230))
+    row("New event-ID net movement", report["event_id_net"], (221, 235, 247))
     pdf.ln(4)
 
-    section("CUMULATIVE SINCE 6:00 AM IST")
-    row("Persons entered (IN)", report["total_in"], (226, 239, 218))
-    row("Persons exited (OUT)", report["total_out"], (255, 230, 230))
-    row("Net movement balance", report["net_movement"], (221, 235, 247))
+    section("COMBINED OFFICIAL COUNT SINCE 6:00 AM IST")
+    row("Total persons entered (IN)", report["total_in"], (226, 239, 218))
+    row("Total persons exited (OUT)", report["total_out"], (255, 230, 230))
+    row("Total net movement balance", report["net_movement"], (221, 235, 247))
     pdf.ln(4)
 
-    section("EVENT-ID COUNT STATUS")
+    section("LEGACY AND STORAGE STATUS")
     pdf.set_font("Helvetica", "", 9)
     for label, value in (
-        ("Distinct event-ID crossings in interval", report["interval_event_id_crossings"]),
-        ("Distinct event-ID crossings today", report["event_id_crossings"]),
-        ("Preserved legacy crossings today", report["legacy_crossings"]),
-        ("Raw stored C1 IN / OUT rows", f"{report['raw_in']} / {report['raw_out']}"),
+        ("Preserved legacy count (IN / OUT)", f"{report['legacy_in']} / {report['legacy_out']}"),
+        ("Distinct updated event-ID crossings", report["event_id_crossings"]),
+        ("Raw stored C1 rows (IN / OUT)", f"{report['raw_in']} / {report['raw_out']}"),
         ("Official source", "ENTRY GATE-OUTSIDE (CP Plus C1)"),
     ):
         pdf.cell(140, 8, f"  {label}", border=1, new_x="RIGHT")
@@ -4192,9 +4228,10 @@ def _generate_event_id_headcount_pdf(report: dict) -> bytes:
     pdf.set_font("Helvetica", "", 9)
     pdf.multi_cell(
         0, 5,
-        "Each new tracker event ID counts once. Different event IDs seconds apart "
-        "remain separate; a retry with the same ID is ignored. Historical rows without "
-        "an event ID retain their original 120-second deduplication behavior.",
+        "The UPDATED EVENT-ID section contains only crossings received from the new "
+        "tracker-ID implementation. Legacy rows are shown separately and retain their "
+        "historical 120-second deduplication behavior. The COMBINED section is their "
+        "sum; a retry with the same event ID is ignored.",
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.ln(2)
