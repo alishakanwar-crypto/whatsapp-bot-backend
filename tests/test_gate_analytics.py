@@ -14,7 +14,7 @@ import pytest
 # Point the app at a throwaway DB before importing anything that reads DB_PATH.
 _TMP_DB = os.path.join(tempfile.mkdtemp(), "test_app.db")
 os.environ["DB_PATH"] = _TMP_DB
-os.environ.setdefault("GATE_REPORT_WHATSAPP_PHONES", "911111111111,922222222222")
+os.environ.setdefault("GATE_ALERT_WHATSAPP_PHONES", "911111111111,922222222222")
 os.environ.setdefault("GATE_EXPECTED_DIRECTION", "IN")
 os.environ.setdefault("GATE_CONGESTION_PER_MIN", "5")
 os.environ.setdefault("GATE_CONGESTION_WINDOW_MIN", "5")
@@ -246,12 +246,12 @@ async def test_hourly_report_idempotent(_mock_send):
 
 # 11. Recipient reuse --------------------------------------------------------
 def test_recipient_reuse(monkeypatch):
-    monkeypatch.setenv("GATE_REPORT_WHATSAPP_PHONES", "933333333333, 944444444444")
+    monkeypatch.setenv("GATE_ALERT_WHATSAPP_PHONES", "933333333333, 944444444444")
     assert ga.get_gate_report_recipients() == ["933333333333", "944444444444"]
 
 
 async def test_no_recipients_no_send(monkeypatch, _mock_send):
-    monkeypatch.setenv("GATE_REPORT_WHATSAPP_PHONES", "")
+    monkeypatch.setenv("GATE_ALERT_WHATSAPP_PHONES", "")
     sent = await ga._send_anon_alert("congestion", "CP Plus", "now", "detail")
     assert sent == 0
     assert _mock_send == []
