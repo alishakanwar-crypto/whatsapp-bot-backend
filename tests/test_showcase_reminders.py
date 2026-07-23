@@ -40,14 +40,14 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def test_selects_exactly_two_day_lead_time_and_groups_same_date(self):
-        due = reminders.due_showcases(date(2026, 7, 28))
+    def test_selects_exactly_three_day_lead_time_and_groups_same_date(self):
+        due = reminders.due_showcases(date(2026, 7, 27))
 
         self.assertEqual(set(due), {date(2026, 7, 30)})
         self.assertEqual(len(due[date(2026, 7, 30)]), 2)
 
     def test_formats_all_same_day_showcases_in_one_message(self):
-        due = reminders.due_showcases(date(2026, 7, 29))
+        due = reminders.due_showcases(date(2026, 7, 28))
 
         details = reminders.format_showcase_details(due[date(2026, 7, 31)])
 
@@ -57,7 +57,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sends_one_template_and_deduplicates_event_date(self):
         send = AsyncMock(return_value=True)
-        now = datetime(2026, 7, 21, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
@@ -91,7 +91,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     async def test_sends_only_missing_recipient_for_claimed_event_date(self):
         first_recipient = "919999995224"
         second_recipient = "919999998106"
-        now = datetime(2026, 7, 21, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
         with sqlite3.connect(self.db_path) as db:
             db.execute(
                 "INSERT INTO showcase_reminder_deliveries "
@@ -174,7 +174,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_send_is_released_for_retry(self):
         send = AsyncMock(side_effect=[False, True])
-        now = datetime(2026, 7, 21, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
