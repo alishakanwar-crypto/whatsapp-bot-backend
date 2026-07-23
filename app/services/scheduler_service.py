@@ -726,6 +726,42 @@ def start_scheduler() -> None:
         )
     logger.info("Scheduled gate reconciliation reports every 30 min 6:00 AM - 5:00 PM IST")
 
+    # --- C1 Anonymous Gate Analytics ---
+    # Hourly analytics 07:00–17:00 IST, final analytics at 17:15 IST, and a
+    # congestion/loitering sweep every 5 min during operating hours.
+    # IST → UTC: subtract 5h30m.
+    from app.services.gate_analytics_service import (
+        hourly_analytics_sync, final_analytics_sync, congestion_sweep_sync,
+    )
+    for ist_hour in range(7, 18):  # 07:00–17:00 IST, on the hour
+        utc_total = (ist_hour * 60 - 330) % (24 * 60)
+        utc_h, utc_m = divmod(utc_total, 60)
+        scheduler.add_job(
+            hourly_analytics_sync,
+            trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
+            id=f"gate_hourly_analytics_{ist_hour:02d}",
+            replace_existing=True,
+        )
+    logger.info("Scheduled C1 hourly gate analytics 7:00 AM - 5:00 PM IST")
+
+    # Final end-of-day analytics at 17:15 IST (11:45 UTC).
+    scheduler.add_job(
+        final_analytics_sync,
+        trigger=CronTrigger(hour=11, minute=45, second=0),
+        id="gate_final_analytics",
+        replace_existing=True,
+    )
+    logger.info("Scheduled C1 final gate analytics at 5:15 PM IST")
+
+    # Congestion + loitering sweep every 5 min, 06:00–17:00 IST (00:30–11:30 UTC).
+    scheduler.add_job(
+        congestion_sweep_sync,
+        trigger=CronTrigger(hour="0-11", minute="*/5", second=0),
+        id="gate_congestion_sweep",
+        replace_existing=True,
+    )
+    logger.info("Scheduled C1 congestion/loitering sweep every 5 min during operating hours")
+
     # --- Mood & Temperament Reports — PERMANENTLY DISABLED ---
     # Previously ran hourly 7 AM - 12 PM IST. Disabled per user request.
     logger.info("Mood reports DISABLED (permanently)")
