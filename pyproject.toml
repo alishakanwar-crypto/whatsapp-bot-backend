@@ -38,6 +38,9 @@ fpdf2 = "^2.8.0"
 markitdown = ">=0.1.0"
 opencv-python-headless = "^4.8.0"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

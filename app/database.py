@@ -493,6 +493,94 @@ async def init_db():
                 ON summer_camp_students (contact_no);
             CREATE INDEX IF NOT EXISTS idx_summer_camp_name
                 ON summer_camp_students (student_name);
+
+            -- ============================================================
+            -- CP Plus C1 facial-identity pilot (audit-only, non-additive)
+            --
+            -- Deliberately isolated from the production attendance / gate /
+            -- trueface flows. Design guarantees:
+            --   * The official anonymous count lives ONLY in c1_count_events
+            --     and is written once at ingest — identity code never mutates
+            --     it. This preserves the "official anonymous count".
+            --   * Identity observations are annotations linked to a count
+            --     event; they are non-additive (they never change the count)
+            --     and never flow into attendance_records, gate_entries, or
+            --     notifications.
+            --   * Purely additive — no existing table is modified.
+            -- ============================================================
+
+            -- Official anonymous count — source of truth. Write-once.
+            CREATE TABLE IF NOT EXISTS c1_count_events (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_uid       TEXT UNIQUE NOT NULL,
+                camera_label    TEXT NOT NULL DEFAULT 'C1',
+                anonymous_count INTEGER NOT NULL,
+                captured_at     TEXT NOT NULL,
+                source          TEXT NOT NULL DEFAULT 'cpplus_c1',
+                frame_hash      TEXT NOT NULL DEFAULT '',
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_c1_count_captured
+                ON c1_count_events (captured_at);
+
+            -- Identity observations — non-additive annotations for a count event.
+            CREATE TABLE IF NOT EXISTS c1_identity_observations (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id            INTEGER NOT NULL,
+                track_id            TEXT NOT NULL DEFAULT '',
+                match_status        TEXT NOT NULL DEFAULT 'unknown',
+                candidate_person_id TEXT DEFAULT NULL,
+                confidence          REAL NOT NULL DEFAULT 0,
+                temp_id             TEXT DEFAULT NULL,
+                thumb_ref           TEXT NOT NULL DEFAULT '',
+                review_status       TEXT NOT NULL DEFAULT 'pending',
+                created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (event_id) REFERENCES c1_count_events (id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_c1_obs_event
+                ON c1_identity_observations (event_id);
+            CREATE INDEX IF NOT EXISTS idx_c1_obs_review
+                ON c1_identity_observations (review_status);
+            CREATE INDEX IF NOT EXISTS idx_c1_obs_temp
+                ON c1_identity_observations (temp_id);
+
+            -- Unknown temporary IDs — short-lived handles for unmatched faces.
+            CREATE TABLE IF NOT EXISTS c1_unknown_identities (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                temp_id               TEXT UNIQUE NOT NULL,
+                first_seen_at         TEXT NOT NULL,
+                last_seen_at          TEXT NOT NULL,
+                observation_count     INTEGER NOT NULL DEFAULT 0,
+                status                TEXT NOT NULL DEFAULT 'active',
+                merged_into_person_id TEXT DEFAULT NULL,
+                expires_at            TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_c1_unknown_status
+                ON c1_unknown_identities (status);
+            CREATE INDEX IF NOT EXISTS idx_c1_unknown_expires
+                ON c1_unknown_identities (expires_at);
+
+            -- Manual review — append-only human-adjudication audit trail.
+            CREATE TABLE IF NOT EXISTS c1_manual_reviews (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                observation_id  INTEGER NOT NULL,
+                reviewer        TEXT NOT NULL DEFAULT '',
+                action          TEXT NOT NULL,
+                previous_status TEXT NOT NULL DEFAULT '',
+                new_status      TEXT NOT NULL DEFAULT '',
+                note            TEXT NOT NULL DEFAULT '',
+                ip_address      TEXT NOT NULL DEFAULT '',
+                reviewed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (observation_id) REFERENCES c1_identity_observations (id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_c1_review_obs
+                ON c1_manual_reviews (observation_id);
+            CREATE INDEX IF NOT EXISTS idx_c1_review_time
+                ON c1_manual_reviews (reviewed_at);
         """)
 
         # ------------------------------------------------------------------
