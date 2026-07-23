@@ -237,7 +237,13 @@ async def _get_db():
 
 
 async def _store_gate_entries(db, entries: list[dict]) -> int:
-    """Store gate entry events in the database. Returns count stored."""
+    """Store gate entry events in the database. Returns count stored.
+
+    When an entry carries a stable ``event_id`` the insert is idempotent
+    (INSERT OR IGNORE against a partial UNIQUE index), so retried/duplicated
+    agent POSTs do not double-count. Entries without an ``event_id`` behave
+    as before.
+    """
     count = 0
     for entry in entries:
         ts = entry.get("timestamp", "")
@@ -246,13 +252,15 @@ async def _store_gate_entries(db, entries: list[dict]) -> int:
         direction = entry.get("direction", "IN")
         attire_color = entry.get("attire_color", "unknown")
         person_crop = entry.get("person_crop", "")
+        event_id = entry.get("event_id", "") or ""
 
-        await db.execute(
-            "INSERT INTO gate_entries (date, timestamp, camera, direction, attire_color, person_crop) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (date_part, ts, camera, direction, attire_color, person_crop),
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO gate_entries "
+            "(date, timestamp, camera, direction, attire_color, person_crop, event_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (date_part, ts, camera, direction, attire_color, person_crop, event_id),
         )
-        count += 1
+        count += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
     await db.commit()
     return count
 
@@ -493,13 +501,15 @@ async def _store_vehicle_entries(db, entries: list[dict]) -> int:
         vehicle_type = entry.get("vehicle_type", "car")
 
         snapshot = entry.get("snapshot", "")
+        event_id = entry.get("event_id", "") or ""
 
-        await db.execute(
-            "INSERT INTO vehicle_entries (date, timestamp, camera, direction, vehicle_type, snapshot) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (date_part, ts, camera, direction, vehicle_type, snapshot),
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO vehicle_entries "
+            "(date, timestamp, camera, direction, vehicle_type, snapshot, event_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (date_part, ts, camera, direction, vehicle_type, snapshot, event_id),
         )
-        count += 1
+        count += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
     await db.commit()
     return count
 
@@ -1395,9 +1405,32 @@ async def receive_gate_entries(request: Request):
             snapshot_count += 1
             asyncio.create_task(_send_cpplus_visitor_snapshot(e))
 
+    # Anonymous analytics: run per-event detectors (after-hours, wrong-way) on
+    # each crossing and a congestion sweep once per batch. These are fire-and-
+    # forget; failures never block ingestion.
+    asyncio.create_task(_run_ingest_analytics(entries))
+
     logger.info("[GATE] Stored %d gate entry event(s); queued %d CP Plus snapshot(s)",
                 count, snapshot_count)
     return {"status": "ok", "stored": count, "snapshots": snapshot_count}
+
+
+async def _run_ingest_analytics(entries: list[dict]) -> None:
+    """Background: anonymous per-event + sweep detectors for a gate batch."""
+    try:
+        from app.services.gate_analytics_service import (
+            check_after_hours, check_wrong_way, check_congestion,
+        )
+        db = await _get_db()
+        try:
+            for e in entries:
+                await check_after_hours(db, e)
+                await check_wrong_way(db, e)
+            await check_congestion(db)
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.error("[GATE] ingest analytics failed: %s", e)
 
 
 @router.post("/api/gate/teacher-sighting")
@@ -1490,6 +1523,59 @@ async def receive_vehicle_entries(request: Request):
 
     logger.info("[GATE] Stored %d vehicle entry event(s)", count)
     return {"status": "ok", "stored": count}
+
+
+@router.post("/api/gate/replay-recount")
+async def receive_replay_recount(request: Request):
+    """Receive an SD-card replay recount that corrects the live C1 count.
+
+    Body: {"date": "YYYY-MM-DD", "window_start": "HH:MM", "window_end": "HH:MM",
+           "live_count": int, "replay_count": int, "source": "sd_replay"}
+
+    The replay count is authoritative and REPLACES the live count for its
+    window (non-additive). A discrepancy beyond the threshold emits an
+    anonymous alert.
+    """
+    body = await request.json()
+    from app.services.gate_analytics_service import store_replay_recount
+
+    date = body.get("date") or datetime.now(IST).strftime("%Y-%m-%d")
+    db = await _get_db()
+    try:
+        alerted = await store_replay_recount(
+            db, date,
+            body.get("window_start", ""),
+            body.get("window_end", ""),
+            int(body.get("live_count", 0)),
+            int(body.get("replay_count", 0)),
+            body.get("source", "sd_replay"),
+        )
+    finally:
+        await db.close()
+    return {"status": "ok", "alerted": alerted}
+
+
+@router.post("/api/gate/camera-health")
+async def receive_camera_health(request: Request):
+    """Receive a camera-health status change from the campus agent and emit an
+    anonymous alert on an online→offline transition.
+
+    Body: {"camera": "...", "status": "offline", "consecutive_failures": int}
+    """
+    body = await request.json()
+    from app.services.gate_analytics_service import check_camera_health
+
+    db = await _get_db()
+    try:
+        alerted = await check_camera_health(
+            db,
+            body.get("camera", "C1 Gate"),
+            body.get("status", "offline"),
+            int(body.get("consecutive_failures", 0)),
+        )
+    finally:
+        await db.close()
+    return {"status": "ok", "alerted": alerted}
 
 
 @router.get("/api/gate/status")
