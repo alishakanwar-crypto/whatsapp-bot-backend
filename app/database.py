@@ -337,6 +337,19 @@ async def init_db():
                 reason TEXT NOT NULL DEFAULT 'Security risk',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- CP Plus C1 (outside gate) verification-only signals. These are
+            -- anonymous (no faces/names/biometrics) and NEVER affect official
+            -- head-count totals. event_id is a stable, de-duplicating key.
+            CREATE TABLE IF NOT EXISTS c1_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                signal_type TEXT NOT NULL,
+                camera TEXT NOT NULL DEFAULT '',
+                event_timestamp TEXT NOT NULL DEFAULT '',
+                data TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # ------------------------------------------------------------------
