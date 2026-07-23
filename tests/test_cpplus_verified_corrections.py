@@ -54,6 +54,88 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(gate._official_cpplus_entry(historical))
             self.assertFalse(gate._official_cpplus_entry(overlapping_camera))
 
+    def test_tracker_event_ids_keep_group_crossings_seconds_apart(self):
+        entries = [
+            {
+                "event_id": "crossing-a",
+                "timestamp": "2026-07-23 07:35:00",
+                "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                "direction": "OUT",
+            },
+            {
+                "event_id": "crossing-b",
+                "timestamp": "2026-07-23 07:35:04",
+                "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                "direction": "OUT",
+            },
+        ]
+
+        self.assertEqual(len(gate._deduplicate_gate_entries(entries)), 2)
+
+    def test_retried_tracker_event_id_is_counted_once(self):
+        entry = {
+            "event_id": "crossing-a",
+            "timestamp": "2026-07-23 07:35:00",
+            "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+            "direction": "OUT",
+        }
+
+        self.assertEqual(len(gate._deduplicate_gate_entries([entry, entry])), 1)
+
+    def test_legacy_events_retain_time_deduplication(self):
+        entries = [
+            {
+                "timestamp": "2026-07-23 07:35:00",
+                "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                "direction": "OUT",
+            },
+            {
+                "timestamp": "2026-07-23 07:35:04",
+                "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                "direction": "OUT",
+            },
+        ]
+
+        self.assertEqual(len(gate._deduplicate_gate_entries(entries)), 1)
+
+    async def test_store_gate_entries_is_idempotent_by_event_id(self):
+        db = await aiosqlite.connect(":memory:")
+        try:
+            await db.executescript(
+                """
+                CREATE TABLE gate_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT DEFAULT NULL,
+                    date TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    camera TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    attire_color TEXT DEFAULT 'unknown',
+                    person_crop TEXT DEFAULT ''
+                );
+                CREATE UNIQUE INDEX idx_gate_entries_event_id
+                    ON gate_entries (event_id) WHERE event_id IS NOT NULL;
+                """
+            )
+            entry = {
+                "event_id": "crossing-a",
+                "timestamp": "2026-07-23 07:35:00",
+                "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                "direction": "OUT",
+            }
+
+            first = await gate._store_gate_entries(db, [entry])
+            retry = await gate._store_gate_entries(db, [entry])
+            rows = await db.execute_fetchall(
+                "SELECT event_id FROM gate_entries"
+            )
+        finally:
+            await db.close()
+
+        self.assertEqual(first, [entry])
+        self.assertEqual(retry, [])
+        self.assertEqual(rows, [("crossing-a",)])
+
     def test_mid_hour_cutover_never_adds_full_hour_recording_count(self):
         count_start = datetime(2026, 7, 22, 16, 21, tzinfo=gate.IST)
         report = gate._build_cpplus_head_count_report(
@@ -511,6 +593,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 """
                 CREATE TABLE gate_entries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT DEFAULT NULL,
                     date TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     camera TEXT NOT NULL,

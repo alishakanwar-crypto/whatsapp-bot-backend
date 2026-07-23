@@ -391,7 +391,8 @@ async def init_db():
                 reconciled INTEGER DEFAULT 0,
                 matched_pin TEXT DEFAULT '',
                 notes TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                event_id TEXT DEFAULT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_gate_entries_date
@@ -664,6 +665,17 @@ async def init_db():
             )
         except Exception:
             pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE gate_entries ADD COLUMN event_id TEXT DEFAULT NULL"
+            )
+        except Exception:
+            pass
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_entries_event_id "
+            "ON gate_entries (event_id) WHERE event_id IS NOT NULL"
+        )
 
         # visitor_dvr_sightings: add classification + snapshot + direction columns
         for col_name, col_def in [
