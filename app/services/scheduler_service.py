@@ -170,6 +170,25 @@ def _send_reminder_sync(chat_id: str, message: str) -> None:
         loop.close()
 
 
+def _c1_pilot_purge_sync() -> None:
+    """Retention sweep for the C1 facial-identity pilot.
+
+    Expires stale unknown temp IDs and deletes old identity observations,
+    while preserving the official anonymous count. No-op work is cheap, so
+    this is safe to run even when the pilot is disabled.
+    """
+    from app.routes.c1_pilot import purge_c1_pilot_data
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(purge_c1_pilot_data())
+        if result.get("expired_unknowns") or result.get("deleted_observations"):
+            logger.info(f"C1 pilot retention sweep: {result}")
+    except Exception as e:
+        logger.error(f"C1 pilot retention sweep failed: {e}")
+    finally:
+        loop.close()
+
+
 # ---------------------------------------------------------------------------
 # Birthday Wishes
 # ---------------------------------------------------------------------------
@@ -522,6 +541,15 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled OpenAI credit balance check every 12 hours")
+
+    # C1 facial-identity pilot retention sweep every 6 hours
+    scheduler.add_job(
+        _c1_pilot_purge_sync,
+        trigger=IntervalTrigger(hours=6),
+        id="c1_pilot_retention_sweep",
+        replace_existing=True,
+    )
+    logger.info("Scheduled C1 pilot retention sweep every 6 hours")
 
     # Schedule Google Sheet teacher data refresh every 14 days (fortnightly)
     # Also run once at startup (after 30 seconds delay to let app initialize)
