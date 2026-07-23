@@ -451,6 +451,17 @@ async def init_db():
                 UNIQUE(date, hour_start, phone)
             );
 
+            CREATE TABLE IF NOT EXISTS gate_headcount_report_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'claimed',
+                claimed_at TEXT NOT NULL,
+                sent_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(date, period_key, recipient)
+            );
+
             CREATE TABLE IF NOT EXISTS vehicle_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
