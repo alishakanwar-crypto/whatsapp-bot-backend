@@ -714,20 +714,37 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
-    # --- Gate Head Count Reports (verified only) ---
-    # A trusted camera recount triggers the report immediately. This retry job
-    # recovers only recipients whose verified delivery failed; there are no
-    # scheduled provisional or final fallback reports.
-    from app.routes.gate import send_pending_cpplus_corrections_sync
+    # --- C1 Event-ID Head Count Reports ---
+    from app.routes.gate import (
+        send_event_id_headcount_report_sync,
+        send_final_event_id_headcount_report_sync,
+        send_pending_cpplus_corrections_sync,
+    )
     scheduler.add_job(
         send_pending_cpplus_corrections_sync,
         trigger=IntervalTrigger(minutes=5),
         id="gate_verified_correction_retry",
         replace_existing=True,
     )
+    scheduler.add_job(
+        send_event_id_headcount_report_sync,
+        trigger=CronTrigger(
+            hour="7-16", minute=0, second=0, timezone=SHOWCASE_IST,
+        ),
+        id="gate_event_id_hourly_report",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_final_event_id_headcount_report_sync,
+        trigger=CronTrigger(
+            hour=17, minute=0, second=0, timezone=SHOWCASE_IST,
+        ),
+        id="gate_event_id_final_report",
+        replace_existing=True,
+    )
     logger.info(
-        "Provisional and final fallback head-count reports DISABLED; "
-        "verified-only delivery retries run every 5 minutes"
+        "Scheduled C1 event-ID reports for completed hours from 6:00 AM "
+        "through 4:00 PM IST, with the final 6:00 AM-5:00 PM report at 5:00 PM"
     )
 
     # --- Mood & Temperament Reports — PERMANENTLY DISABLED ---

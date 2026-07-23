@@ -4035,6 +4035,300 @@ def _build_cpplus_head_count_report(
     }
 
 
+def _parse_gate_entry_time(entry: dict) -> datetime | None:
+    try:
+        return datetime.strptime(
+            entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_event_id_headcount_report(
+    entries: list[dict], now: datetime, *, final: bool = False,
+) -> dict:
+    current = now.astimezone(IST) if now.tzinfo else now.replace(tzinfo=IST)
+    report_end = current.replace(minute=0, second=0, microsecond=0)
+    day_start = current.replace(hour=6, minute=0, second=0, microsecond=0)
+    interval_start = day_start if final else max(day_start, report_end - timedelta(hours=1))
+
+    official: list[dict] = []
+    for entry in entries:
+        timestamp = _parse_gate_entry_time(entry)
+        if (
+            timestamp is not None
+            and day_start <= timestamp < report_end
+            and _official_cpplus_entry(entry)
+        ):
+            official.append(entry)
+
+    unique_in = _deduplicate_gate_entries(
+        [entry for entry in official if entry.get("direction", "IN") == "IN"]
+    )
+    unique_out = _deduplicate_gate_entries(
+        [entry for entry in official if entry.get("direction", "IN") == "OUT"]
+    )
+    interval_in = [
+        entry for entry in unique_in
+        if interval_start <= _parse_gate_entry_time(entry) < report_end
+    ]
+    interval_out = [
+        entry for entry in unique_out
+        if interval_start <= _parse_gate_entry_time(entry) < report_end
+    ]
+    event_id_rows = [
+        entry for entry in (*unique_in, *unique_out)
+        if str(entry.get("event_id") or "").strip()
+    ]
+    interval_event_id_rows = [
+        entry for entry in (*interval_in, *interval_out)
+        if str(entry.get("event_id") or "").strip()
+    ]
+
+    return {
+        "date": current.strftime("%Y-%m-%d"),
+        "generated_at": current.strftime("%d-%m-%Y %H:%M:%S IST"),
+        "report_start": day_start,
+        "report_end": report_end,
+        "interval_start": interval_start,
+        "interval_display": (
+            f"{day_start.strftime('%d-%m-%Y %H:%M:%S')} - "
+            f"{report_end.strftime('%d-%m-%Y %H:%M:%S')} IST"
+            if final
+            else f"{interval_start.strftime('%d-%m-%Y %H:%M:%S')} - "
+            f"{report_end.strftime('%d-%m-%Y %H:%M:%S')} IST"
+        ),
+        "period_key": (
+            f"final-{report_end.strftime('%H%M')}"
+            if final else interval_start.strftime("%H%M")
+        ),
+        "interval_in": len(interval_in),
+        "interval_out": len(interval_out),
+        "interval_net": len(interval_in) - len(interval_out),
+        "total_in": len(unique_in),
+        "total_out": len(unique_out),
+        "net_movement": len(unique_in) - len(unique_out),
+        "raw_in": sum(
+            entry.get("direction", "IN") == "IN" for entry in official
+        ),
+        "raw_out": sum(
+            entry.get("direction", "IN") == "OUT" for entry in official
+        ),
+        "event_id_crossings": len(event_id_rows),
+        "interval_event_id_crossings": len(interval_event_id_rows),
+        "legacy_crossings": len(unique_in) + len(unique_out) - len(event_id_rows),
+        "is_final": final,
+    }
+
+
+def _generate_event_id_headcount_pdf(report: dict) -> bytes:
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    title = (
+        "PPIS C1 FINAL HEAD COUNT REPORT"
+        if report["is_final"] else "PPIS C1 HOURLY HEAD COUNT REPORT"
+    )
+    pdf.set_font("Helvetica", "B", 17)
+    pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(
+        0, 6, f"Reporting interval: {report['interval_display']}",
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
+    pdf.cell(
+        0, 6, f"Generated: {report['generated_at']}",
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
+    pdf.ln(4)
+
+    def section(title_text: str) -> None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(
+            0, 8, f"  {title_text}", new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+
+    def row(label: str, value: object, fill: tuple[int, int, int]) -> None:
+        pdf.set_fill_color(*fill)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(145, 9, f"  {label}", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(
+            0, 9, str(value), border=1, fill=True, align="C",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+
+    section("LATEST INTERVAL")
+    row("Persons entered (IN)", report["interval_in"], (226, 239, 218))
+    row("Persons exited (OUT)", report["interval_out"], (255, 230, 230))
+    row("Net movement (IN - OUT)", report["interval_net"], (221, 235, 247))
+    pdf.ln(4)
+
+    section("CUMULATIVE SINCE 6:00 AM IST")
+    row("Persons entered (IN)", report["total_in"], (226, 239, 218))
+    row("Persons exited (OUT)", report["total_out"], (255, 230, 230))
+    row("Net movement balance", report["net_movement"], (221, 235, 247))
+    pdf.ln(4)
+
+    section("EVENT-ID COUNT STATUS")
+    pdf.set_font("Helvetica", "", 9)
+    for label, value in (
+        ("Distinct event-ID crossings in interval", report["interval_event_id_crossings"]),
+        ("Distinct event-ID crossings today", report["event_id_crossings"]),
+        ("Preserved legacy crossings today", report["legacy_crossings"]),
+        ("Raw stored C1 IN / OUT rows", f"{report['raw_in']} / {report['raw_out']}"),
+        ("Official source", "ENTRY GATE-OUTSIDE (CP Plus C1)"),
+    ):
+        pdf.cell(140, 8, f"  {label}", border=1, new_x="RIGHT")
+        pdf.cell(
+            0, 8, str(value), border=1, align="C",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.multi_cell(
+        0, 5,
+        "Each new tracker event ID counts once. Different event IDs seconds apart "
+        "remain separate; a retry with the same ID is ignored. Historical rows without "
+        "an event ID retain their original 120-second deduplication behavior.",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.multi_cell(
+        0, 5,
+        "Net movement is not proof of total campus occupancy. Face, TrueFace, DVR, "
+        "visitor and vehicle observations remain separate and non-additive. No names, "
+        "images or biometric data are included.",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
+async def _claim_event_id_report(
+    date: str, period_key: str, recipient: str, claimed_at: str,
+) -> bool:
+    db = await _get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO gate_headcount_report_deliveries "
+            "(date, period_key, recipient, status, claimed_at) "
+            "VALUES (?, ?, ?, 'claimed', ?) "
+            "ON CONFLICT(date, period_key, recipient) DO UPDATE SET "
+            "status = 'claimed', claimed_at = excluded.claimed_at, sent_at = '' "
+            "WHERE gate_headcount_report_deliveries.status = 'failed'",
+            (date, period_key, recipient, claimed_at),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+    finally:
+        await db.close()
+
+
+async def _finish_event_id_report(
+    date: str, period_key: str, recipient: str, sent: bool, timestamp: str,
+) -> None:
+    db = await _get_db()
+    try:
+        await db.execute(
+            "UPDATE gate_headcount_report_deliveries SET status = ?, sent_at = ? "
+            "WHERE date = ? AND period_key = ? AND recipient = ?",
+            (
+                "sent" if sent else "failed",
+                timestamp if sent else "",
+                date,
+                period_key,
+                recipient,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def send_event_id_headcount_report(
+    *, final: bool = False, now: datetime | None = None,
+) -> int:
+    current = now or datetime.now(IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=IST)
+    else:
+        current = current.astimezone(IST)
+
+    db = await _get_db()
+    try:
+        entries = await _get_gate_entries(db, current.strftime("%Y-%m-%d"))
+    finally:
+        await db.close()
+    report = _build_event_id_headcount_report(entries, current, final=final)
+    pdf_bytes = _generate_event_id_headcount_pdf(report)
+    filename = (
+        f"PPIS_C1_{'Final' if final else 'Hourly'}_Headcount_"
+        f"{report['date']}_{report['period_key']}.pdf"
+    )
+
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        upload_media_bytes_cloud,
+    )
+
+    document_id = await upload_media_bytes_cloud(
+        pdf_bytes, "application/pdf", filename,
+    )
+    if not document_id:
+        logger.error("[GATE] Event-ID head-count PDF upload failed")
+        return 0
+
+    sent_count = 0
+    for recipient in GATE_REPORT_WHATSAPP_PHONES:
+        if not await _claim_event_id_report(
+            report["date"], report["period_key"], recipient,
+            report["generated_at"],
+        ):
+            continue
+        try:
+            sent = await send_cloud_template_message(
+                recipient,
+                GATE_REPORT_WHATSAPP_TEMPLATE,
+                body_params=[
+                    report["generated_at"],
+                    str(report["interval_in"]),
+                    str(report["total_in"]),
+                ],
+                header_document_id=document_id,
+                header_document_filename=filename,
+            )
+        except Exception:
+            logger.exception(
+                "[GATE] Event-ID head-count report failed for recipient ending %s",
+                recipient[-4:],
+            )
+            sent = False
+        await _finish_event_id_report(
+            report["date"], report["period_key"], recipient, sent,
+            datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST"),
+        )
+        if sent:
+            sent_count += 1
+    logger.info(
+        "[GATE] Event-ID %s report %s: IN=%d OUT=%d NET=%d sent=%d",
+        "final" if final else "hourly",
+        report["interval_display"],
+        report["total_in"],
+        report["total_out"],
+        report["net_movement"],
+        sent_count,
+    )
+    return sent_count
+
+
 async def send_reconciliation_report(*, final: bool = False):
     """Count CP Plus IN crossings and WhatsApp an interval or final report."""
     now = datetime.now(IST)
@@ -4429,6 +4723,16 @@ async def send_pending_cpplus_corrections() -> None:
 def send_pending_cpplus_corrections_sync() -> None:
     """Sync wrapper for retrying verified recount corrections."""
     asyncio.run(send_pending_cpplus_corrections())
+
+
+def send_event_id_headcount_report_sync() -> None:
+    """Send the completed-hour C1 event-ID report."""
+    asyncio.run(send_event_id_headcount_report())
+
+
+def send_final_event_id_headcount_report_sync() -> None:
+    """Send the final 6:00 AM-5:00 PM IST C1 event-ID report."""
+    asyncio.run(send_event_id_headcount_report(final=True))
 
 
 def send_reconciliation_report_sync():

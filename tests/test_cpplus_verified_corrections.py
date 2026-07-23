@@ -98,6 +98,102 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(gate._deduplicate_gate_entries(entries)), 1)
 
+    def test_event_id_report_separates_group_crossings_and_preserves_legacy(self):
+        legacy = {
+            "timestamp": "2026-07-23 08:10:00",
+            "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+            "direction": "IN",
+        }
+        crossing_a = {
+            "event_id": "crossing-a",
+            "timestamp": "2026-07-23 09:15:00",
+            "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+            "direction": "OUT",
+        }
+        crossing_b = {
+            "event_id": "crossing-b",
+            "timestamp": "2026-07-23 09:15:04",
+            "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+            "direction": "OUT",
+        }
+        entries = [
+            legacy,
+            {**legacy, "timestamp": "2026-07-23 08:10:04"},
+            crossing_a,
+            crossing_a,
+            crossing_b,
+            {
+                "event_id": "other-camera",
+                "timestamp": "2026-07-23 09:20:00",
+                "camera": "ENTRY GATE-1",
+                "direction": "IN",
+            },
+        ]
+
+        with patch.dict(
+            os.environ,
+            {"CPPLUS_OFFICIAL_COUNT_START": "2026-07-22 16:21:23"},
+        ):
+            report = gate._build_event_id_headcount_report(
+                entries,
+                datetime(2026, 7, 23, 10, 0, tzinfo=gate.IST),
+            )
+
+        self.assertEqual(report["interval_in"], 0)
+        self.assertEqual(report["interval_out"], 2)
+        self.assertEqual(report["total_in"], 1)
+        self.assertEqual(report["total_out"], 2)
+        self.assertEqual(report["net_movement"], -1)
+        self.assertEqual(report["event_id_crossings"], 2)
+        self.assertEqual(report["legacy_crossings"], 1)
+        self.assertEqual(report["raw_in"], 2)
+        self.assertEqual(report["raw_out"], 3)
+        self.assertTrue(gate._generate_event_id_headcount_pdf(report).startswith(b"%PDF"))
+
+    async def test_event_id_report_sends_pdf_once_per_claimed_recipient(self):
+        entries = [
+            {
+                "event_id": "crossing-a",
+                "timestamp": "2026-07-23 09:15:00",
+                "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                "direction": "IN",
+            },
+        ]
+        db = AsyncMock()
+        upload = AsyncMock(return_value="document-id")
+        send = AsyncMock(return_value=True)
+        claim = AsyncMock(return_value=True)
+        finish = AsyncMock()
+
+        with (
+            patch.object(gate, "_get_db", AsyncMock(return_value=db)),
+            patch.object(gate, "_get_gate_entries", AsyncMock(return_value=entries)),
+            patch.object(gate, "_claim_event_id_report", claim),
+            patch.object(gate, "_finish_event_id_report", finish),
+            patch.object(gate, "GATE_REPORT_WHATSAPP_PHONES", ("919999995224",)),
+            patch.object(gate, "GATE_REPORT_WHATSAPP_TEMPLATE", "headcount-template"),
+            patch(
+                "app.services.whatsapp_service.upload_media_bytes_cloud", upload,
+            ),
+            patch(
+                "app.services.whatsapp_service.send_cloud_template_message", send,
+            ),
+            patch.dict(
+                os.environ,
+                {"CPPLUS_OFFICIAL_COUNT_START": "2026-07-22 16:21:23"},
+            ),
+        ):
+            sent = await gate.send_event_id_headcount_report(
+                now=datetime(2026, 7, 23, 10, 0, tzinfo=gate.IST),
+            )
+
+        self.assertEqual(sent, 1)
+        upload.assert_awaited_once()
+        send.assert_awaited_once()
+        self.assertEqual(send.await_args.args[:2], ("919999995224", "headcount-template"))
+        self.assertEqual(send.await_args.kwargs["body_params"][1:], ["1", "1"])
+        finish.assert_awaited_once()
+
     async def test_store_gate_entries_is_idempotent_by_event_id(self):
         db = await aiosqlite.connect(":memory:")
         try:
