@@ -23,6 +23,7 @@ SHOWCASE_REMINDER_PHONES = tuple(
 SHOWCASE_REMINDER_TEMPLATE = os.environ.get(
     "SHOWCASE_REMINDER_TEMPLATE", "ppis_musical_showcase_reminder",
 )
+SHOWCASE_REMINDER_LEAD_DAYS = 3
 
 
 class Showcase(NamedTuple):
@@ -87,7 +88,7 @@ def due_showcases(today: date) -> dict[date, list[Showcase]]:
     due: dict[date, list[Showcase]] = defaultdict(list)
     for showcase in SHOWCASES:
         days_until = (showcase.event_date - today).days
-        if days_until == 2:
+        if days_until == SHOWCASE_REMINDER_LEAD_DAYS:
             due[showcase.event_date].append(showcase)
     return dict(due)
 

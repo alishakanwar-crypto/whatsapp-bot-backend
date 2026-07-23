@@ -858,7 +858,7 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled daily homework doc clear at 3:00 PM IST (9:30 UTC)")
 
-    # Musical Showcase reminders at 9:00 AM IST, two days before each event.
+    # Musical Showcase reminders at 9:00 AM IST, three days before each event.
     scheduler.add_job(
         send_showcase_reminders_sync,
         trigger=CronTrigger(
