@@ -645,30 +645,35 @@ def _has_clear_frontal_face(image_b64: str) -> bool:
         logger.warning("[GATE] CP Plus face-quality check failed: %s", e)
         return False
 
-# Deduplication: entries within this window from same/nearby cameras = same person
-_DEDUP_WINDOW_SECONDS = 120  # 2 minutes
+_LEGACY_DEDUP_WINDOW_SECONDS = 120
 
 
 def _deduplicate_gate_entries(entries: list[dict]) -> list[dict]:
-    """Collapse raw gate detections into estimated unique crossings.
-
-    Same-camera re-detections within the time window are dropped.
-    Cross-camera detections with matching attire within the window
-    are treated as the same person.
-    """
+    """Return one row per tracker crossing while preserving legacy totals."""
     if not entries:
         return []
 
     sorted_entries = sorted(entries, key=lambda e: e.get("timestamp", ""))
     unique: list[dict] = []
+    seen_event_ids: set[str] = set()
 
     for entry in sorted_entries:
+        event_id = str(entry.get("event_id") or "").strip()
+        if event_id:
+            if event_id in seen_event_ids:
+                continue
+            seen_event_ids.add(event_id)
+            unique.append(entry)
+            continue
+
         ts_str = entry.get("timestamp", "")
         attire = entry.get("attire_color", "unknown")
         direction = entry.get("direction", "IN")
 
         is_dup = False
         for prev in reversed(unique):
+            if prev.get("event_id"):
+                continue
             prev_ts = prev.get("timestamp", "")
             try:
                 t1 = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
@@ -676,15 +681,13 @@ def _deduplicate_gate_entries(entries: list[dict]) -> list[dict]:
                 diff = abs((t1 - t2).total_seconds())
             except (ValueError, TypeError):
                 break
-            if diff > _DEDUP_WINDOW_SECONDS:
+            if diff > _LEGACY_DEDUP_WINDOW_SECONDS:
                 break
             if prev.get("direction") != direction:
                 continue
-            # Same camera within window → definitely same person
             if prev.get("camera") == entry.get("camera"):
                 is_dup = True
                 break
-            # Different camera but same attire within window → likely same person
             if attire and attire != "unknown" and prev.get("attire_color", "unknown") == attire:
                 is_dup = True
                 break
@@ -704,9 +707,9 @@ async def _get_db():
     return await get_db()
 
 
-async def _store_gate_entries(db, entries: list[dict]) -> int:
-    """Store gate entry events in the database. Returns count stored."""
-    count = 0
+async def _store_gate_entries(db, entries: list[dict]) -> list[dict]:
+    """Store each tracker crossing once and return the newly stored entries."""
+    stored: list[dict] = []
     for entry in entries:
         ts = entry.get("timestamp", "")
         date_part = ts.split(" ")[0] if " " in ts else datetime.now(IST).strftime("%Y-%m-%d")
@@ -714,15 +717,18 @@ async def _store_gate_entries(db, entries: list[dict]) -> int:
         direction = entry.get("direction", "IN")
         attire_color = entry.get("attire_color", "unknown")
         person_crop = entry.get("person_crop", "")
+        event_id = str(entry.get("event_id") or "").strip() or None
 
-        await db.execute(
-            "INSERT INTO gate_entries (date, timestamp, camera, direction, attire_color, person_crop) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (date_part, ts, camera, direction, attire_color, person_crop),
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO gate_entries "
+            "(event_id, date, timestamp, camera, direction, attire_color, person_crop) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (event_id, date_part, ts, camera, direction, attire_color, person_crop),
         )
-        count += 1
+        if cursor.rowcount:
+            stored.append(entry)
     await db.commit()
-    return count
+    return stored
 
 
 async def _store_cpplus_hourly_recount(db, recount: dict) -> None:
@@ -862,13 +868,13 @@ async def _get_gate_entries(db, date: str, direction: str | None = None) -> list
     """Get all gate entries for a date, optionally filtered by direction."""
     if direction:
         cur = await db.execute(
-            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop "
+            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop, event_id "
             "FROM gate_entries WHERE date = ? AND direction = ? ORDER BY timestamp",
             (date, direction),
         )
     else:
         cur = await db.execute(
-            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop "
+            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop, event_id "
             "FROM gate_entries WHERE date = ? ORDER BY timestamp",
             (date,),
         )
@@ -878,7 +884,7 @@ async def _get_gate_entries(db, date: str, direction: str | None = None) -> list
             "id": r[0], "date": r[1], "timestamp": r[2], "camera": r[3],
             "direction": r[4], "attire_color": r[5], "reconciled": bool(r[6]),
             "matched_pin": r[7], "notes": r[8],
-            "person_crop": r[9] if len(r) > 9 else "",
+            "person_crop": r[9], "event_id": r[10],
         }
         for r in rows
     ]
@@ -1229,7 +1235,8 @@ async def _reconcile(db, date: str) -> dict:
     raw_gate_in = len(gate_in_entry)
     raw_gate_out = len(gate_out_entry)
 
-    # Deduplicate: collapse same-person detections across cameras/scans
+    # Tracker event IDs preserve distinct group crossings and collapse retries.
+    # Legacy rows retain their historical time-based totals.
     gate_in = _deduplicate_gate_entries(gate_in_entry)
     gate_out = _deduplicate_gate_entries(gate_out_entry)
     unique_gate_in = len(gate_in)
@@ -2043,22 +2050,24 @@ async def _send_cpplus_visitor_snapshot(entry: dict):
 async def receive_gate_entries(request: Request):
     """Receive gate entry events from the campus agent gate counter.
 
-    Body: [{"timestamp": "...", "camera": "...", "direction": "IN", "attire_color": "blue", "person_crop": "..."}]
+    Body: [{"event_id": "...", "timestamp": "...", "camera": "...", "direction": "IN", "attire_color": "blue", "person_crop": "..."}]
     """
     body = await request.json()
     entries = body if isinstance(body, list) else [body]
 
     db = await _get_db()
     try:
-        count = await _store_gate_entries(db, entries)
+        stored_entries = await _store_gate_entries(db, entries)
     finally:
         await db.close()
+
+    count = len(stored_entries)
 
     # Forward every person detected on the CP Plus outside-gate camera as a live
     # WhatsApp snapshot (only this camera — no DVR channels). The gate counter
     # emits one event per line crossing, so each distinct visitor = one alert.
     snapshot_count = 0
-    for e in entries:
+    for e in stored_entries:
         if _is_cpplus_camera(e.get("camera", "")) and e.get("direction", "IN") == "IN":
             snapshot_count += 1
             asyncio.create_task(_send_cpplus_visitor_snapshot(e))
