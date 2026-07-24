@@ -2494,7 +2494,6 @@ async def receive_cpplus_hourly_recount(request: Request):
         "[GATE] Stored CP Plus recording recount %s: IN=%d frames=%d source=%s",
         hour_start, in_count, processed_frames, source,
     )
-    asyncio.create_task(_send_verified_cpplus_correction(recount))
     if source in {"camera_sd_recording", "school_pc_recording"}:
         asyncio.create_task(_record_replay_discrepancy(recount))
     return {"status": "ok", "recount": recount}
@@ -4239,9 +4238,8 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
 
 @router.post("/api/gate/send-report")
 async def trigger_reconciliation_report():
-    """Retry eligible verified-only reports without duplicating recipients."""
-    await send_pending_cpplus_corrections()
-    return {"status": "processed_verified_reports"}
+    """Keep the retired legacy report endpoint non-delivering."""
+    return {"status": "legacy_hourly_reports_disabled"}
 
 
 @router.post("/api/gate/test-alert")

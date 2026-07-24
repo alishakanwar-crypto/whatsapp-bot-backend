@@ -940,6 +940,36 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observation, [(29, 7200, "school_pc_segment_recording")])
         self.assertEqual(official, [])
 
+    async def test_completed_recount_does_not_queue_legacy_hourly_report(self):
+        async def open_db():
+            return await aiosqlite.connect(self.db_path)
+
+        request = AsyncMock()
+        request.json.return_value = {
+            "date": "2026-07-15",
+            "hour_start": "2026-07-15 10:00:00",
+            "hour_end": "2026-07-15 11:00:00",
+            "in_count": 29,
+            "processed_frames": 7200,
+            "source": "camera_sd_recording",
+        }
+
+        with (
+            patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate.asyncio, "create_task") as create_task,
+        ):
+            result = await gate.receive_cpplus_hourly_recount(request)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(create_task.call_count, 1)
+        create_task.call_args.args[0].close()
+
+    async def test_legacy_report_endpoint_is_non_delivering(self):
+        self.assertEqual(
+            await gate.trigger_reconciliation_report(),
+            {"status": "legacy_hourly_reports_disabled"},
+        )
+
     async def test_untrusted_native_count_is_captured_but_not_accepted(self):
         async def open_db():
             return await aiosqlite.connect(self.db_path)
