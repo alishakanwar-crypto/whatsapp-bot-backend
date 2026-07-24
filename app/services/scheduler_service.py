@@ -718,13 +718,6 @@ def start_scheduler() -> None:
     from app.routes.gate import (
         send_event_id_headcount_report_sync,
         send_final_event_id_headcount_report_sync,
-        send_pending_cpplus_corrections_sync,
-    )
-    scheduler.add_job(
-        send_pending_cpplus_corrections_sync,
-        trigger=IntervalTrigger(minutes=5),
-        id="gate_verified_correction_retry",
-        replace_existing=True,
     )
     scheduler.add_job(
         send_event_id_headcount_report_sync,
