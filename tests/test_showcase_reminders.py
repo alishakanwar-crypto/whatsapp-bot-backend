@@ -29,15 +29,38 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_plan_preserves_all_46_final_source_rows(self):
-        self.assertEqual(len(reminders.SHOWCASES), 46)
-        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 20)
+    def test_plan_preserves_all_44_revised_source_rows(self):
+        self.assertEqual(len(reminders.SHOWCASES), 44)
+        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 19)
         self.assertTrue(
             any(
                 item.grade_class == "Nursery"
                 and item.event_date == date(2026, 9, 11)
                 for item in reminders.SHOWCASES
             )
+        )
+        self.assertFalse(
+            any(
+                item.grade_class == "Grade VI"
+                and item.event_date == date(2026, 8, 6)
+                for item in reminders.SHOWCASES
+            )
+        )
+        self.assertFalse(
+            any(
+                item.grade_class == "Grade VII"
+                and item.event_date == date(2026, 7, 28)
+                for item in reminders.SHOWCASES
+            )
+        )
+
+    def test_revised_july_28_reminder_contains_only_grade_vi(self):
+        due = reminders.due_showcases(date(2026, 7, 25))
+
+        self.assertEqual(set(due), {date(2026, 7, 28)})
+        self.assertEqual(
+            [item.grade_class for item in due[date(2026, 7, 28)]],
+            ["Grade VI"],
         )
 
     def test_selects_exactly_three_day_lead_time_and_groups_same_date(self):
