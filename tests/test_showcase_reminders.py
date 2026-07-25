@@ -29,8 +29,8 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_plan_preserves_all_44_revised_source_rows(self):
-        self.assertEqual(len(reminders.SHOWCASES), 44)
+    def test_plan_preserves_all_43_latest_revised_source_rows(self):
+        self.assertEqual(len(reminders.SHOWCASES), 43)
         self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 19)
         self.assertTrue(
             any(
@@ -54,20 +54,29 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def test_revised_july_28_reminder_contains_only_grade_vi(self):
+    def test_latest_july_28_reminder_contains_only_grade_v(self):
         due = reminders.due_showcases(date(2026, 7, 25))
 
         self.assertEqual(set(due), {date(2026, 7, 28)})
         self.assertEqual(
             [item.grade_class for item in due[date(2026, 7, 28)]],
-            ["Grade VI"],
+            ["Grade V"],
         )
 
-    def test_selects_exactly_three_day_lead_time_and_groups_same_date(self):
+    def test_latest_august_3_reminder_has_nursery_prep_and_grade_vi(self):
+        due = reminders.due_showcases(date(2026, 7, 31))
+
+        self.assertEqual(set(due), {date(2026, 8, 3)})
+        self.assertEqual(
+            [item.grade_class for item in due[date(2026, 8, 3)]],
+            ["Nursery", "Prep", "Grade VI"],
+        )
+
+    def test_selects_exactly_three_day_lead_time(self):
         due = reminders.due_showcases(date(2026, 7, 27))
 
         self.assertEqual(set(due), {date(2026, 7, 30)})
-        self.assertEqual(len(due[date(2026, 7, 30)]), 2)
+        self.assertEqual(len(due[date(2026, 7, 30)]), 1)
 
     def test_formats_all_same_day_showcases_in_one_message(self):
         due = reminders.due_showcases(date(2026, 7, 28))
