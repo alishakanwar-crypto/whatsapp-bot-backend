@@ -2401,9 +2401,31 @@ async def receive_gate_entries(request: Request):
             snapshot_count += 1
             asyncio.create_task(_send_cpplus_visitor_snapshot(e))
 
+    asyncio.create_task(_run_anonymous_gate_analytics(stored_entries))
+
     logger.info("[GATE] Stored %d gate entry event(s); queued %d CP Plus snapshot(s)",
                 count, snapshot_count)
     return {"status": "ok", "stored": count, "snapshots": snapshot_count}
+
+
+async def _run_anonymous_gate_analytics(entries: list[dict]) -> None:
+    """Run non-biometric analytics without delaying gate-event ingestion."""
+    try:
+        from app.services.gate_analytics_service import (
+            check_after_hours,
+            check_wrong_way,
+            check_congestion,
+        )
+        db = await _get_db()
+        try:
+            for entry in entries:
+                await check_after_hours(db, entry)
+                await check_wrong_way(db, entry)
+            await check_congestion(db)
+        finally:
+            await db.close()
+    except Exception:
+        logger.exception("[GATE] Anonymous analytics failed")
 
 
 @router.post(
@@ -2681,6 +2703,54 @@ async def receive_vehicle_entries(request: Request):
 
     logger.info("[GATE] Stored %d vehicle entry event(s)", count)
     return {"status": "ok", "stored": count}
+
+
+@router.post(
+    "/api/gate/replay-recount",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_replay_recount(request: Request):
+    """Store a non-additive replay recount for anonymous gate analytics."""
+    body = await request.json()
+    from app.services.gate_analytics_service import store_replay_recount
+
+    date = body.get("date") or datetime.now(IST).strftime("%Y-%m-%d")
+    db = await _get_db()
+    try:
+        alerted = await store_replay_recount(
+            db,
+            date,
+            body.get("window_start", ""),
+            body.get("window_end", ""),
+            int(body.get("live_count", 0)),
+            int(body.get("replay_count", 0)),
+            body.get("source", "sd_replay"),
+        )
+    finally:
+        await db.close()
+    return {"status": "ok", "alerted": alerted}
+
+
+@router.post(
+    "/api/gate/camera-health",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_camera_health(request: Request):
+    """Record a camera-health transition for anonymous gate analytics."""
+    body = await request.json()
+    from app.services.gate_analytics_service import check_camera_health
+
+    db = await _get_db()
+    try:
+        alerted = await check_camera_health(
+            db,
+            body.get("camera", "C1 Gate"),
+            body.get("status", "offline"),
+            int(body.get("consecutive_failures", 0)),
+        )
+    finally:
+        await db.close()
+    return {"status": "ok", "alerted": alerted}
 
 
 @router.get("/api/gate/status")

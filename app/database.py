@@ -585,6 +585,44 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_visitor_sightings_date
                 ON visitor_dvr_sightings (date);
 
+            -- ── C1 Anonymous Gate Analytics ──────────────────────────
+            -- Persistent alert dedupe / idempotency (replaces in-memory caches).
+            CREATE TABLE IF NOT EXISTS gate_alert_dedup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                dedup_key TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_alert_dedup
+                ON gate_alert_dedup (date, alert_type, dedup_key);
+
+            -- Idempotent report/analytics delivery ledger (hourly + final).
+            CREATE TABLE IF NOT EXISTS gate_report_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                report_kind TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                payload_json TEXT DEFAULT '{}',
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_report_log
+                ON gate_report_log (date, report_kind, period_key);
+
+            -- Replay recount: non-additive correction of the live C1 count.
+            CREATE TABLE IF NOT EXISTS gate_replay_recount (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                window_start TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                live_count INTEGER NOT NULL DEFAULT 0,
+                replay_count INTEGER NOT NULL DEFAULT 0,
+                source TEXT DEFAULT 'sd_replay',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_replay_window
+                ON gate_replay_recount (date, window_start, window_end);
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
@@ -803,6 +841,51 @@ async def init_db():
                 await db.rollback()
                 raise
 
+        # C1 anonymous analytics: persistent alert/report deduplication and
+        # non-additive replay correction storage.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS gate_alert_dedup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                dedup_key TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_alert_dedup "
+            "ON gate_alert_dedup (date, alert_type, dedup_key)"
+        )
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS gate_report_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                report_kind TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                payload_json TEXT DEFAULT '{}',
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_report_log "
+            "ON gate_report_log (date, report_kind, period_key)"
+        )
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS gate_replay_recount (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                window_start TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                live_count INTEGER NOT NULL DEFAULT 0,
+                replay_count INTEGER NOT NULL DEFAULT 0,
+                source TEXT DEFAULT 'sd_replay',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_replay_window "
+            "ON gate_replay_recount (date, window_start, window_end)"
+        )
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()
 
