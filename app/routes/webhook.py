@@ -3908,9 +3908,47 @@ async def detect_and_handle_snapshot_request(
         f"Please wait a moment..."
     )
 
+    sent_count = 0
+    delivered_images: set[str] = set()
+
+    async def deliver_snapshot_image(img_data: dict) -> None:
+        nonlocal sent_count
+        image_b64 = img_data.get("image_base64", "")
+        desc = img_data.get("description", "")
+        image_key = desc or img_data.get("filename", "")
+        if not image_b64 or image_key in delivered_images:
+            return
+
+        logger.info("Streaming first available snapshot for %s (%s)", location, desc)
+        media_id = await upload_base64_image_cloud(image_b64)
+        if not media_id:
+            return
+
+        caption = (
+            f"Live photo from {location} ({desc})\nPP International School"
+            if desc
+            else f"Live photo from {location}\nPP International School"
+        )
+        sent = await send_cloud_media(
+            reply_to,
+            "image",
+            media_id=media_id,
+            caption=caption,
+        )
+        if sent:
+            delivered_images.add(image_key)
+            sent_count += 1
+            img_data["_delivered"] = True
+            img_data.pop("image_base64", None)
+            logger.info("Streamed snapshot for %s (%s)", location, desc)
+
     # Request snapshot from Campus Agent
     try:
-        result = await request_snapshot(location, timeout=60.0)
+        result = await request_snapshot(
+            location,
+            timeout=60.0,
+            image_callback=deliver_snapshot_image,
+        )
     except Exception as exc:
         logger.error(f"Snapshot request raised exception for {location}: {exc}", exc_info=True)
         result = {"success": False, "error": str(exc)}
@@ -3935,8 +3973,9 @@ async def detect_and_handle_snapshot_request(
         image_count = len(images_list)
         logger.info(f"Snapshot result for {location}: {image_count} image(s) (capped at 2)")
 
-        sent_count = 0
         for idx, img_data in enumerate(images_list):
+            if img_data.get("_delivered"):
+                continue
             image_b64 = img_data.get("image_base64", "")
             desc = img_data.get("description", "")
             if not image_b64:
@@ -3977,6 +4016,7 @@ async def detect_and_handle_snapshot_request(
         # Free any remaining base64 data and force garbage collection
         for img_data in images_list:
             img_data.pop("image_base64", None)
+            img_data.pop("_delivered", None)
         result.pop("image_base64", None)
         result.pop("images", None)
         import gc; gc.collect()
