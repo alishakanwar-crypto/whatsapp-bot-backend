@@ -183,6 +183,42 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report["interval_verified_in_applied"])
         self.assertTrue(gate._generate_event_id_headcount_pdf(report).startswith(b"%PDF"))
 
+    def test_delayed_event_id_report_uses_fixed_two_hour_boundary(self):
+        report = gate._build_event_id_headcount_report(
+            [],
+            datetime(2026, 7, 27, 11, 16, tzinfo=gate.IST),
+            verified_in_counts={6: 58, 7: 127, 8: 49, 9: 33, 10: 26},
+        )
+
+        self.assertEqual(
+            report["interval_start"],
+            datetime(2026, 7, 27, 8, 0, tzinfo=gate.IST),
+        )
+        self.assertEqual(
+            report["report_end"],
+            datetime(2026, 7, 27, 10, 0, tzinfo=gate.IST),
+        )
+        self.assertEqual(report["interval_in"], 82)
+        self.assertEqual(report["total_in"], 267)
+        self.assertEqual(report["period_key"], "0800")
+        self.assertEqual(report["verified_in_hours"], 4)
+
+        noon_report = gate._build_event_id_headcount_report(
+            [],
+            datetime(2026, 7, 27, 12, 2, tzinfo=gate.IST),
+            verified_in_counts={
+                6: 58,
+                7: 127,
+                8: 49,
+                9: 33,
+                10: 26,
+                11: 81,
+            },
+        )
+        self.assertEqual(noon_report["interval_in"], 107)
+        self.assertEqual(noon_report["total_in"], 374)
+        self.assertEqual(noon_report["total_in"] - report["total_in"], 107)
+
     async def test_event_id_report_uses_native_counts_not_replay_counts(self):
         db = await aiosqlite.connect(":memory:")
         try:
@@ -234,7 +270,8 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             patch.object(gate, "_get_db", AsyncMock(return_value=db)),
             patch.object(gate, "_get_gate_entries", AsyncMock(return_value=entries)),
             patch.object(
-                gate, "_get_cpplus_native_hourly_counts", AsyncMock(return_value={}),
+                gate, "_get_cpplus_native_hourly_counts",
+                AsyncMock(return_value={6: 0, 7: 0, 8: 0, 9: 0}),
             ),
             patch.object(gate, "_claim_event_id_report", claim),
             patch.object(gate, "_finish_event_id_report", finish),
@@ -261,6 +298,39 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.await_args.args[:2], ("919999995224", "headcount-template"))
         self.assertEqual(send.await_args.kwargs["body_params"][1:], ["1", "1"])
         finish.assert_awaited_once()
+
+    async def test_event_id_report_withholds_when_native_hour_is_missing(self):
+        db = AsyncMock()
+        upload = AsyncMock(return_value="document-id")
+        send = AsyncMock(return_value=True)
+        claim = AsyncMock(return_value=True)
+
+        with (
+            patch.object(gate, "_get_db", AsyncMock(return_value=db)),
+            patch.object(gate, "_get_gate_entries", AsyncMock(return_value=[])),
+            patch.object(
+                gate,
+                "_get_cpplus_native_hourly_counts",
+                AsyncMock(return_value={6: 58, 7: 127, 8: 49}),
+            ),
+            patch.object(gate, "_claim_event_id_report", claim),
+            patch(
+                "app.services.whatsapp_service.upload_media_bytes_cloud",
+                upload,
+            ),
+            patch(
+                "app.services.whatsapp_service.send_cloud_template_message",
+                send,
+            ),
+        ):
+            sent = await gate.send_event_id_headcount_report(
+                now=datetime(2026, 7, 27, 10, 0, tzinfo=gate.IST),
+            )
+
+        self.assertEqual(sent, 0)
+        claim.assert_not_awaited()
+        upload.assert_not_awaited()
+        send.assert_not_awaited()
 
     async def test_store_gate_entries_is_idempotent_by_event_id(self):
         db = await aiosqlite.connect(":memory:")
@@ -1029,6 +1099,32 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
             await gate.trigger_reconciliation_report(),
             {"status": "legacy_hourly_reports_disabled"},
         )
+
+    async def test_trusted_native_count_queues_two_hour_report_retry(self):
+        async def open_db():
+            return await aiosqlite.connect(self.db_path)
+
+        today = datetime.now(gate.IST).strftime("%Y-%m-%d")
+        request = AsyncMock()
+        request.json.return_value = {
+            "date": today,
+            "hour_start": f"{today} 10:00:00",
+            "hour_end": f"{today} 11:00:00",
+            "in_count": 7,
+            "processed_frames": 0,
+            "source": "camera_native_counter",
+        }
+
+        with (
+            patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate.asyncio, "create_task") as create_task,
+            patch.dict(os.environ, {"CPPLUS_NATIVE_COUNTER_TRUSTED": "1"}),
+        ):
+            result = await gate.receive_cpplus_hourly_recount(request)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(create_task.call_count, 1)
+        create_task.call_args.args[0].close()
 
     async def test_untrusted_native_count_is_captured_but_not_accepted(self):
         async def open_db():
