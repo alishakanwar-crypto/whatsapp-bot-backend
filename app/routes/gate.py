@@ -850,6 +850,23 @@ async def _get_cpplus_hourly_recounts(db, date: str) -> dict[int, int]:
     return counts
 
 
+async def _get_cpplus_native_hourly_counts(db, date: str) -> dict[int, int]:
+    cur = await db.execute(
+        "SELECT hour_start, in_count FROM cpplus_hourly_recounts "
+        "WHERE date = ? AND source = 'camera_native_counter' "
+        "ORDER BY hour_start",
+        (date,),
+    )
+    counts: dict[int, int] = {}
+    for hour_start, in_count in await cur.fetchall():
+        try:
+            hour = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").hour
+        except (TypeError, ValueError):
+            continue
+        counts[hour] = int(in_count)
+    return counts
+
+
 async def _store_cpplus_hourly_observation(db, recount: dict) -> None:
     await db.execute(
         "INSERT INTO cpplus_hourly_observations "
@@ -4461,7 +4478,11 @@ async def _record_replay_discrepancy(recount: dict) -> None:
 
 
 def _build_event_id_headcount_report(
-    entries: list[dict], now: datetime, *, final: bool = False,
+    entries: list[dict],
+    now: datetime,
+    *,
+    final: bool = False,
+    verified_in_counts: dict[int, int] | None = None,
 ) -> dict:
     current = now.astimezone(IST) if now.tzinfo else now.replace(tzinfo=IST)
     report_end = current.replace(minute=0, second=0, microsecond=0)
@@ -4511,6 +4532,39 @@ def _build_event_id_headcount_report(
     legacy_in = len(unique_in) - len(event_id_in)
     legacy_out = len(unique_out) - len(event_id_out)
 
+    verified_counts = verified_in_counts or {}
+    hourly_in_counts: list[dict] = []
+    hour_start = day_start
+    while hour_start < report_end:
+        hour_end = hour_start + timedelta(hours=1)
+        tracker_in = sum(
+            hour_start <= _parse_gate_entry_time(entry) < hour_end
+            for entry in unique_in
+        )
+        verified_in = verified_counts.get(hour_start.hour)
+        official_in = (
+            max(tracker_in, int(verified_in))
+            if verified_in is not None
+            else tracker_in
+        )
+        hourly_in_counts.append({
+            "hour_start": hour_start,
+            "tracker_in": tracker_in,
+            "verified_in": verified_in,
+            "official_in": official_in,
+        })
+        hour_start = hour_end
+
+    interval_official_in = sum(
+        item["official_in"]
+        for item in hourly_in_counts
+        if item["hour_start"] >= interval_start
+    )
+    total_official_in = sum(item["official_in"] for item in hourly_in_counts)
+    verified_hours = sum(
+        item["verified_in"] is not None for item in hourly_in_counts
+    )
+
     return {
         "date": current.strftime("%Y-%m-%d"),
         "generated_at": current.strftime("%d-%m-%Y %H:%M:%S IST"),
@@ -4528,12 +4582,28 @@ def _build_event_id_headcount_report(
             f"final-{report_end.strftime('%H%M')}"
             if final else interval_start.strftime("%H%M")
         ),
-        "interval_in": len(interval_in),
+        "interval_in": interval_official_in,
         "interval_out": len(interval_out),
-        "interval_net": len(interval_in) - len(interval_out),
-        "total_in": len(unique_in),
+        "interval_net": interval_official_in - len(interval_out),
+        "total_in": total_official_in,
         "total_out": len(unique_out),
-        "net_movement": len(unique_in) - len(unique_out),
+        "net_movement": total_official_in - len(unique_out),
+        "tracker_interval_in": len(interval_in),
+        "tracker_total_in": len(unique_in),
+        "verified_in_hours": verified_hours,
+        "completed_in_hours": len(hourly_in_counts),
+        "verified_in_applied": any(
+            item["verified_in"] is not None
+            and item["official_in"] > item["tracker_in"]
+            for item in hourly_in_counts
+        ),
+        "interval_verified_in_applied": any(
+            item["hour_start"] >= interval_start
+            and item["verified_in"] is not None
+            and item["official_in"] > item["tracker_in"]
+            for item in hourly_in_counts
+        ),
+        "hourly_in_counts": hourly_in_counts,
         "raw_in": sum(
             entry.get("direction", "IN") == "IN" for entry in official
         ),
@@ -4700,31 +4770,51 @@ def _generate_event_id_headcount_pdf(report: dict) -> bytes:
 
     section("LATEST COMPLETED INTERVAL")
     row("Persons entered (IN)", report["interval_in"], (226, 239, 218))
-    row("Persons exited (OUT)", report["interval_out"], (255, 230, 230))
-    row("Net movement (IN - OUT)", report["interval_net"], (221, 235, 247))
+    row("Tracker-observed exits (OUT)", report["interval_out"], (255, 230, 230))
+    row("Provisional movement balance", report["interval_net"], (221, 235, 247))
     pdf.set_font("Helvetica", "I", 9)
-    interval_status = (
-        f"Updated event-ID crossings in this interval: "
-        f"{report['interval_event_id_in']} IN / "
-        f"{report['interval_event_id_out']} OUT."
-        if report["interval_event_id_crossings"]
-        else "No updated event-ID C1 crossing was recorded in this completed hour."
-    )
+    if report["interval_verified_in_applied"]:
+        interval_status = (
+            f"Trusted C1 hourly count replaced the lower tracker result: "
+            f"{report['interval_in']} official IN versus "
+            f"{report['tracker_interval_in']} tracker-observed IN."
+        )
+    elif report["interval_event_id_crossings"]:
+        interval_status = (
+            f"Updated event-ID crossings in this interval: "
+            f"{report['interval_event_id_in']} IN / "
+            f"{report['interval_event_id_out']} OUT."
+        )
+    else:
+        interval_status = "No updated event-ID C1 crossing was recorded in this interval."
     pdf.multi_cell(
         0, 6, interval_status, new_x="LMARGIN", new_y="NEXT",
     )
     pdf.ln(3)
 
-    section("UPDATED EVENT-ID COUNT SINCE 6:00 AM IST")
-    row("New event-ID entries (IN)", report["event_id_in"], (226, 239, 218))
-    row("New event-ID exits (OUT)", report["event_id_out"], (255, 230, 230))
-    row("New event-ID net movement", report["event_id_net"], (221, 235, 247))
-    pdf.ln(4)
-
-    section("COMBINED OFFICIAL COUNT SINCE 6:00 AM IST")
+    section("OFFICIAL C1 COUNT SINCE 6:00 AM IST")
     row("Total persons entered (IN)", report["total_in"], (226, 239, 218))
-    row("Total persons exited (OUT)", report["total_out"], (255, 230, 230))
-    row("Total net movement balance", report["net_movement"], (221, 235, 247))
+    row("Tracker-observed exits (OUT)", report["total_out"], (255, 230, 230))
+    row("Provisional movement balance", report["net_movement"], (221, 235, 247))
+    pdf.set_font("Helvetica", "I", 9)
+    if report["verified_in_hours"]:
+        pdf.multi_cell(
+            0,
+            6,
+            f"Trusted C1 hourly counter available for {report['verified_in_hours']}/"
+            f"{report['completed_in_hours']} completed hours. For each hour, the "
+            "higher C1 count replaces the lower tracker count; the two are never added. "
+            "OUT remains tracker-observed, so the movement balance is not a campus "
+            "occupancy claim.",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+    pdf.ln(3)
+
+    section("TRACKER EVENT-ID DIAGNOSTICS")
+    row("Tracker entries observed (IN)", report["tracker_total_in"], (240, 240, 240))
+    row("Tracker event-ID entries (IN)", report["event_id_in"], (240, 240, 240))
+    row("Tracker event-ID exits (OUT)", report["event_id_out"], (240, 240, 240))
     pdf.ln(4)
 
     section("SEPARATE C1 VEHICLE ANALYTICS")
@@ -4806,10 +4896,11 @@ def _generate_event_id_headcount_pdf(report: dict) -> bytes:
     pdf.set_font("Helvetica", "", 9)
     pdf.multi_cell(
         0, 5,
-        "The UPDATED EVENT-ID section contains only crossings received from the new "
-        "tracker-ID implementation. Legacy rows are shown separately and retain their "
-        "historical 120-second deduplication behavior. The COMBINED section is their "
-        "sum; a retry with the same event ID is ignored.",
+        "The tracker section contains crossings received from the tracker-ID "
+        "implementation. Legacy rows remain stored separately with their historical "
+        "120-second deduplication behavior. Trusted completed-hour C1 camera counts "
+        "replace a lower tracker IN count for that same hour and are never added to it; "
+        "a retry with the same event ID is ignored.",
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.ln(2)
@@ -4881,12 +4972,18 @@ async def send_event_id_headcount_report(
     db = await _get_db()
     try:
         entries = await _get_gate_entries(db, report_date)
+        verified_in_counts = await _get_cpplus_native_hourly_counts(db, report_date)
         vehicles = await _get_vehicle_entries(db, report_date)
         signals = await _get_c1_intelligence_events(db, report_date)
         pending_alerts = await _get_pending_c1_alert_count(db, report_date)
     finally:
         await db.close()
-    report = _build_event_id_headcount_report(entries, current, final=final)
+    report = _build_event_id_headcount_report(
+        entries,
+        current,
+        final=final,
+        verified_in_counts=verified_in_counts,
+    )
     report = _enrich_event_id_headcount_report(
         report,
         vehicles,

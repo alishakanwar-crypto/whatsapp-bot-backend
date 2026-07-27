@@ -158,6 +158,63 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["raw_out"], 3)
         self.assertTrue(gate._generate_event_id_headcount_pdf(report).startswith(b"%PDF"))
 
+    def test_event_id_report_uses_trusted_c1_hourly_counts_without_adding_sources(self):
+        entries = [
+            {
+                "event_id": f"crossing-{index}",
+                "timestamp": f"2026-07-23 0{6 + (index // 2)}:{10 + index:02d}:00",
+                "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+                "direction": "IN",
+            }
+            for index in range(6)
+        ]
+
+        report = gate._build_event_id_headcount_report(
+            entries,
+            datetime(2026, 7, 23, 10, 0, tzinfo=gate.IST),
+            verified_in_counts={6: 58, 7: 127, 8: 49, 9: 33},
+        )
+
+        self.assertEqual(report["tracker_total_in"], 6)
+        self.assertEqual(report["interval_in"], 82)
+        self.assertEqual(report["total_in"], 267)
+        self.assertEqual(report["verified_in_hours"], 4)
+        self.assertTrue(report["verified_in_applied"])
+        self.assertTrue(report["interval_verified_in_applied"])
+        self.assertTrue(gate._generate_event_id_headcount_pdf(report).startswith(b"%PDF"))
+
+    async def test_event_id_report_uses_native_counts_not_replay_counts(self):
+        db = await aiosqlite.connect(":memory:")
+        try:
+            await db.execute(
+                "CREATE TABLE cpplus_hourly_recounts ("
+                "date TEXT, hour_start TEXT, in_count INTEGER, source TEXT)"
+            )
+            await db.executemany(
+                "INSERT INTO cpplus_hourly_recounts VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        "2026-07-23",
+                        "2026-07-23 06:00:00",
+                        58,
+                        "camera_native_counter",
+                    ),
+                    (
+                        "2026-07-23",
+                        "2026-07-23 07:00:00",
+                        120,
+                        "school_pc_recording",
+                    ),
+                ],
+            )
+            counts = await gate._get_cpplus_native_hourly_counts(
+                db, "2026-07-23"
+            )
+        finally:
+            await db.close()
+
+        self.assertEqual(counts, {6: 58})
+
     async def test_event_id_report_sends_pdf_once_per_claimed_recipient(self):
         entries = [
             {
@@ -176,6 +233,9 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(gate, "_get_db", AsyncMock(return_value=db)),
             patch.object(gate, "_get_gate_entries", AsyncMock(return_value=entries)),
+            patch.object(
+                gate, "_get_cpplus_native_hourly_counts", AsyncMock(return_value={}),
+            ),
             patch.object(gate, "_claim_event_id_report", claim),
             patch.object(gate, "_finish_event_id_report", finish),
             patch.object(gate, "GATE_REPORT_WHATSAPP_PHONES", ("919999995224",)),
