@@ -2511,6 +2511,15 @@ async def receive_cpplus_hourly_recount(request: Request):
         "[GATE] Stored CP Plus recording recount %s: IN=%d frames=%d source=%s",
         hour_start, in_count, processed_frames, source,
     )
+    if source == "camera_native_counter":
+        current = datetime.now(IST)
+        if date == current.strftime("%Y-%m-%d"):
+            asyncio.create_task(
+                send_event_id_headcount_report(
+                    final=current.hour >= 17,
+                    now=current,
+                )
+            )
     if source in {"camera_sd_recording", "school_pc_recording"}:
         asyncio.create_task(_record_replay_discrepancy(recount))
     return {"status": "ok", "recount": recount}
@@ -4477,6 +4486,20 @@ async def _record_replay_discrepancy(recount: dict) -> None:
     await _send_c1_intelligence_alerts([signal])
 
 
+def _event_id_report_period(
+    current: datetime,
+    *,
+    final: bool = False,
+) -> tuple[datetime, datetime]:
+    day_start = current.replace(hour=6, minute=0, second=0, microsecond=0)
+    if final:
+        return day_start, day_start + timedelta(hours=11)
+
+    elapsed_hours = max(0, int((current - day_start).total_seconds() // 3600))
+    completed_hours = min((elapsed_hours // 2) * 2, 10)
+    return day_start, day_start + timedelta(hours=completed_hours)
+
+
 def _build_event_id_headcount_report(
     entries: list[dict],
     now: datetime,
@@ -4485,8 +4508,7 @@ def _build_event_id_headcount_report(
     verified_in_counts: dict[int, int] | None = None,
 ) -> dict:
     current = now.astimezone(IST) if now.tzinfo else now.replace(tzinfo=IST)
-    report_end = current.replace(minute=0, second=0, microsecond=0)
-    day_start = current.replace(hour=6, minute=0, second=0, microsecond=0)
+    day_start, report_end = _event_id_report_period(current, final=final)
     interval_start = day_start if final else max(day_start, report_end - timedelta(hours=2))
 
     official: list[dict] = []
@@ -4564,6 +4586,10 @@ def _build_event_id_headcount_report(
     verified_hours = sum(
         item["verified_in"] is not None for item in hourly_in_counts
     )
+    missing_verified_hours = [
+        item["hour_start"] for item in hourly_in_counts
+        if item["verified_in"] is None
+    ]
 
     return {
         "date": current.strftime("%Y-%m-%d"),
@@ -4592,6 +4618,7 @@ def _build_event_id_headcount_report(
         "tracker_total_in": len(unique_in),
         "verified_in_hours": verified_hours,
         "completed_in_hours": len(hourly_in_counts),
+        "missing_verified_hours": missing_verified_hours,
         "verified_in_applied": any(
             item["verified_in"] is not None
             and item["official_in"] > item["tracker_in"]
@@ -4735,7 +4762,7 @@ def _generate_event_id_headcount_pdf(report: dict) -> bytes:
     pdf.add_page()
     title = (
         "PPIS C1 FINAL HEAD COUNT REPORT"
-        if report["is_final"] else "PPIS C1 HOURLY HEAD COUNT REPORT"
+        if report["is_final"] else "PPIS C1 TWO-HOUR HEAD COUNT REPORT"
     )
     pdf.set_font("Helvetica", "B", 17)
     pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT", align="C")
@@ -4984,6 +5011,21 @@ async def send_event_id_headcount_report(
         final=final,
         verified_in_counts=verified_in_counts,
     )
+    if report["report_end"] <= report["report_start"]:
+        logger.info("[GATE] No completed two-hour C1 interval is due yet")
+        return 0
+    if report["missing_verified_hours"]:
+        missing = ", ".join(
+            f"{hour.strftime('%H:00')}-{(hour + timedelta(hours=1)).strftime('%H:00')}"
+            for hour in report["missing_verified_hours"]
+        )
+        logger.warning(
+            "[GATE] Withholding official C1 report %s; trusted native counts "
+            "are missing for %s",
+            report["interval_display"],
+            missing,
+        )
+        return 0
     report = _enrich_event_id_headcount_report(
         report,
         vehicles,
@@ -4992,7 +5034,7 @@ async def send_event_id_headcount_report(
     )
     pdf_bytes = _generate_event_id_headcount_pdf(report)
     filename = (
-        f"PPIS_C1_{'Final' if final else 'Hourly'}_Headcount_"
+        f"PPIS_C1_{'Final' if final else 'Two_Hour'}_Headcount_"
         f"{report['date']}_{report['period_key']}.pdf"
     )
 
@@ -5041,7 +5083,7 @@ async def send_event_id_headcount_report(
             sent_count += 1
     logger.info(
         "[GATE] Event-ID %s report %s: IN=%d OUT=%d NET=%d sent=%d",
-        "final" if final else "hourly",
+        "final" if final else "two-hour",
         report["interval_display"],
         report["total_in"],
         report["total_out"],
@@ -5448,7 +5490,7 @@ def send_pending_cpplus_corrections_sync() -> None:
 
 
 def send_event_id_headcount_report_sync() -> None:
-    """Send the completed-hour C1 event-ID report."""
+    """Send the latest completed two-hour C1 event-ID report."""
     asyncio.run(send_event_id_headcount_report())
 
 
