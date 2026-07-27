@@ -749,10 +749,13 @@ async def init_db():
             )
         except Exception:
             pass
-        await db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_entries_event_id "
-            "ON gate_entries (event_id) WHERE event_id IS NOT NULL"
-        )
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_entries_event_id "
+                "ON gate_entries (event_id) WHERE event_id IS NOT NULL"
+            )
+        except Exception:
+            pass  # legacy rows may violate the guard; skip on existing data
         try:
             await db.execute(
                 "ALTER TABLE vehicle_entries ADD COLUMN event_id TEXT DEFAULT NULL"
@@ -766,10 +769,13 @@ async def init_db():
             )
         except Exception:
             pass
-        await db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_entries_event_id "
-            "ON vehicle_entries (event_id) WHERE event_id IS NOT NULL"
-        )
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_entries_event_id "
+                "ON vehicle_entries (event_id) WHERE event_id IS NOT NULL"
+            )
+        except Exception:
+            pass  # legacy rows may violate the guard; skip on existing data
 
         # visitor_dvr_sightings: add classification + snapshot + direction columns
         for col_name, col_def in [
