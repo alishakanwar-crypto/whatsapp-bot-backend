@@ -22,6 +22,7 @@ os.environ.setdefault("GATE_LOITER_SECONDS", "180")
 
 import app.services.gate_analytics_service as ga  # noqa: E402
 import app.services.whatsapp_service as wa  # noqa: E402
+import app.database as database  # noqa: E402
 from app.database import init_db, get_db  # noqa: E402
 from app.routes import gate  # noqa: E402
 
@@ -30,8 +31,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 @pytest.fixture(autouse=True)
 async def _fresh_db():
+    database.DB_PATH = _TMP_DB
     if os.path.exists(_TMP_DB):
         os.remove(_TMP_DB)
+    for suffix in ("-wal", "-shm"):
+        path = _TMP_DB + suffix
+        if os.path.exists(path):
+            os.remove(path)
     await init_db()
     yield
 
@@ -71,8 +77,8 @@ async def test_idempotent_ingest():
     try:
         e = {"timestamp": _ts(datetime.now(IST)), "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
              "direction": "IN", "event_id": "evt-1"}
-        assert await gate._store_gate_entries(db, [e]) == 1
-        assert await gate._store_gate_entries(db, [e]) == 0  # duplicate ignored
+        assert len(await gate._store_gate_entries(db, [e])) == 1
+        assert len(await gate._store_gate_entries(db, [e])) == 0  # duplicate ignored
         rows = await gate._get_gate_entries(db, e["timestamp"].split(" ")[0], direction="IN")
         assert len(rows) == 1
     finally:
@@ -83,8 +89,8 @@ async def test_ingest_without_event_id_not_deduped():
     db = await get_db()
     try:
         e = {"timestamp": _ts(datetime.now(IST)), "camera": "CP Plus", "direction": "IN"}
-        assert await gate._store_gate_entries(db, [e]) == 1
-        assert await gate._store_gate_entries(db, [e]) == 1  # no event_id → both kept
+        assert len(await gate._store_gate_entries(db, [e])) == 1
+        assert len(await gate._store_gate_entries(db, [e])) == 1  # no event_id → both kept
     finally:
         await db.close()
 
