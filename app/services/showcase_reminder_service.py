@@ -72,12 +72,10 @@ SHOWCASES = (
     Showcase(date(2026, 8, 7), "Grade VI", "Independence Day", "Mera rang de basanti chola", "Ms. Shikha"),
     Showcase(date(2026, 8, 12), "Grade VI", "Independence Day", "Freedom Fighters Tableau", "Ms. Poonam"),
     Showcase(date(2026, 8, 7), "Grade VII", "Independence Day", "Freedom Fighters Tableau", "Ms. Poonam"),
-    Showcase(date(2026, 8, 25), "Grade VII", "Janmashtami", "Prayer - Mera aapki kripa se", "Music Team"),
     Showcase(date(2026, 8, 13), "Grade VII", "Independence Day", "Patriotic Medley", "Ms. Rashmi"),
     Showcase(date(2026, 7, 31), "Grade VIII", "Poetry", "Kavita Prastuti", "Ms. Rashmi"),
     Showcase(date(2026, 8, 7), "Grade VIII", "Independence Day", "Freedom Fighters Tableau", "Ms. Mansi"),
-    Showcase(date(2026, 8, 13), "Grade VIII", "Independence Day", "Patriotic Medley", "Ms. Rashmi"),
-    Showcase(date(2026, 8, 27), "Grade VIII", "Janmashtami", "Prayer - Mera aapki kripa se", "Music Team"),
+    Showcase(date(2026, 8, 13), "Grade VIII", "Independence Day", "Patriotic Medley", "Music Team"),
 )
 
 
