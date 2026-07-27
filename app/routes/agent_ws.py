@@ -21,6 +21,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -38,6 +39,8 @@ _agent_ws: WebSocket | None = None
 _pending_requests: dict[str, asyncio.Future] = {}
 # Accumulate individual images for v2 protocol (request_id -> list of image dicts)
 _pending_images: dict[str, list] = {}
+SnapshotImageCallback = Callable[[dict], Awaitable[None]]
+_pending_image_callbacks: dict[str, SnapshotImageCallback] = {}
 
 # Queued snapshot requests — filled when agent is offline, drained on reconnect
 # Each entry: {"classroom": str, "sender": str, "reply_to": str, "queued_at": float}
@@ -284,7 +287,11 @@ async def _proxy_snapshot_request(classroom: str, timeout: float = 55.0) -> dict
     return None  # No proxy available
 
 
-async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
+async def request_snapshot(
+    classroom: str,
+    timeout: float = 60.0,
+    image_callback: SnapshotImageCallback | None = None,
+) -> dict:
     """Request a snapshot from the campus agent.
 
     Returns dict with keys:
@@ -310,6 +317,8 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     future: asyncio.Future = asyncio.get_event_loop().create_future()
     _pending_requests[request_id] = future
     _pending_images[request_id] = []  # Initialize image accumulator
+    if image_callback is not None:
+        _pending_image_callbacks[request_id] = image_callback
 
     # Capture the WebSocket reference in a local variable to avoid race
     # condition where _agent_ws becomes None between null-check and send.
@@ -317,6 +326,7 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     if ws is None:
         _pending_requests.pop(request_id, None)
         _pending_images.pop(request_id, None)
+        _pending_image_callbacks.pop(request_id, None)
         return {"success": False, "error": "Campus agent disconnected before request could be sent"}
 
     # Send the request — if the WebSocket is stale, retry once after reconnect
@@ -333,6 +343,7 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
         _agent_ws = None
         _pending_requests.pop(request_id, None)
         _pending_images.pop(request_id, None)
+        _pending_image_callbacks.pop(request_id, None)
         # Give the agent time to reconnect, then retry once
         reconnected = await wait_for_agent(max_wait=30.0)
         if not reconnected:
@@ -342,10 +353,13 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
         future = asyncio.get_event_loop().create_future()
         _pending_requests[request_id] = future
         _pending_images[request_id] = []
+        if image_callback is not None:
+            _pending_image_callbacks[request_id] = image_callback
         ws = _agent_ws
         if ws is None:
             _pending_requests.pop(request_id, None)
             _pending_images.pop(request_id, None)
+            _pending_image_callbacks.pop(request_id, None)
             return {"success": False, "error": "Campus agent disconnected before retry"}
         try:
             await ws.send_json({
@@ -358,6 +372,7 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
             logger.error(f"Retry snapshot request also failed: {retry_err}")
             _pending_requests.pop(request_id, None)
             _pending_images.pop(request_id, None)
+            _pending_image_callbacks.pop(request_id, None)
             return {"success": False, "error": "Campus agent connection is unstable"}
 
     # Now wait for the agent to send back the snapshot images
@@ -383,6 +398,45 @@ async def request_snapshot(classroom: str, timeout: float = 60.0) -> dict:
     finally:
         _pending_requests.pop(request_id, None)
         _pending_images.pop(request_id, None)
+        _pending_image_callbacks.pop(request_id, None)
+
+
+async def _store_snapshot_image(data: dict) -> None:
+    request_id = data.get("request_id", "")
+    idx = data.get("image_index", 0)
+    total = data.get("image_total", 1)
+    desc = data.get("description", "")
+    logger.info(
+        "Received snapshot_image %d/%d for %s (%d bytes, %s)",
+        idx + 1,
+        total,
+        request_id,
+        data.get("size_bytes", 0),
+        desc,
+    )
+    if request_id not in _pending_images:
+        return
+
+    image = {
+        "image_base64": data.get("image_base64", ""),
+        "description": desc,
+        "filename": data.get("filename", f"snapshot_{idx}.jpg"),
+        "size_bytes": data.get("size_bytes", 0),
+        "image_index": idx,
+        "image_total": total,
+    }
+    _pending_images[request_id].append(image)
+    callback = _pending_image_callbacks.get(request_id)
+    if callback is not None:
+        try:
+            await callback(image)
+        except Exception as exc:
+            logger.error(
+                "Snapshot image callback failed for %s: %s",
+                request_id,
+                exc,
+                exc_info=True,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -431,21 +485,7 @@ async def agent_websocket(websocket: WebSocket):
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
-                request_id = data.get("request_id", "")
-                idx = data.get("image_index", 0)
-                total = data.get("image_total", 1)
-                desc = data.get("description", "")
-                logger.info(
-                    f"Received snapshot_image {idx+1}/{total} for {request_id} "
-                    f"({data.get('size_bytes', 0)} bytes, {desc})"
-                )
-                if request_id in _pending_images:
-                    _pending_images[request_id].append({
-                        "image_base64": data.get("image_base64", ""),
-                        "description": desc,
-                        "filename": data.get("filename", f"snapshot_{idx}.jpg"),
-                        "size_bytes": data.get("size_bytes", 0),
-                    })
+                await _store_snapshot_image(data)
 
             elif msg_type == "snapshot_complete":
                 request_id = data.get("request_id", "")
