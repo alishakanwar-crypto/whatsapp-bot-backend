@@ -22,7 +22,7 @@ Endpoints:
     GET  /api/gate/reconciliation/{date} — full reconciliation data
 
 Scheduled:
-    Every 30 min, 6 AM – 5 PM IST — reconciliation report sent on WhatsApp
+    Verified-only report retries run every five minutes; no provisional report is sent.
 
 All timestamps use IST (Asia/Kolkata, UTC+05:30).
 """
@@ -31,21 +31,31 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import logging
 import os
 import re
-from datetime import datetime, timezone, timedelta
+import sqlite3
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+from app.routes.agent_config import verify_agent_secret
+from app.services.whatsapp_service import (
+    send_cloud_template_message,
+    send_cloud_text,
+    upload_media_bytes_cloud,
+)
+
 logger = logging.getLogger("app.gate")
 
-IST = timezone(timedelta(hours=5, minutes=30))
+IST = ZoneInfo("Asia/Kolkata")
 router = APIRouter()
 
 # Parent vs Vendor is a heuristic split of UNRECOGNIZED entries (neither is
@@ -81,8 +91,53 @@ GATE_REPORT_WHATSAPP_PHONES = [
     ).split(",") if p.strip()
 ]
 GATE_REPORT_WHATSAPP_TEMPLATE = os.environ.get(
-    "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_cpplus_head_count_report"
+    "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_cpplus_hourly_head_count_report_v2"
 )
+GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE = os.environ.get(
+    "GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE",
+    "ppis_cpplus_verified_head_count_correction",
+)
+GATE_INTELLIGENCE_ALERT_TEMPLATE = os.environ.get(
+    "GATE_INTELLIGENCE_ALERT_TEMPLATE", "",
+).strip()
+GATE_REPORT_DELIVERY_START_HOUR = 6
+GATE_REPORT_DELIVERY_END_HOUR = 18
+CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS = max(
+    0, int(os.environ.get("CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS", "120"))
+)
+CPPLUS_SEGMENT_VERIFICATION_POLL_SECONDS = 5
+
+
+def _headcount_delivery_window_open(now: datetime | None = None) -> bool:
+    current = now or datetime.now(IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=IST)
+    else:
+        current = current.astimezone(IST)
+    return (
+        GATE_REPORT_DELIVERY_START_HOUR
+        <= current.hour
+        < GATE_REPORT_DELIVERY_END_HOUR
+    )
+
+
+def _verified_only_policy_applies(hour_end: datetime) -> bool:
+    raw_start = os.environ.get("GATE_VERIFIED_ONLY_START", "")
+    if not raw_start:
+        return True
+    try:
+        policy_start = datetime.strptime(
+            raw_start, "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except ValueError:
+        logger.error(
+            "[GATE] Invalid GATE_VERIFIED_ONLY_START=%r; defaulting to "
+            "verified-only delivery",
+            raw_start,
+        )
+        return True
+    return hour_end >= policy_start
+
 
 CHAIRMAN_PHONE = os.environ.get("TRUEFACE_CHAIRMAN_PHONE", "919971166562")
 UNKNOWN_ALERT_PHONE = os.environ.get("UNKNOWN_ALERT_PHONE", "918796105084")
@@ -104,11 +159,505 @@ _ENTRY_CAMERA_KEYWORDS = ("ENTRY GATE", "DISPERSAL", "BASEMENT")
 # this camera, and every person it detects entering is forwarded as a live
 # WhatsApp snapshot (see _send_cpplus_visitor_snapshot).
 _CPPLUS_CAMERA_MARKERS = ("CP PLUS", "CPPLUS")
+_C1_INTELLIGENCE_EVENT_TYPES = {
+    "congestion_started",
+    "congestion_cleared",
+    "loitering",
+    "vehicle_dwell",
+    "after_hours_movement",
+    "wrong_way",
+    "direction_reversal",
+    "camera_health",
+    "replay_discrepancy",
+}
+_C1_INTELLIGENCE_SEVERITIES = {"info", "warning", "critical"}
+_C1_FORBIDDEN_METADATA_KEYS = {
+    "name", "pin", "face", "crop", "image", "snapshot", "embedding",
+    "phone", "biometric",
+}
 
 
 def _is_cpplus_camera(camera: str) -> bool:
     """True if the camera name identifies the outside CP Plus gate camera."""
     return any(m in (camera or "").upper() for m in _CPPLUS_CAMERA_MARKERS)
+
+
+def _official_cpplus_count_start() -> datetime | None:
+    raw_start = os.environ.get("CPPLUS_OFFICIAL_COUNT_START", "").strip()
+    if not raw_start:
+        return None
+    try:
+        return datetime.strptime(raw_start, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=IST
+        )
+    except ValueError:
+        logger.error(
+            "[GATE] Invalid CPPLUS_OFFICIAL_COUNT_START=%r; retaining all C1 events",
+            raw_start,
+        )
+        return None
+
+
+def _official_cpplus_entry(entry: dict) -> bool:
+    if not _is_cpplus_camera(entry.get("camera", "")):
+        return False
+    count_start = _official_cpplus_count_start()
+    if count_start is None:
+        return True
+    try:
+        timestamp = datetime.strptime(
+            entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except (TypeError, ValueError):
+        return False
+    if timestamp.date() < count_start.date():
+        return True
+    return timestamp >= count_start
+
+
+_NON_CPPLUS_REPORT_CAMERAS = (
+    "ENTRY GATE-1",
+    "ENTRY GATE-2",
+    "GALLERY MID",
+    "Reception C1",
+    "Reception C2",
+    "Reception C3",
+    "Reception C4",
+    "Basement Main Gate",
+    "DISPERSAL EXIT",
+    "TrueFace 3000",
+)
+
+_CAMERA_REPORT_ROLES = {
+    "ENTRY GATE-1": "C2 candidate / validator",
+    "ENTRY GATE-2": "C2 candidate / validator",
+    "GALLERY MID": "Overlap validator",
+    "Reception C1": "Overlap validator",
+    "Reception C2": "Overlap validator",
+    "Reception C3": "Overlap validator",
+    "Reception C4": "Overlap validator",
+    "Basement Main Gate": "C4 candidate boundary",
+    "DISPERSAL EXIT": "OUT boundary validator",
+    "TrueFace 3000": "Identity / attendance",
+}
+
+_ATTENDANCE_NAME_ALIASES = {
+    "ALISHA AHUJA": "ALISHA KANWAR",
+}
+
+_CANDIDATE_BOUNDARY_CAMERAS = {
+    "C2": {"ENTRY GATE-1", "ENTRY GATE-2"},
+    "C4": {"Basement Main Gate"},
+}
+_CANDIDATE_IMAGE_DIRECTIONS = {"TOP_TO_BOTTOM", "BOTTOM_TO_TOP"}
+_CANDIDATE_REPORT_CAMERAS = (
+    ("C2", "ENTRY GATE-1"),
+    ("C2", "ENTRY GATE-2"),
+    ("C4", "Basement Main Gate"),
+)
+
+
+def _build_candidate_boundary_observations(
+    entries: list[dict], start: datetime, end: datetime
+) -> list[dict]:
+    observations = {
+        (boundary, camera): {
+            "boundary": boundary,
+            "camera": camera,
+            "top_to_bottom": 0,
+            "bottom_to_top": 0,
+        }
+        for boundary, camera in _CANDIDATE_REPORT_CAMERAS
+    }
+    for entry in entries:
+        key = (entry.get("boundary", ""), entry.get("camera", ""))
+        if key not in observations:
+            continue
+        try:
+            timestamp = datetime.strptime(
+                entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=IST)
+        except (TypeError, ValueError):
+            continue
+        if not start <= timestamp < end:
+            continue
+        image_direction = entry.get("image_direction", "")
+        if image_direction == "TOP_TO_BOTTOM":
+            observations[key]["top_to_bottom"] += 1
+        elif image_direction == "BOTTOM_TO_TOP":
+            observations[key]["bottom_to_top"] += 1
+    return list(observations.values())
+
+
+def _normalize_candidate_boundary_event(entry: dict) -> dict:
+    event_id = str(entry.get("event_id", "")).strip()
+    timestamp = str(entry.get("timestamp", "")).strip()
+    boundary = str(entry.get("boundary", "")).strip().upper()
+    camera = str(entry.get("camera", "")).strip()
+    image_direction = str(entry.get("image_direction", "")).strip().upper()
+    try:
+        line_position = float(entry.get("line_position"))
+        parsed_timestamp = datetime.strptime(
+            timestamp, "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid candidate boundary event") from exc
+
+    if (
+        not event_id
+        or len(event_id) > 64
+        or camera not in _CANDIDATE_BOUNDARY_CAMERAS.get(boundary, set())
+        or image_direction not in _CANDIDATE_IMAGE_DIRECTIONS
+        or not 0 < line_position < 1
+    ):
+        raise ValueError("Invalid candidate boundary event")
+
+    return {
+        "event_id": event_id,
+        "date": parsed_timestamp.strftime("%Y-%m-%d"),
+        "timestamp": timestamp,
+        "boundary": boundary,
+        "camera": camera,
+        "image_direction": image_direction,
+        "line_position": line_position,
+    }
+
+
+def _contains_forbidden_c1_metadata(value: object) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized_key = str(key).strip().lower()
+            if any(part in normalized_key for part in _C1_FORBIDDEN_METADATA_KEYS):
+                return True
+            if _contains_forbidden_c1_metadata(nested):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_forbidden_c1_metadata(item) for item in value)
+    return False
+
+
+def _normalize_c1_intelligence_event(entry: dict) -> dict:
+    event_id = str(entry.get("event_id", "")).strip()
+    timestamp = str(entry.get("timestamp", "")).strip()
+    camera = str(entry.get("camera", "")).strip()
+    event_type = str(entry.get("event_type", "")).strip().lower()
+    severity = str(entry.get("severity", "")).strip().lower()
+    metadata = entry.get("metadata", {})
+    try:
+        parsed_timestamp = datetime.strptime(
+            timestamp, "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+        metadata_json = json.dumps(
+            metadata,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid C1 intelligence event") from exc
+
+    if (
+        not event_id
+        or len(event_id) > 96
+        or not _is_cpplus_camera(camera)
+        or event_type not in _C1_INTELLIGENCE_EVENT_TYPES
+        or severity not in _C1_INTELLIGENCE_SEVERITIES
+        or entry.get("verification_only") is not True
+        or not isinstance(metadata, dict)
+        or len(metadata_json) > 4000
+        or _contains_forbidden_c1_metadata(metadata)
+    ):
+        raise ValueError("Invalid C1 intelligence event")
+
+    return {
+        "event_id": event_id,
+        "date": parsed_timestamp.strftime("%Y-%m-%d"),
+        "timestamp": timestamp,
+        "camera": camera,
+        "event_type": event_type,
+        "severity": severity,
+        "verification_only": True,
+        "metadata": metadata,
+        "metadata_json": metadata_json,
+    }
+
+
+def _build_non_cpplus_camera_observations(
+    entries: list[dict], start: datetime, end: datetime
+) -> list[dict]:
+    counts = {
+        camera: {
+            "camera": camera,
+            "role": _CAMERA_REPORT_ROLES[camera],
+            "in_count": 0,
+            "out_count": 0,
+        }
+        for camera in _NON_CPPLUS_REPORT_CAMERAS
+    }
+    for entry in entries:
+        camera = entry.get("camera", "")
+        if camera not in counts:
+            continue
+        try:
+            timestamp = datetime.strptime(
+                entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=IST)
+        except (TypeError, ValueError):
+            continue
+        if not start <= timestamp < end:
+            continue
+        direction = entry.get("direction", "IN")
+        if camera == "DISPERSAL EXIT" and direction != "OUT":
+            continue
+        if direction == "IN":
+            counts[camera]["in_count"] += 1
+        elif direction == "OUT":
+            counts[camera]["out_count"] += 1
+    return list(counts.values())
+
+
+_VEHICLE_TYPE_LABELS = {
+    "bus": "Bus",
+    "car": "Car / Van",
+    "motorcycle": "Scooter / Motorcycle",
+    "truck": "Truck",
+}
+
+
+def _build_vehicle_observations(
+    entries: list[dict], start: datetime, end: datetime
+) -> list[dict]:
+    counts: dict[tuple[str, str], dict] = {}
+    for entry in entries:
+        timestamp = _parse_attendance_event_time(
+            entry.get("timestamp", ""), start.strftime("%Y-%m-%d")
+        )
+        if timestamp is None or not start <= timestamp < end:
+            continue
+        camera = entry.get("camera", "") or "Unknown camera"
+        raw_type = (entry.get("vehicle_type", "vehicle") or "vehicle").lower()
+        vehicle_type = _VEHICLE_TYPE_LABELS.get(
+            raw_type, raw_type.replace("_", " ").title()
+        )
+        key = (camera, vehicle_type)
+        observation = counts.setdefault(
+            key,
+            {
+                "camera": camera,
+                "vehicle_type": vehicle_type,
+                "in_count": 0,
+                "out_count": 0,
+            },
+        )
+        direction = (entry.get("direction", "IN") or "IN").upper()
+        if direction == "IN":
+            observation["in_count"] += 1
+        elif direction == "OUT":
+            observation["out_count"] += 1
+    return sorted(
+        counts.values(),
+        key=lambda item: (item["camera"].upper(), item["vehicle_type"].upper()),
+    )
+
+
+def _canonical_attendance_name(name: str) -> str:
+    normalized = re.sub(r"[^A-Z0-9]+", " ", (name or "").upper()).strip()
+    return _ATTENDANCE_NAME_ALIASES.get(normalized, normalized)
+
+
+def _parse_attendance_event_time(value: str, report_date: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=IST)
+        return parsed.astimezone(IST)
+    except ValueError:
+        pass
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            clock = datetime.strptime(raw, fmt)
+            day = datetime.strptime(report_date, "%Y-%m-%d")
+            return day.replace(
+                hour=clock.hour, minute=clock.minute, second=clock.second,
+                tzinfo=IST,
+            )
+        except ValueError:
+            continue
+    return None
+
+
+def _build_all_source_attendance(
+    attendance_records: list[dict],
+    trueface_records: list[dict],
+    dvr_sightings: list[dict],
+    gate_entries: list[dict],
+    registered_people: list[dict],
+    contact_categories: dict[str, str],
+    report_date: str,
+    cutoff: datetime,
+    pending_review_count: int,
+) -> dict:
+    people: dict[str, dict] = {}
+    pin_names = {
+        str(person.get("pin", "")): person.get("name", "")
+        for person in registered_people
+        if person.get("pin") and person.get("name")
+    }
+
+    def add_evidence(
+        *, name: str, source: str, source_type: str, timestamp: str,
+        category: str, grade: str = "", direction: str = "IN",
+        person_id: str = "", name_priority: int = 0,
+    ) -> None:
+        key = _canonical_attendance_name(name)
+        event_time = _parse_attendance_event_time(timestamp, report_date)
+        if not key or event_time is None or event_time >= cutoff:
+            return
+        person = people.setdefault(key, {
+            "name": name.strip(),
+            "name_priority": name_priority,
+            "category": category,
+            "grade": grade,
+            "person_ids": set(),
+            "sources": set(),
+            "source_types": set(),
+            "events": [],
+        })
+        if name_priority > person["name_priority"]:
+            person["name"] = name.strip()
+            person["name_priority"] = name_priority
+        if category == "Students" or person["category"] != "Students":
+            person["category"] = category
+        if grade:
+            person["grade"] = grade
+        if person_id:
+            person["person_ids"].add(person_id)
+        person["sources"].add(source)
+        person["source_types"].add(source_type)
+        person["events"].append({
+            "time": event_time,
+            "direction": direction.upper(),
+            "source": source,
+        })
+
+    for record in attendance_records:
+        if (record.get("status") or "present").lower() != "present":
+            continue
+        person_id = record.get("person_id", "")
+        grade = record.get("grade", "")
+        category = (
+            "Teachers/Staff" if person_id.upper().startswith("TEACHER_")
+            else "Students"
+        )
+        camera = record.get("camera_label", "") or "Classroom face recognition"
+        add_evidence(
+            name=record.get("name", ""),
+            source=f"Face: {camera}",
+            source_type="face_camera",
+            timestamp=record.get("logged_at", ""),
+            category=category,
+            grade=grade,
+            person_id=person_id,
+            name_priority=2,
+        )
+
+    for record in trueface_records:
+        name = record.get("name", "")
+        raw_category = contact_categories.get(
+            _canonical_attendance_name(name), "staff"
+        )
+        category = _normalize_category(raw_category, name=name)
+        add_evidence(
+            name=name,
+            source="TrueFace 3000",
+            source_type="trueface",
+            timestamp=record.get("arrival_time", ""),
+            category=category,
+            person_id=record.get("pin", ""),
+            name_priority=3,
+        )
+        if record.get("departure_time"):
+            add_evidence(
+                name=name,
+                source="TrueFace 3000",
+                source_type="trueface",
+                timestamp=record["departure_time"],
+                category=category,
+                direction="OUT",
+                person_id=record.get("pin", ""),
+                name_priority=3,
+            )
+
+    for sighting in dvr_sightings:
+        camera = sighting.get("camera", "") or "DVR face recognition"
+        if camera == "TrueFace 3000":
+            continue
+        add_evidence(
+            name=sighting.get("name", ""),
+            source=f"DVR: {camera}",
+            source_type="dvr",
+            timestamp=sighting.get("timestamp", ""),
+            category="Teachers/Staff",
+            direction=sighting.get("direction", "IN"),
+            person_id=sighting.get("person_id", ""),
+            name_priority=1,
+        )
+
+    for entry in gate_entries:
+        pin = str(entry.get("matched_pin", ""))
+        name = pin_names.get(pin, "")
+        if not name:
+            continue
+        add_evidence(
+            name=name,
+            source=f"Gate ID: {entry.get('camera', 'Unknown')}",
+            source_type="gate_identity",
+            timestamp=entry.get("timestamp", ""),
+            category="Teachers/Staff",
+            direction=entry.get("direction", "IN"),
+            person_id=pin,
+            name_priority=2,
+        )
+
+    rows = []
+    for person in people.values():
+        events = sorted(person["events"], key=lambda event: event["time"])
+        source_types = person["source_types"]
+        if len(source_types) > 1:
+            verification = "MULTI-SOURCE"
+        elif "trueface" in source_types:
+            verification = "TRUEFACE ONLY"
+        elif "face_camera" in source_types:
+            verification = "FACE CAMERA ONLY"
+        elif "dvr" in source_types:
+            verification = "DVR ONLY"
+        else:
+            verification = "GATE ID ONLY"
+        rows.append({
+            "name": person["name"],
+            "category": person["category"],
+            "grade": person["grade"],
+            "first_seen": events[0]["time"].strftime("%I:%M %p"),
+            "last_seen": events[-1]["time"].strftime("%I:%M %p"),
+            "occupancy_status": (
+                "EXITED" if events[-1]["direction"] == "OUT" else "PRESENT"
+            ),
+            "verification": verification,
+            "sources": sorted(person["sources"]),
+            "evidence_count": len(events),
+        })
+    rows.sort(key=lambda row: (row["category"] != "Students", row["name"].upper()))
+    return {
+        "people": rows,
+        "total": len(rows),
+        "students": sum(row["category"] == "Students" for row in rows),
+        "staff": sum(row["category"] != "Students" for row in rows),
+        "multi_source": sum(row["verification"] == "MULTI-SOURCE" for row in rows),
+        "pending_review": pending_review_count,
+        "cutoff": cutoff.strftime("%I:%M %p"),
+    }
 
 
 # Recipients for CP Plus outside-gate visitor snapshots (WhatsApp).
@@ -177,30 +726,35 @@ def _has_clear_frontal_face(image_b64: str) -> bool:
         logger.warning("[GATE] CP Plus face-quality check failed: %s", e)
         return False
 
-# Deduplication: entries within this window from same/nearby cameras = same person
-_DEDUP_WINDOW_SECONDS = 120  # 2 minutes
+_LEGACY_DEDUP_WINDOW_SECONDS = 120
 
 
 def _deduplicate_gate_entries(entries: list[dict]) -> list[dict]:
-    """Collapse raw gate detections into estimated unique crossings.
-
-    Same-camera re-detections within the time window are dropped.
-    Cross-camera detections with matching attire within the window
-    are treated as the same person.
-    """
+    """Return one row per tracker crossing while preserving legacy totals."""
     if not entries:
         return []
 
     sorted_entries = sorted(entries, key=lambda e: e.get("timestamp", ""))
     unique: list[dict] = []
+    seen_event_ids: set[str] = set()
 
     for entry in sorted_entries:
+        event_id = str(entry.get("event_id") or "").strip()
+        if event_id:
+            if event_id in seen_event_ids:
+                continue
+            seen_event_ids.add(event_id)
+            unique.append(entry)
+            continue
+
         ts_str = entry.get("timestamp", "")
         attire = entry.get("attire_color", "unknown")
         direction = entry.get("direction", "IN")
 
         is_dup = False
         for prev in reversed(unique):
+            if prev.get("event_id"):
+                continue
             prev_ts = prev.get("timestamp", "")
             try:
                 t1 = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
@@ -208,15 +762,13 @@ def _deduplicate_gate_entries(entries: list[dict]) -> list[dict]:
                 diff = abs((t1 - t2).total_seconds())
             except (ValueError, TypeError):
                 break
-            if diff > _DEDUP_WINDOW_SECONDS:
+            if diff > _LEGACY_DEDUP_WINDOW_SECONDS:
                 break
             if prev.get("direction") != direction:
                 continue
-            # Same camera within window → definitely same person
             if prev.get("camera") == entry.get("camera"):
                 is_dup = True
                 break
-            # Different camera but same attire within window → likely same person
             if attire and attire != "unknown" and prev.get("attire_color", "unknown") == attire:
                 is_dup = True
                 break
@@ -236,15 +788,9 @@ async def _get_db():
     return await get_db()
 
 
-async def _store_gate_entries(db, entries: list[dict]) -> int:
-    """Store gate entry events in the database. Returns count stored.
-
-    When an entry carries a stable ``event_id`` the insert is idempotent
-    (INSERT OR IGNORE against a partial UNIQUE index), so retried/duplicated
-    agent POSTs do not double-count. Entries without an ``event_id`` behave
-    as before.
-    """
-    count = 0
+async def _store_gate_entries(db, entries: list[dict]) -> list[dict]:
+    """Store each tracker crossing once and return the newly stored entries."""
+    stored: list[dict] = []
     for entry in entries:
         ts = entry.get("timestamp", "")
         date_part = ts.split(" ")[0] if " " in ts else datetime.now(IST).strftime("%Y-%m-%d")
@@ -252,30 +798,181 @@ async def _store_gate_entries(db, entries: list[dict]) -> int:
         direction = entry.get("direction", "IN")
         attire_color = entry.get("attire_color", "unknown")
         person_crop = entry.get("person_crop", "")
-        event_id = entry.get("event_id", "") or ""
+        event_id = str(entry.get("event_id") or "").strip() or None
 
-        cur = await db.execute(
+        cursor = await db.execute(
             "INSERT OR IGNORE INTO gate_entries "
-            "(date, timestamp, camera, direction, attire_color, person_crop, event_id) "
+            "(event_id, date, timestamp, camera, direction, attire_color, person_crop) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (date_part, ts, camera, direction, attire_color, person_crop, event_id),
+            (event_id, date_part, ts, camera, direction, attire_color, person_crop),
         )
-        count += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        if cursor.rowcount:
+            stored.append(entry)
     await db.commit()
-    return count
+    return stored
+
+
+async def _store_cpplus_hourly_recount(db, recount: dict) -> None:
+    await db.execute(
+        """
+        INSERT INTO cpplus_hourly_recounts
+            (date, hour_start, hour_end, in_count, processed_frames, source, verified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(date, hour_start) DO UPDATE SET
+            hour_end = excluded.hour_end,
+            in_count = excluded.in_count,
+            processed_frames = excluded.processed_frames,
+            source = excluded.source,
+            verified_at = excluded.verified_at
+        """,
+        (
+            recount["date"], recount["hour_start"], recount["hour_end"],
+            recount["in_count"], recount["processed_frames"],
+            recount["source"], recount["verified_at"],
+        ),
+    )
+    await db.commit()
+
+
+async def _get_cpplus_hourly_recounts(db, date: str) -> dict[int, int]:
+    cur = await db.execute(
+        "SELECT hour_start, in_count FROM cpplus_hourly_recounts "
+        "WHERE date = ? ORDER BY hour_start",
+        (date,),
+    )
+    counts: dict[int, int] = {}
+    for hour_start, in_count in await cur.fetchall():
+        try:
+            hour = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").hour
+        except (TypeError, ValueError):
+            continue
+        counts[hour] = int(in_count)
+    return counts
+
+
+async def _get_cpplus_native_hourly_counts(db, date: str) -> dict[int, int]:
+    cur = await db.execute(
+        "SELECT hour_start, in_count FROM cpplus_hourly_recounts "
+        "WHERE date = ? AND source = 'camera_native_counter' "
+        "ORDER BY hour_start",
+        (date,),
+    )
+    counts: dict[int, int] = {}
+    for hour_start, in_count in await cur.fetchall():
+        try:
+            hour = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").hour
+        except (TypeError, ValueError):
+            continue
+        counts[hour] = int(in_count)
+    return counts
+
+
+async def _store_cpplus_hourly_observation(db, recount: dict) -> None:
+    await db.execute(
+        "INSERT INTO cpplus_hourly_observations "
+        "(date, hour_start, hour_end, in_count, processed_frames, source, received_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(date, hour_start, source) DO UPDATE SET "
+        "hour_end = excluded.hour_end, in_count = excluded.in_count, "
+        "processed_frames = excluded.processed_frames, "
+        "received_at = excluded.received_at",
+        (
+            recount["date"], recount["hour_start"], recount["hour_end"],
+            recount["in_count"], recount["processed_frames"],
+            recount["source"], recount["verified_at"],
+        ),
+    )
+    await db.commit()
+
+
+async def _get_cpplus_hourly_observations(db, date: str) -> dict[int, dict[str, dict]]:
+    cursor = await db.execute(
+        "SELECT hour_start, in_count, processed_frames, source, received_at "
+        "FROM cpplus_hourly_observations WHERE date = ? "
+        "ORDER BY hour_start, source",
+        (date,),
+    )
+    observations: dict[int, dict[str, dict]] = {}
+    for hour_start, in_count, processed_frames, source, received_at in await cursor.fetchall():
+        try:
+            hour = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").hour
+        except (TypeError, ValueError):
+            continue
+        observations.setdefault(hour, {})[str(source)] = {
+            "in_count": int(in_count),
+            "processed_frames": int(processed_frames),
+            "received_at": str(received_at),
+        }
+    return observations
+
+
+async def _wait_for_cpplus_segment_observation(
+    date: str, hour_start: str,
+) -> bool:
+    deadline = (
+        asyncio.get_running_loop().time()
+        + CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS
+    )
+    while True:
+        db = await _get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT 1 FROM cpplus_hourly_observations "
+                "WHERE date = ? AND hour_start = ? "
+                "AND source = 'school_pc_segment_recording' LIMIT 1",
+                (date, hour_start),
+            )
+            if await cursor.fetchone() is not None:
+                return True
+        finally:
+            await db.close()
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(
+            min(CPPLUS_SEGMENT_VERIFICATION_POLL_SECONDS, remaining)
+        )
+
+
+def _build_c1_recording_verification(
+    official_count: int, observations: dict[str, dict]
+) -> dict:
+    segment = observations.get("school_pc_segment_recording")
+    if segment is None:
+        return {
+            "official_count": official_count,
+            "segment_count": None,
+            "difference": None,
+            "tolerance": max(2, (official_count + 19) // 20),
+            "status": "RECORDING CHECK PENDING",
+        }
+    segment_count = int(segment["in_count"])
+    difference = segment_count - official_count
+    tolerance = max(2, (official_count + 19) // 20)
+    return {
+        "official_count": official_count,
+        "segment_count": segment_count,
+        "difference": difference,
+        "tolerance": tolerance,
+        "status": (
+            "COUNTS AGREE"
+            if abs(difference) <= tolerance
+            else "DIFFERENCE REQUIRES REVIEW"
+        ),
+    }
 
 
 async def _get_gate_entries(db, date: str, direction: str | None = None) -> list[dict]:
     """Get all gate entries for a date, optionally filtered by direction."""
     if direction:
         cur = await db.execute(
-            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop "
+            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop, event_id "
             "FROM gate_entries WHERE date = ? AND direction = ? ORDER BY timestamp",
             (date, direction),
         )
     else:
         cur = await db.execute(
-            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop "
+            "SELECT id, date, timestamp, camera, direction, attire_color, reconciled, matched_pin, notes, person_crop, event_id "
             "FROM gate_entries WHERE date = ? ORDER BY timestamp",
             (date,),
         )
@@ -285,7 +982,7 @@ async def _get_gate_entries(db, date: str, direction: str | None = None) -> list
             "id": r[0], "date": r[1], "timestamp": r[2], "camera": r[3],
             "direction": r[4], "attire_color": r[5], "reconciled": bool(r[6]),
             "matched_pin": r[7], "notes": r[8],
-            "person_crop": r[9] if len(r) > 9 else "",
+            "person_crop": r[9], "event_id": r[10],
         }
         for r in rows
     ]
@@ -304,6 +1001,33 @@ async def _get_gate_entries_with_crops(db, date: str) -> list[dict]:
          "direction": r[3], "person_crop": r[4]}
         for r in await cur.fetchall()
     ]
+
+
+async def _get_face_attendance_records(db, date: str) -> list[dict]:
+    cur = await db.execute(
+        "SELECT person_id, student_name, grade, camera_label, confidence, "
+        "status, logged_at FROM attendance_records "
+        "WHERE substr(logged_at, 1, 10) = ? ORDER BY logged_at",
+        (date,),
+    )
+    return [
+        {
+            "person_id": row[0], "name": row[1], "grade": row[2],
+            "camera_label": row[3], "confidence": row[4],
+            "status": row[5], "logged_at": row[6],
+        }
+        for row in await cur.fetchall()
+    ]
+
+
+async def _get_pending_attendance_reviews(db, date: str) -> int:
+    cur = await db.execute(
+        "SELECT COUNT(*) FROM manual_review_queue WHERE status = 'pending' "
+        "AND date(created_at, '+5 hours', '+30 minutes') = ?",
+        (date,),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else 0
 
 
 async def _get_trueface_attendance(db, date: str) -> list[dict]:
@@ -342,7 +1066,7 @@ async def _get_contact_categories(db) -> dict[str, str]:
     )
     result: dict[str, str] = {}
     for r in await cur.fetchall():
-        name = (r[0] or "").upper().strip()
+        name = _canonical_attendance_name(r[0] or "")
         category = (r[1] or "staff").lower().strip()
         if name:
             result[name] = category
@@ -490,41 +1214,313 @@ async def _get_visitor_sightings(db, date: str) -> list[dict]:
     ]
 
 
-async def _store_vehicle_entries(db, entries: list[dict]) -> int:
-    """Store vehicle entry events in the database. Returns count stored."""
+async def _store_candidate_boundary_events(db, entries: list[dict]) -> int:
+    """Store audit-only C2/C4 line crossings without changing headcount."""
     count = 0
     for entry in entries:
-        ts = entry.get("timestamp", "")
-        date_part = ts.split(" ")[0] if " " in ts else datetime.now(IST).strftime("%Y-%m-%d")
-        camera = entry.get("camera", "")
-        direction = entry.get("direction", "IN")
-        vehicle_type = entry.get("vehicle_type", "car")
-
-        snapshot = entry.get("snapshot", "")
-        event_id = entry.get("event_id", "") or ""
-
-        cur = await db.execute(
-            "INSERT OR IGNORE INTO vehicle_entries "
-            "(date, timestamp, camera, direction, vehicle_type, snapshot, event_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (date_part, ts, camera, direction, vehicle_type, snapshot, event_id),
+        event = _normalize_candidate_boundary_event(entry)
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO candidate_boundary_events "
+            "(event_id, date, timestamp, boundary, camera, image_direction, "
+            "line_position, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event["event_id"],
+                event["date"],
+                event["timestamp"],
+                event["boundary"],
+                event["camera"],
+                event["image_direction"],
+                event["line_position"],
+                "dvr_line_crossing_audit",
+            ),
         )
-        count += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        count += max(cursor.rowcount, 0)
+    await db.commit()
+    return count
+
+
+async def _store_c1_intelligence_events(db, entries: list[dict]) -> int:
+    stored = 0
+    for entry in entries:
+        event = _normalize_c1_intelligence_event(entry)
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO c1_intelligence_events "
+            "(event_id, date, timestamp, camera, event_type, severity, "
+            "metadata_json, verification_only) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+            (
+                event["event_id"],
+                event["date"],
+                event["timestamp"],
+                event["camera"],
+                event["event_type"],
+                event["severity"],
+                event["metadata_json"],
+            ),
+        )
+        stored += max(cursor.rowcount, 0)
+    await db.commit()
+    return stored
+
+
+async def _get_c1_intelligence_events(db, date: str) -> list[dict]:
+    cursor = await db.execute(
+        "SELECT event_id, timestamp, camera, event_type, severity, "
+        "metadata_json, verification_only FROM c1_intelligence_events "
+        "WHERE date = ? ORDER BY timestamp",
+        (date,),
+    )
+    return [
+        {
+            "event_id": row[0],
+            "timestamp": row[1],
+            "camera": row[2],
+            "event_type": row[3],
+            "severity": row[4],
+            "metadata": json.loads(row[5] or "{}"),
+            "verification_only": bool(row[6]),
+        }
+        for row in await cursor.fetchall()
+    ]
+
+
+async def _get_pending_c1_alert_count(db, date: str) -> int:
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM c1_alert_deliveries delivery "
+        "JOIN c1_intelligence_events event ON event.event_id = delivery.event_id "
+        "WHERE event.date = ? AND delivery.status != 'sent'",
+        (date,),
+    )
+    row = await cursor.fetchone()
+    if not row or not isinstance(row[0], (int, float)):
+        return 0
+    return int(row[0] or 0)
+
+
+def _c1_alert_detail(event: dict) -> str:
+    metadata = event.get("metadata", {})
+    event_type = event["event_type"]
+    if event_type == "camera_health":
+        state = str(metadata.get("state", "unknown")).replace("_", " ")
+        return f"Camera state: {state}"
+    if event_type in {"after_hours_movement", "wrong_way"}:
+        direction = metadata.get(
+            "observed_direction",
+            metadata.get("direction", "unknown"),
+        )
+        return f"Anonymous movement direction: {direction}"
+    if event_type == "congestion_started":
+        return f"People in gate zone: {metadata.get('people', 0)}"
+    if event_type == "congestion_cleared":
+        return "Gate-zone congestion cleared"
+    if event_type in {"loitering", "vehicle_dwell"}:
+        return f"Observed dwell: {metadata.get('dwell_seconds', 0)} seconds"
+    if event_type == "direction_reversal":
+        return (
+            f"Direction changed from {metadata.get('previous_direction', 'unknown')} "
+            f"to {metadata.get('observed_direction', 'unknown')}"
+        )
+    if event_type == "replay_discrepancy":
+        return (
+            f"Live IN {metadata.get('live_in', 0)} vs replay IN "
+            f"{metadata.get('replay_in', 0)}; official count unchanged"
+        )
+    return "Anonymous operational signal"
+
+
+async def _claim_c1_alert(event_id: str, recipient: str, claimed_at: str) -> bool:
+    db = await _get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO c1_alert_deliveries "
+            "(event_id, recipient, status, claimed_at) "
+            "VALUES (?, ?, 'claimed', ?) "
+            "ON CONFLICT(event_id, recipient) DO UPDATE SET "
+            "status = 'claimed', claimed_at = excluded.claimed_at, sent_at = '' "
+            "WHERE c1_alert_deliveries.status = 'failed'",
+            (event_id, recipient, claimed_at),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def _finish_c1_alert(
+    event_id: str,
+    recipient: str,
+    sent: bool,
+    sent_at: str,
+) -> None:
+    db = await _get_db()
+    try:
+        await db.execute(
+            "UPDATE c1_alert_deliveries SET status = ?, sent_at = ? "
+            "WHERE event_id = ? AND recipient = ?",
+            ("sent" if sent else "failed", sent_at if sent else "", event_id, recipient),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _send_c1_intelligence_alerts(events: list[dict]) -> int:
+    sent_count = 0
+    for event in events:
+        alert_type = event["event_type"].replace("_", " ").upper()
+        detail = _c1_alert_detail(event)
+        try:
+            alert_time = datetime.strptime(
+                event["timestamp"], "%Y-%m-%d %H:%M:%S"
+            ).strftime("%d-%m-%Y %H:%M:%S IST")
+        except ValueError:
+            alert_time = event["timestamp"]
+        for recipient in GATE_REPORT_WHATSAPP_PHONES:
+            claimed_at = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
+            if not await _claim_c1_alert(event["event_id"], recipient, claimed_at):
+                continue
+            try:
+                if GATE_INTELLIGENCE_ALERT_TEMPLATE:
+                    sent = await send_cloud_template_message(
+                        recipient,
+                        GATE_INTELLIGENCE_ALERT_TEMPLATE,
+                        body_params=[
+                            alert_type,
+                            alert_time,
+                            detail,
+                        ],
+                    )
+                else:
+                    sent = await send_cloud_text(
+                        recipient,
+                        "PPIS C1 GATE ALERT\n"
+                        f"Type: {alert_type}\n"
+                        f"Time: {alert_time}\n"
+                        f"{detail}\n"
+                        "Anonymous, non-additive operational signal.",
+                    )
+            except Exception:
+                logger.exception(
+                    "[GATE] C1 alert failed for event %s and recipient ending %s",
+                    event["event_id"],
+                    recipient[-4:],
+                )
+                sent = False
+            await _finish_c1_alert(
+                event["event_id"],
+                recipient,
+                sent,
+                datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST"),
+            )
+            sent_count += int(sent)
+    return sent_count
+
+
+async def _store_vehicle_entries(db, entries: list[dict]) -> int:
+    """Store vehicle events separately from pedestrian headcount."""
+    count = 0
+    for entry in entries:
+        timestamp = str(entry.get("timestamp", "")).strip()
+        camera = str(entry.get("camera", "")).strip()
+        direction = str(entry.get("direction", "IN")).strip().upper()
+        vehicle_type = str(entry.get("vehicle_type", "vehicle")).strip().lower()
+        event_id = str(entry.get("event_id", "")).strip() or None
+        snapshot = str(entry.get("snapshot", ""))
+        try:
+            parsed_timestamp = datetime.strptime(
+                timestamp, "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=IST)
+            dwell_seconds = max(0, int(entry.get("dwell_seconds", 0)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid vehicle event") from exc
+        if (
+            not camera
+            or direction not in {"IN", "OUT"}
+            or vehicle_type not in {"car", "motorcycle", "bus", "truck", "vehicle"}
+            or (event_id is not None and len(event_id) > 96)
+        ):
+            raise ValueError("Invalid vehicle event")
+
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO vehicle_entries "
+            "(date, timestamp, camera, direction, vehicle_type, snapshot, "
+            "event_id, dwell_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                parsed_timestamp.strftime("%Y-%m-%d"),
+                timestamp,
+                camera,
+                direction,
+                vehicle_type,
+                snapshot,
+                event_id,
+                dwell_seconds,
+            ),
+        )
+        count += max(cursor.rowcount, 0)
     await db.commit()
     return count
 
 
 async def _get_vehicle_entries(db, date: str) -> list[dict]:
     """Get all vehicle entries for a date."""
-    cur = await db.execute(
-        "SELECT id, timestamp, camera, direction, vehicle_type, snapshot "
-        "FROM vehicle_entries WHERE date = ? ORDER BY timestamp",
+    try:
+        cursor = await db.execute(
+            "SELECT id, timestamp, camera, direction, vehicle_type, snapshot, "
+            "event_id, dwell_seconds FROM vehicle_entries "
+            "WHERE date = ? ORDER BY timestamp",
+            (date,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row[0],
+                "timestamp": row[1],
+                "camera": row[2],
+                "direction": row[3],
+                "vehicle_type": row[4],
+                "snapshot": row[5] or "",
+                "event_id": row[6] or "",
+                "dwell_seconds": row[7] or 0,
+            }
+            for row in rows
+        ]
+    except sqlite3.OperationalError as exc:
+        if "no such column" not in str(exc).lower():
+            raise
+        cursor = await db.execute(
+            "SELECT id, timestamp, camera, direction, vehicle_type, snapshot "
+            "FROM vehicle_entries WHERE date = ? ORDER BY timestamp",
+            (date,),
+        )
+        return [
+            {
+                "id": row[0],
+                "timestamp": row[1],
+                "camera": row[2],
+                "direction": row[3],
+                "vehicle_type": row[4],
+                "snapshot": row[5] or "",
+                "event_id": "",
+                "dwell_seconds": 0,
+            }
+            for row in await cursor.fetchall()
+        ]
+
+
+async def _get_candidate_boundary_events(db, date: str) -> list[dict]:
+    cursor = await db.execute(
+        "SELECT timestamp, boundary, camera, image_direction, line_position "
+        "FROM candidate_boundary_events WHERE date = ? ORDER BY timestamp",
         (date,),
     )
     return [
-        {"id": r[0], "timestamp": r[1], "camera": r[2],
-         "direction": r[3], "vehicle_type": r[4], "snapshot": r[5] if len(r) > 5 else ""}
-        for r in await cur.fetchall()
+        {
+            "timestamp": row[0],
+            "boundary": row[1],
+            "camera": row[2],
+            "image_direction": row[3],
+            "line_position": row[4],
+        }
+        for row in await cursor.fetchall()
     ]
 
 
@@ -563,28 +1559,21 @@ async def _reconcile(db, date: str) -> dict:
     # Head-count reconciliation counts ONLY the CP Plus outside-gate camera
     # (per school directive). DVR ENTRY/DISPERSAL/BASEMENT channels are not
     # counted toward the gate entry/exit totals.
-    gate_in_entry = [e for e in gate_in_all if _is_cpplus_camera(e["camera"])]
-    gate_out_entry = [e for e in gate_out_all if _is_cpplus_camera(e["camera"])]
+    gate_in_entry = [e for e in gate_in_all if _official_cpplus_entry(e)]
+    gate_out_entry = [e for e in gate_out_all if _official_cpplus_entry(e)]
     raw_gate_in = len(gate_in_entry)
     raw_gate_out = len(gate_out_entry)
 
-    # Deduplicate: collapse same-person detections across cameras/scans
+    # Tracker event IDs preserve distinct group crossings and collapse retries.
+    # Legacy rows retain their historical time-based totals.
     gate_in = _deduplicate_gate_entries(gate_in_entry)
     gate_out = _deduplicate_gate_entries(gate_out_entry)
     unique_gate_in = len(gate_in)
     unique_gate_out = len(gate_out)
 
     # ── CATEGORY 1: VERIFIED STAFF ──
-    # Name aliases: DVR name → TrueFace canonical name (for people registered
-    # under different names on different systems)
-    _NAME_ALIASES: dict[str, str] = {
-        "ALISHA AHUJA": "ALISHA KANWAR",
-    }
-
     def _canonical(name: str) -> str:
-        """Return canonical (TrueFace) name, resolving aliases."""
-        upper = name.upper().strip()
-        return _NAME_ALIASES.get(upper, upper)
+        return _canonical_attendance_name(name)
 
     # Build TrueFace lookup by name
     tf_by_name: dict[str, dict] = {}
@@ -1075,8 +2064,13 @@ async def _reconcile(db, date: str) -> dict:
     )
     await db.commit()
 
+    count_start = _official_cpplus_count_start()
     return {
         "date": date,
+        "official_count_start": (
+            count_start.strftime("%d-%m-%Y %H:%M:%S IST")
+            if count_start else "06:00 IST daily"
+        ),
         # ── ENTRY SUMMARY ──
         "total_entries": total_entries,  # unique gate IN (baseline)
         "total_exits": total_exits,     # unique gate OUT
@@ -1385,52 +2379,172 @@ async def _send_cpplus_visitor_snapshot(entry: dict):
 async def receive_gate_entries(request: Request):
     """Receive gate entry events from the campus agent gate counter.
 
-    Body: [{"timestamp": "...", "camera": "...", "direction": "IN", "attire_color": "blue", "person_crop": "..."}]
+    Body: [{"event_id": "...", "timestamp": "...", "camera": "...", "direction": "IN", "attire_color": "blue", "person_crop": "..."}]
     """
     body = await request.json()
     entries = body if isinstance(body, list) else [body]
 
     db = await _get_db()
     try:
-        count = await _store_gate_entries(db, entries)
+        stored_entries = await _store_gate_entries(db, entries)
     finally:
         await db.close()
+
+    count = len(stored_entries)
 
     # Forward every person detected on the CP Plus outside-gate camera as a live
     # WhatsApp snapshot (only this camera — no DVR channels). The gate counter
     # emits one event per line crossing, so each distinct visitor = one alert.
     snapshot_count = 0
-    for e in entries:
+    for e in stored_entries:
         if _is_cpplus_camera(e.get("camera", "")) and e.get("direction", "IN") == "IN":
             snapshot_count += 1
             asyncio.create_task(_send_cpplus_visitor_snapshot(e))
 
-    # Anonymous analytics: run per-event detectors (after-hours, wrong-way) on
-    # each crossing and a congestion sweep once per batch. These are fire-and-
-    # forget; failures never block ingestion.
-    asyncio.create_task(_run_ingest_analytics(entries))
+    asyncio.create_task(_run_anonymous_gate_analytics(stored_entries))
 
     logger.info("[GATE] Stored %d gate entry event(s); queued %d CP Plus snapshot(s)",
                 count, snapshot_count)
     return {"status": "ok", "stored": count, "snapshots": snapshot_count}
 
 
-async def _run_ingest_analytics(entries: list[dict]) -> None:
-    """Background: anonymous per-event + sweep detectors for a gate batch."""
+async def _run_anonymous_gate_analytics(entries: list[dict]) -> None:
+    """Run non-biometric analytics without delaying gate-event ingestion."""
     try:
         from app.services.gate_analytics_service import (
-            check_after_hours, check_wrong_way, check_congestion,
+            check_after_hours,
+            check_wrong_way,
+            check_congestion,
         )
         db = await _get_db()
         try:
-            for e in entries:
-                await check_after_hours(db, e)
-                await check_wrong_way(db, e)
+            for entry in entries:
+                await check_after_hours(db, entry)
+                await check_wrong_way(db, entry)
             await check_congestion(db)
         finally:
             await db.close()
-    except Exception as e:
-        logger.error("[GATE] ingest analytics failed: %s", e)
+    except Exception:
+        logger.exception("[GATE] Anonymous analytics failed")
+
+
+@router.post(
+    "/api/gate/cpplus-hourly-recount",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_cpplus_hourly_recount(request: Request):
+    """Store an IN count produced by replaying one completed camera hour."""
+    body = await request.json()
+    try:
+        date = str(body["date"])
+        hour_start = str(body["hour_start"])
+        hour_end = str(body["hour_end"])
+        in_count = int(body["in_count"])
+        processed_frames = int(body.get("processed_frames", 0))
+        source = str(body.get("source", "school_pc_recording"))
+        start_dt = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S")
+        end_dt = datetime.strptime(hour_end, "%Y-%m-%d %H:%M:%S")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid recount payload") from exc
+
+    if (
+        start_dt.strftime("%Y-%m-%d") != date
+        or start_dt.minute != 0
+        or start_dt.second != 0
+        or end_dt - start_dt != timedelta(hours=1)
+        or not 6 <= start_dt.hour < 17
+        or in_count < 0
+        or processed_frames < 0
+        or source not in {
+            "camera_native_counter",
+            "camera_sd_recording",
+            "school_pc_recording",
+            "school_pc_segment_recording",
+        }
+    ):
+        raise HTTPException(status_code=400, detail="Invalid recount hour or count")
+
+    native_trusted = os.environ.get(
+        "CPPLUS_NATIVE_COUNTER_TRUSTED", "0"
+    ).lower() in {"1", "true", "yes"}
+    recount = {
+        "date": date,
+        "hour_start": hour_start,
+        "hour_end": hour_end,
+        "in_count": in_count,
+        "processed_frames": processed_frames,
+        "source": source,
+        "verified_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    db = await _get_db()
+    try:
+        await _store_cpplus_hourly_observation(db, recount)
+        if source == "school_pc_segment_recording":
+            logger.info(
+                "[GATE] Stored non-additive in-hour recording check %s: IN=%d frames=%d",
+                hour_start, in_count, processed_frames,
+            )
+            return {"status": "ok", "observation": recount, "official": False}
+        if source == "camera_native_counter":
+            await db.execute(
+                "INSERT INTO cpplus_native_observations "
+                "(date, hour_start, hour_end, in_count, received_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(date, hour_start) DO UPDATE SET "
+                "hour_end = excluded.hour_end, "
+                "in_count = excluded.in_count, "
+                "received_at = excluded.received_at",
+                (date, hour_start, hour_end, in_count, recount["verified_at"]),
+            )
+            await db.commit()
+            if not native_trusted:
+                logger.warning(
+                    "[GATE] Quarantined CP Plus native count %s: IN=%d",
+                    hour_start, in_count,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Camera-native count stored for validation",
+                )
+            cur = await db.execute(
+                "SELECT camera FROM gate_entries "
+                "WHERE date = ? AND direction = 'IN' "
+                "AND timestamp >= ? AND timestamp < ?",
+                (date, hour_start, hour_end),
+            )
+            live_count = sum(
+                _is_cpplus_camera(row[0]) for row in await cur.fetchall()
+            )
+            if in_count < live_count:
+                logger.error(
+                    "[GATE] Rejected CP Plus native undercount %s: "
+                    "camera=%d live=%d",
+                    hour_start, in_count, live_count,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Camera-native count is below live CP Plus crossings",
+                )
+        await _store_cpplus_hourly_recount(db, recount)
+    finally:
+        await db.close()
+
+    logger.info(
+        "[GATE] Stored CP Plus recording recount %s: IN=%d frames=%d source=%s",
+        hour_start, in_count, processed_frames, source,
+    )
+    if source == "camera_native_counter":
+        current = datetime.now(IST)
+        if date == current.strftime("%Y-%m-%d"):
+            asyncio.create_task(
+                send_event_id_headcount_report(
+                    final=current.hour >= 17,
+                    now=current,
+                )
+            )
+    if source in {"camera_sd_recording", "school_pc_recording"}:
+        asyncio.create_task(_record_replay_discrepancy(recount))
+    return {"status": "ok", "recount": recount}
 
 
 @router.post("/api/gate/teacher-sighting")
@@ -1506,6 +2620,72 @@ async def receive_visitor_sightings(request: Request):
     return {"status": "ok", "stored": count}
 
 
+@router.post(
+    "/api/gate/c1-signal",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_c1_intelligence_events(request: Request):
+    """Store anonymous C1 operational signals without changing headcount."""
+    body = await request.json()
+    entries = body if isinstance(body, list) else [body]
+    if not entries or len(entries) > 100:
+        raise HTTPException(status_code=422, detail="Invalid C1 signal batch")
+    try:
+        normalized = [
+            _normalize_c1_intelligence_event(entry)
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if len(normalized) != len(entries):
+        raise HTTPException(status_code=422, detail="Invalid C1 signal batch")
+
+    db = await _get_db()
+    try:
+        stored = await _store_c1_intelligence_events(db, normalized)
+    finally:
+        await db.close()
+    asyncio.create_task(_send_c1_intelligence_alerts(normalized))
+    logger.info(
+        "[GATE] Accepted %d C1 operational signal(s); stored=%d",
+        len(normalized),
+        stored,
+    )
+    return {
+        "status": "ok",
+        "accepted": len(normalized),
+        "stored": stored,
+        "official_count_changed": False,
+    }
+
+
+@router.post(
+    "/api/gate/candidate-boundary-event",
+    dependencies=[Depends(verify_agent_secret)],
+)
+async def receive_candidate_boundary_events(request: Request):
+    """Receive audit-only directional crossings for candidate C2/C4 routes."""
+    body = await request.json()
+    entries = body if isinstance(body, list) else [body]
+    if not entries or len(entries) > 500:
+        raise HTTPException(status_code=400, detail="Invalid event batch")
+
+    try:
+        normalized = [_normalize_candidate_boundary_event(entry) for entry in entries]
+    except (AttributeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db = await _get_db()
+    try:
+        count = await _store_candidate_boundary_events(db, normalized)
+    finally:
+        await db.close()
+
+    logger.info("[GATE] Stored %d candidate boundary audit event(s)", count)
+    return {"status": "ok", "stored": count, "official_headcount_changed": False}
+
+
 @router.post("/api/gate/vehicle-entry")
 async def receive_vehicle_entries(request: Request):
     """Receive vehicle entry events from the campus agent gate counter.
@@ -1525,17 +2705,12 @@ async def receive_vehicle_entries(request: Request):
     return {"status": "ok", "stored": count}
 
 
-@router.post("/api/gate/replay-recount")
+@router.post(
+    "/api/gate/replay-recount",
+    dependencies=[Depends(verify_agent_secret)],
+)
 async def receive_replay_recount(request: Request):
-    """Receive an SD-card replay recount that corrects the live C1 count.
-
-    Body: {"date": "YYYY-MM-DD", "window_start": "HH:MM", "window_end": "HH:MM",
-           "live_count": int, "replay_count": int, "source": "sd_replay"}
-
-    The replay count is authoritative and REPLACES the live count for its
-    window (non-additive). A discrepancy beyond the threshold emits an
-    anonymous alert.
-    """
+    """Store a non-additive replay recount for anonymous gate analytics."""
     body = await request.json()
     from app.services.gate_analytics_service import store_replay_recount
 
@@ -1543,7 +2718,8 @@ async def receive_replay_recount(request: Request):
     db = await _get_db()
     try:
         alerted = await store_replay_recount(
-            db, date,
+            db,
+            date,
             body.get("window_start", ""),
             body.get("window_end", ""),
             int(body.get("live_count", 0)),
@@ -1555,13 +2731,12 @@ async def receive_replay_recount(request: Request):
     return {"status": "ok", "alerted": alerted}
 
 
-@router.post("/api/gate/camera-health")
+@router.post(
+    "/api/gate/camera-health",
+    dependencies=[Depends(verify_agent_secret)],
+)
 async def receive_camera_health(request: Request):
-    """Receive a camera-health status change from the campus agent and emit an
-    anonymous alert on an online→offline transition.
-
-    Body: {"camera": "...", "status": "offline", "consecutive_failures": int}
-    """
+    """Record a camera-health transition for anonymous gate analytics."""
     body = await request.json()
     from app.services.gate_analytics_service import check_camera_health
 
@@ -1580,18 +2755,25 @@ async def receive_camera_health(request: Request):
 
 @router.get("/api/gate/status")
 async def gate_status():
-    """Get today's running head count totals."""
+    """Get today's official running C1 head-count totals."""
     today = datetime.now(IST).strftime("%Y-%m-%d")
     db = await _get_db()
     try:
-        gate_in = await _get_gate_entries(db, today, direction="IN")
-        gate_out = await _get_gate_entries(db, today, direction="OUT")
+        gate_in_all = await _get_gate_entries(db, today, direction="IN")
+        gate_out_all = await _get_gate_entries(db, today, direction="OUT")
         trueface = await _get_trueface_attendance(db, today)
         dvr_sightings = await _get_teacher_sightings(db, today)
         visitor_sightings = await _get_visitor_sightings(db, today)
         vehicle_entries = await _get_vehicle_entries(db, today)
     finally:
         await db.close()
+
+    gate_in = _deduplicate_gate_entries([
+        entry for entry in gate_in_all if _official_cpplus_entry(entry)
+    ])
+    gate_out = _deduplicate_gate_entries([
+        entry for entry in gate_out_all if _official_cpplus_entry(entry)
+    ])
 
     # Count unique teachers seen on DVR
     dvr_unique = len({s["person_id"] for s in dvr_sightings})
@@ -1609,8 +2791,13 @@ async def gate_status():
     from collections import Counter
     vehicle_types = dict(Counter(v["vehicle_type"] for v in vehicles_in))
 
+    count_start = _official_cpplus_count_start()
     return {
         "date": today,
+        "official_count_start": (
+            count_start.strftime("%d-%m-%Y %H:%M:%S IST")
+            if count_start else "06:00 IST daily"
+        ),
         "gate_in": len(gate_in),
         "gate_out": len(gate_out),
         "trueface_identified": len(trueface),
@@ -2752,69 +3939,388 @@ def _generate_reconciliation_pdf(recon: dict, date_display: str,
     return buf.getvalue()
 
 
+def _cpplus_report_header_lines(
+    interval_display: str, date_display: str, time_display: str,
+) -> tuple[str, str]:
+    return (
+        f"PP International School  |  REPORTING INTERVAL: {interval_display}",
+        f"Generated: {date_display} at {time_display} IST",
+    )
+
+
 def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
                                      time_display: str) -> bytes:
-    """Generate a one-page CP Plus entry-count report without face analysis."""
+    """Generate a CP Plus IN-only report without face analysis."""
     from fpdf import FPDF
 
     total_entries = report.get("total_entries", 0)
     interval_entries = report.get("interval_entries", 0)
-    interval_display = report.get("interval_display", "Last 30 minutes")
+    interval_display = report.get("interval_display", "Latest completed hour")
+    hourly_counts = report.get("hourly_counts", [])
+    peak_hour = report.get("peak_hour", "N/A")
+    peak_count = report.get("peak_count", 0)
+    recording_verified_hours = report.get("recording_verified_hours", 0)
+    completed_hours = report.get("completed_hours", 0)
+    latest_hour_verified = report.get("latest_hour_verified", False)
+    is_final = report.get("is_final", False)
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
+    title = (
+        "PPIS VERIFIED FINAL HEAD COUNT"
+        if is_final
+        else "PPIS VERIFIED HEAD COUNT REPORT"
+    )
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 12, "CP PLUS HEAD COUNT REPORT", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 12, title, new_x="LMARGIN", new_y="NEXT", align="C")
+    interval_line, generated_line = _cpplus_report_header_lines(
+        interval_display, date_display, time_display,
+    )
+    pdf.set_font("Helvetica", "B", 11)
     pdf.cell(
-        0, 7,
-        f"PP International School  |  Date: {date_display}  |  {time_display} IST",
+        0, 7, interval_line,
         new_x="LMARGIN", new_y="NEXT", align="C",
     )
-    pdf.ln(8)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(
+        0, 6, generated_line,
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
+    pdf.ln(4)
 
     pdf.set_fill_color(47, 84, 150)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(0, 9, "  ENTRY COUNT", new_x="LMARGIN", new_y="NEXT", fill=True)
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(5)
+    pdf.ln(3)
 
-    pdf.set_fill_color(221, 235, 247)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(120, 10, f"  Entered ({interval_display})", border=1, fill=True, new_x="RIGHT")
-    pdf.cell(0, 10, str(interval_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    if not is_final:
+        pdf.set_fill_color(221, 235, 247)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(120, 9, f"  Entered ({interval_display})", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(0, 9, str(interval_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_fill_color(226, 239, 218)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(120, 12, "  Total Entered Since 6:00 AM", border=1, fill=True, new_x="RIGHT")
-    pdf.cell(0, 12, str(total_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(8)
+    pdf.cell(120, 11, "  Cumulative IN Count Since 6:00 AM", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(0, 11, str(total_entries), border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(55, 7, "Camera:", new_x="RIGHT")
+    pdf.set_fill_color(255, 242, 204)
+    pdf.set_font("Helvetica", "B", 11)
+    peak_value = f"{peak_hour} ({peak_count})" if peak_count else "N/A"
+    pdf.cell(120, 9, "  Peak Entry Hour", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(0, 9, peak_value, border=1, fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_fill_color(242, 242, 242)
     pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(0, 7, "ENTRY GATE-OUTSIDE (CP Plus)", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(55, 7, "Counting method:", new_x="RIGHT")
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(0, 7, "Physical IN crossings detected in CP Plus video", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(6)
+    pdf.cell(120, 8, "  Camera-Verified Hours", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(
+        0, 8, f"{recording_verified_hours}/{completed_hours}", border=1,
+        fill=True, align="C", new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.set_fill_color(255, 242, 204)
+    verification_status = (
+        "CAMERA VERIFIED" if latest_hour_verified
+        else "LIVE AI - NOT YET CAMERA-VERIFIED"
+    )
+    pdf.cell(120, 8, "  Latest Hour Status", border=1, fill=True, new_x="RIGHT")
+    pdf.cell(
+        0, 8, verification_status, border=1, fill=True, align="C",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(5)
 
-    pdf.set_font("Helvetica", "I", 9)
+    c1_verification = report.get("c1_recording_verification")
+    if c1_verification is not None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  C1 IN-HOUR RECORDING CHECK ({interval_display})",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "", 8)
+        segment_count = c1_verification["segment_count"]
+        difference = c1_verification["difference"]
+        rows = (
+            ("  Official CP Plus C1 count", c1_verification["official_count"]),
+            ("  Five-minute segment replay", "Pending" if segment_count is None else segment_count),
+            ("  Difference", "Pending" if difference is None else f"{difference:+d}"),
+            ("  Agreement tolerance", f"+/-{c1_verification['tolerance']}"),
+            ("  Verification status", c1_verification["status"]),
+        )
+        for label, value in rows:
+            pdf.cell(120, 6, label, border=1, new_x="RIGHT")
+            pdf.cell(
+                0, 6, str(value), border=1, align="C",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "The replay is an independent non-additive check. It never increases the "
+            "official total automatically; differences above the displayed tolerance "
+            "require recording review.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
+    pdf.set_fill_color(47, 84, 150)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 8, "  HOURLY IN ENTRIES", new_x="LMARGIN", new_y="NEXT", fill=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "", 9)
+    for item in hourly_counts:
+        pdf.cell(120, 6, f"  {item['hour']}", border=1, new_x="RIGHT")
+        pdf.cell(0, 6, str(item["count"]), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+
+    camera_observations = report.get("camera_observations", [])
+    if camera_observations:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  BOUNDARY AND VALIDATION OBSERVATIONS ({interval_display})",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.cell(70, 6, "  Camera / Source", border=1, new_x="RIGHT")
+        pdf.cell(70, 6, "Role", border=1, new_x="RIGHT")
+        pdf.cell(25, 6, "IN", border=1, align="C", new_x="RIGHT")
+        pdf.cell(25, 6, "OUT", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 7)
+        for observation in camera_observations:
+            pdf.cell(70, 6, f"  {observation['camera']}", border=1, new_x="RIGHT")
+            pdf.cell(70, 6, observation["role"], border=1, new_x="RIGHT")
+            pdf.cell(
+                25, 6, str(observation["in_count"]), border=1,
+                align="C", new_x="RIGHT",
+            )
+            pdf.cell(
+                25, 6, str(observation["out_count"]), border=1,
+                align="C", new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.multi_cell(
+            0, 4,
+            "Boundary strategy: CP Plus C1 is the current official entry counter. "
+            "Entry Gate 1/2 (C2) and Basement Main Gate (C4) become additive only "
+            "after each is confirmed as a constrained independent route. Gallery, "
+            "Reception and Dispersal validate movement and are never blindly added.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
+    candidate_observations = report.get("candidate_boundary_observations")
+    if candidate_observations is not None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  PHASE 2 DIRECTIONAL AUDIT ({interval_display})",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.cell(20, 6, "  Route", border=1, new_x="RIGHT")
+        pdf.cell(70, 6, "Camera", border=1, new_x="RIGHT")
+        pdf.cell(50, 6, "Top to bottom", border=1, align="C", new_x="RIGHT")
+        pdf.cell(
+            50, 6, "Bottom to top", border=1, align="C",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.set_font("Helvetica", "", 7)
+        for observation in candidate_observations:
+            pdf.cell(
+                20, 6, f"  {observation['boundary']}", border=1,
+                new_x="RIGHT",
+            )
+            pdf.cell(70, 6, observation["camera"], border=1, new_x="RIGHT")
+            pdf.cell(
+                50, 6, str(observation["top_to_bottom"]), border=1,
+                align="C", new_x="RIGHT",
+            )
+            pdf.cell(
+                50, 6, str(observation["bottom_to_top"]), border=1,
+                align="C", new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "Audit only: these are raw image-direction crossings, not confirmed campus "
+            "IN/OUT. Entry Gate 1 and 2 overlap and are kept separate. No Phase 2 "
+            "value is added to the official CP Plus C1 headcount.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
+    vehicle_observations = report.get("vehicle_observations")
+    if vehicle_observations is not None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8, f"  VEHICLE FLOW OBSERVATIONS ({interval_display}) - NOT PEOPLE",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        if vehicle_observations:
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.cell(80, 6, "  Camera", border=1, new_x="RIGHT")
+            pdf.cell(60, 6, "Vehicle type", border=1, new_x="RIGHT")
+            pdf.cell(25, 6, "IN", border=1, align="C", new_x="RIGHT")
+            pdf.cell(
+                25, 6, "OUT", border=1, align="C",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+            pdf.set_font("Helvetica", "", 7)
+            for observation in vehicle_observations:
+                pdf.cell(
+                    80, 6, f"  {observation['camera']}",
+                    border=1, new_x="RIGHT",
+                )
+                pdf.cell(
+                    60, 6, observation["vehicle_type"],
+                    border=1, new_x="RIGHT",
+                )
+                pdf.cell(
+                    25, 6, str(observation["in_count"]), border=1,
+                    align="C", new_x="RIGHT",
+                )
+                pdf.cell(
+                    25, 6, str(observation["out_count"]), border=1,
+                    align="C", new_x="LMARGIN", new_y="NEXT",
+                )
+        else:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(
+                0, 6, "No vehicle crossing events were reported for this interval.",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "Vehicles remain separate from human headcount. Passenger numbers are "
+            "never inferred, and observations from overlapping cameras are shown per "
+            "source rather than added as unique vehicles.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
+    attendance = report.get("all_source_attendance")
+    if attendance is not None:
+        def safe_text(value: object) -> str:
+            return str(value).encode("latin-1", "replace").decode("latin-1")
+
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(
+            0, 8,
+            f"  DEDUPLICATED NAMED ATTENDANCE THROUGH {attendance['cutoff']} IST",
+            new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(38, 7, "Unique named", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Students", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Staff", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Multi-source", border=1, align="C", new_x="RIGHT")
+        pdf.cell(38, 7, "Review pending", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        summary_values = (
+            attendance["total"], attendance["students"], attendance["staff"],
+            attendance["multi_source"], attendance["pending_review"],
+        )
+        for index, value in enumerate(summary_values):
+            pdf.cell(
+                38, 7, str(value), border=1, align="C",
+                new_x="LMARGIN" if index == len(summary_values) - 1 else "RIGHT",
+                new_y="NEXT" if index == len(summary_values) - 1 else "TOP",
+            )
+        pdf.ln(2)
+
+        people = attendance["people"]
+        if people:
+            widths = (55, 35, 25, 25, 25, 25)
+            headers = ("Name", "Role / Grade", "First", "Last", "State", "Evidence")
+            pdf.set_font("Helvetica", "B", 6.5)
+            for index, (width, header) in enumerate(zip(widths, headers)):
+                pdf.cell(
+                    width, 6, header, border=1, align="C",
+                    new_x="LMARGIN" if index == len(widths) - 1 else "RIGHT",
+                    new_y="NEXT" if index == len(widths) - 1 else "TOP",
+                )
+            pdf.set_font("Helvetica", "", 6.5)
+            for person in people:
+                role = person["grade"] or person["category"]
+                values = (
+                    safe_text(person["name"]), safe_text(role),
+                    person["first_seen"], person["last_seen"],
+                    person["occupancy_status"], person["verification"],
+                )
+                for index, (width, value) in enumerate(zip(widths, values)):
+                    pdf.cell(
+                        width, 6, value[:36], border=1,
+                        new_x="LMARGIN" if index == len(widths) - 1 else "RIGHT",
+                        new_y="NEXT" if index == len(widths) - 1 else "TOP",
+                    )
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "", 7)
+            for person in people:
+                sources = "; ".join(person["sources"])
+                pdf.multi_cell(
+                    0, 4, safe_text(f"{person['name']}: {sources}"),
+                    new_x="LMARGIN", new_y="NEXT",
+                )
+        else:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(
+                0, 6, "No accepted named attendance evidence was available by this cutoff.",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.multi_cell(
+            0, 4,
+            "Each reliably identified person appears once; all contributing identity "
+            "sources remain listed. Anonymous camera observations stay separate because "
+            "they cannot be safely matched to a named person.",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+        pdf.ln(4)
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(48, 6, "Verified source:", new_x="RIGHT")
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(0, 6, "ENTRY GATE-OUTSIDE (CP Plus)", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(48, 6, "Counting method:", new_x="RIGHT")
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(
+        0, 6, "Trusted camera-native or recording count only",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(4)
+
+    pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(90, 90, 90)
     pdf.multi_cell(
-        0, 5,
-        "This report counts people entering through the CP Plus outside-gate camera only. "
-        "It does not use facial recognition, identity matching, or recognized/unrecognized classifications.",
+        0, 4,
+        "Reports are withheld until all completed hours have trusted camera results. "
+        "Other camera observations are listed separately so overlapping views do not "
+        "inflate the official verified total.",
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(10)
+    pdf.ln(5)
     pdf.set_font("Helvetica", "I", 8)
-    pdf.cell(0, 5, "PPIS CP Plus Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 5, "PPIS Multi-Camera Entry Monitoring System", new_x="LMARGIN", new_y="NEXT", align="C")
 
     buf = io.BytesIO()
     pdf.output(buf)
@@ -2822,15 +4328,14 @@ def _generate_cpplus_head_count_pdf(report: dict, date_display: str,
 
 
 # ============================================================
-# CP Plus Head Count Report (every 30 min, 6 AM - 5 PM IST)
+# CP Plus Head Count Report (hourly, 6 AM - 5 PM IST)
 # ============================================================
 
 
 @router.post("/api/gate/send-report")
 async def trigger_reconciliation_report():
-    """Manual trigger to send the CP Plus head-count report immediately."""
-    await send_reconciliation_report()
-    return {"status": "sent"}
+    """Keep the retired legacy report endpoint non-delivering."""
+    return {"status": "legacy_hourly_reports_disabled"}
 
 
 @router.post("/api/gate/test-alert")
@@ -2897,24 +4402,796 @@ async def receive_entry_gate_snapshot(request: Request):
     return {"status": "ok", "sent": sent_count, "total": len(GATE_SNAPSHOT_PHONES)}
 
 
-async def send_reconciliation_report():
-    """Count CP Plus IN crossings and WhatsApp a report every 30 minutes."""
+def _is_fully_camera_verified(report: dict) -> bool:
+    return (
+        report.get("completed_hours", 0) > 0
+        and report.get("recording_verified_hours", 0)
+        == report.get("completed_hours", 0)
+    )
+
+
+def _build_cpplus_head_count_report(
+    entry_times: list[datetime],
+    now: datetime,
+    *,
+    final: bool = False,
+    recording_counts: dict[int, int] | None = None,
+    count_start: datetime | None = None,
+) -> dict:
+    day_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    day_end = now.replace(hour=17, minute=0, second=0, microsecond=0)
+    effective_start = day_start
+    if count_start and count_start.date() == now.date():
+        effective_start = max(day_start, count_start)
+    cutoff = min(now, day_end)
+    completed_end = day_end if final else cutoff.replace(
+        minute=0, second=0, microsecond=0
+    )
+    completed_end = max(day_start, completed_end)
+    counted_times = [
+        timestamp for timestamp in entry_times
+        if effective_start <= timestamp < completed_end
+    ]
+    verified = recording_counts or {}
+
+    hourly_counts = []
+    hour_start = effective_start.replace(minute=0, second=0, microsecond=0)
+    while hour_start < completed_end:
+        hour_end = min(hour_start + timedelta(hours=1), completed_end)
+        interval_start = max(hour_start, effective_start)
+        live_count = sum(
+            interval_start <= timestamp < hour_end for timestamp in counted_times
+        )
+        is_full_hour = interval_start == hour_start and (
+            hour_end - hour_start == timedelta(hours=1)
+        )
+        recording_count = verified.get(hour_start.hour) if is_full_hour else None
+        hourly_counts.append({
+            "hour": (
+                f"{interval_start.strftime('%I:%M %p')} - "
+                f"{hour_end.strftime('%I:%M %p')}"
+            ),
+            "count": max(live_count, recording_count)
+            if recording_count is not None else live_count,
+            "recording_verified": recording_count is not None,
+        })
+        hour_start += timedelta(hours=1)
+
+    peak = max(
+        hourly_counts,
+        key=lambda item: item["count"],
+        default={"hour": "N/A", "count": 0},
+    )
+    latest = hourly_counts[-1] if hourly_counts else {
+        "hour": "No completed interval", "count": 0,
+    }
+    verified_hours = sum(item["recording_verified"] for item in hourly_counts)
+    return {
+        "interval_entries": latest["count"],
+        "total_entries": sum(item["count"] for item in hourly_counts),
+        "interval_display": f"{latest['hour']} IST",
+        "hourly_counts": hourly_counts,
+        "peak_hour": peak["hour"] if peak["count"] else "N/A",
+        "peak_count": peak["count"],
+        "recording_verified_hours": verified_hours,
+        "completed_hours": len(hourly_counts),
+        "latest_hour_verified": latest.get("recording_verified", False),
+        "official_count_start": effective_start.strftime(
+            "%d-%m-%Y %H:%M:%S IST"
+        ),
+        "is_final": final,
+    }
+
+
+def _parse_gate_entry_time(entry: dict) -> datetime | None:
+    try:
+        return datetime.strptime(
+            entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _record_replay_discrepancy(recount: dict) -> None:
+    try:
+        interval_start = datetime.strptime(
+            f"{recount['date']} {recount['hour_start']}",
+            "%Y-%m-%d %H:%M:%S",
+        ).replace(tzinfo=IST)
+        interval_end = datetime.strptime(
+            f"{recount['date']} {recount['hour_end']}",
+            "%Y-%m-%d %H:%M:%S",
+        ).replace(tzinfo=IST)
+    except (KeyError, TypeError, ValueError):
+        logger.error("[GATE] Invalid recount interval for discrepancy check")
+        return
+
+    db = await _get_db()
+    try:
+        entries = await _get_gate_entries(db, recount["date"])
+    finally:
+        await db.close()
+    live_entries = []
+    for entry in entries:
+        timestamp = _parse_gate_entry_time(entry)
+        if (
+            timestamp is not None
+            and interval_start <= timestamp < interval_end
+            and entry.get("direction", "IN") == "IN"
+            and entry.get("event_id")
+            and _official_cpplus_entry(entry)
+        ):
+            live_entries.append(entry)
+    live_in = len(_deduplicate_gate_entries(live_entries))
+    replay_in = int(recount["in_count"])
+    if live_in == replay_in:
+        return
+
+    event_key = (
+        f"{recount['date']}|{recount['hour_start']}|{recount['source']}|"
+        f"{live_in}|{replay_in}"
+    )
+    signal = _normalize_c1_intelligence_event({
+        "event_id": hashlib.sha256(event_key.encode()).hexdigest(),
+        "timestamp": interval_end.strftime("%Y-%m-%d %H:%M:%S"),
+        "camera": "ENTRY GATE-OUTSIDE (CP Plus)",
+        "event_type": "replay_discrepancy",
+        "severity": "warning",
+        "verification_only": True,
+        "metadata": {
+            "hour_start": recount["hour_start"],
+            "hour_end": recount["hour_end"],
+            "live_in": live_in,
+            "replay_in": replay_in,
+            "difference": replay_in - live_in,
+            "source": recount["source"],
+            "official_count_changed": False,
+        },
+    })
+    db = await _get_db()
+    try:
+        await _store_c1_intelligence_events(db, [signal])
+    finally:
+        await db.close()
+    await _send_c1_intelligence_alerts([signal])
+
+
+def _event_id_report_period(
+    current: datetime,
+    *,
+    final: bool = False,
+) -> tuple[datetime, datetime]:
+    day_start = current.replace(hour=6, minute=0, second=0, microsecond=0)
+    if final:
+        return day_start, day_start + timedelta(hours=11)
+
+    elapsed_hours = max(0, int((current - day_start).total_seconds() // 3600))
+    completed_hours = min((elapsed_hours // 2) * 2, 10)
+    return day_start, day_start + timedelta(hours=completed_hours)
+
+
+def _build_event_id_headcount_report(
+    entries: list[dict],
+    now: datetime,
+    *,
+    final: bool = False,
+    verified_in_counts: dict[int, int] | None = None,
+) -> dict:
+    current = now.astimezone(IST) if now.tzinfo else now.replace(tzinfo=IST)
+    day_start, report_end = _event_id_report_period(current, final=final)
+    interval_start = day_start if final else max(day_start, report_end - timedelta(hours=2))
+
+    official: list[dict] = []
+    for entry in entries:
+        timestamp = _parse_gate_entry_time(entry)
+        if (
+            timestamp is not None
+            and day_start <= timestamp < report_end
+            and _official_cpplus_entry(entry)
+        ):
+            official.append(entry)
+
+    unique_in = _deduplicate_gate_entries(
+        [entry for entry in official if entry.get("direction", "IN") == "IN"]
+    )
+    unique_out = _deduplicate_gate_entries(
+        [entry for entry in official if entry.get("direction", "IN") == "OUT"]
+    )
+    interval_in = [
+        entry for entry in unique_in
+        if interval_start <= _parse_gate_entry_time(entry) < report_end
+    ]
+    interval_out = [
+        entry for entry in unique_out
+        if interval_start <= _parse_gate_entry_time(entry) < report_end
+    ]
+    event_id_in = [
+        entry for entry in unique_in
+        if str(entry.get("event_id") or "").strip()
+    ]
+    event_id_out = [
+        entry for entry in unique_out
+        if str(entry.get("event_id") or "").strip()
+    ]
+    interval_event_id_in = [
+        entry for entry in interval_in
+        if str(entry.get("event_id") or "").strip()
+    ]
+    interval_event_id_out = [
+        entry for entry in interval_out
+        if str(entry.get("event_id") or "").strip()
+    ]
+    legacy_in = len(unique_in) - len(event_id_in)
+    legacy_out = len(unique_out) - len(event_id_out)
+
+    verified_counts = verified_in_counts or {}
+    hourly_in_counts: list[dict] = []
+    hour_start = day_start
+    while hour_start < report_end:
+        hour_end = hour_start + timedelta(hours=1)
+        tracker_in = sum(
+            hour_start <= _parse_gate_entry_time(entry) < hour_end
+            for entry in unique_in
+        )
+        verified_in = verified_counts.get(hour_start.hour)
+        official_in = (
+            max(tracker_in, int(verified_in))
+            if verified_in is not None
+            else tracker_in
+        )
+        hourly_in_counts.append({
+            "hour_start": hour_start,
+            "tracker_in": tracker_in,
+            "verified_in": verified_in,
+            "official_in": official_in,
+        })
+        hour_start = hour_end
+
+    interval_official_in = sum(
+        item["official_in"]
+        for item in hourly_in_counts
+        if item["hour_start"] >= interval_start
+    )
+    total_official_in = sum(item["official_in"] for item in hourly_in_counts)
+    verified_hours = sum(
+        item["verified_in"] is not None for item in hourly_in_counts
+    )
+    missing_verified_hours = [
+        item["hour_start"] for item in hourly_in_counts
+        if item["verified_in"] is None
+    ]
+
+    return {
+        "date": current.strftime("%Y-%m-%d"),
+        "generated_at": current.strftime("%d-%m-%Y %H:%M:%S IST"),
+        "report_start": day_start,
+        "report_end": report_end,
+        "interval_start": interval_start,
+        "interval_display": (
+            f"{day_start.strftime('%d-%m-%Y %H:%M:%S')} - "
+            f"{report_end.strftime('%d-%m-%Y %H:%M:%S')} IST"
+            if final
+            else f"{interval_start.strftime('%d-%m-%Y %H:%M:%S')} - "
+            f"{report_end.strftime('%d-%m-%Y %H:%M:%S')} IST"
+        ),
+        "period_key": (
+            f"final-{report_end.strftime('%H%M')}"
+            if final else interval_start.strftime("%H%M")
+        ),
+        "interval_in": interval_official_in,
+        "interval_out": len(interval_out),
+        "interval_net": interval_official_in - len(interval_out),
+        "total_in": total_official_in,
+        "total_out": len(unique_out),
+        "net_movement": total_official_in - len(unique_out),
+        "tracker_interval_in": len(interval_in),
+        "tracker_total_in": len(unique_in),
+        "verified_in_hours": verified_hours,
+        "completed_in_hours": len(hourly_in_counts),
+        "missing_verified_hours": missing_verified_hours,
+        "verified_in_applied": any(
+            item["verified_in"] is not None
+            and item["official_in"] > item["tracker_in"]
+            for item in hourly_in_counts
+        ),
+        "interval_verified_in_applied": any(
+            item["hour_start"] >= interval_start
+            and item["verified_in"] is not None
+            and item["official_in"] > item["tracker_in"]
+            for item in hourly_in_counts
+        ),
+        "hourly_in_counts": hourly_in_counts,
+        "raw_in": sum(
+            entry.get("direction", "IN") == "IN" for entry in official
+        ),
+        "raw_out": sum(
+            entry.get("direction", "IN") == "OUT" for entry in official
+        ),
+        "event_id_in": len(event_id_in),
+        "event_id_out": len(event_id_out),
+        "event_id_net": len(event_id_in) - len(event_id_out),
+        "event_id_crossings": len(event_id_in) + len(event_id_out),
+        "interval_event_id_in": len(interval_event_id_in),
+        "interval_event_id_out": len(interval_event_id_out),
+        "interval_event_id_crossings": (
+            len(interval_event_id_in) + len(interval_event_id_out)
+        ),
+        "legacy_in": legacy_in,
+        "legacy_out": legacy_out,
+        "legacy_net": legacy_in - legacy_out,
+        "legacy_crossings": legacy_in + legacy_out,
+        "is_final": final,
+    }
+
+
+def _enrich_event_id_headcount_report(
+    report: dict,
+    vehicles: list[dict],
+    signals: list[dict],
+    *,
+    failed_alerts: int = 0,
+) -> dict:
+    report_start = report["report_start"]
+    report_end = report["report_end"]
+    interval_start = report["interval_start"]
+
+    def in_range(entry: dict, start: datetime) -> bool:
+        timestamp = _parse_gate_entry_time(entry)
+        return timestamp is not None and start <= timestamp < report_end
+
+    c1_vehicles = [
+        entry for entry in vehicles
+        if _is_cpplus_camera(entry.get("camera", ""))
+        and in_range(entry, report_start)
+    ]
+    interval_vehicles = [
+        entry for entry in c1_vehicles
+        if in_range(entry, interval_start)
+    ]
+
+    def vehicle_summary(entries: list[dict]) -> dict:
+        by_type: dict[str, int] = {}
+        for entry in entries:
+            vehicle_type = entry.get("vehicle_type", "vehicle")
+            by_type[vehicle_type] = by_type.get(vehicle_type, 0) + 1
+        return {
+            "in": sum(entry.get("direction") == "IN" for entry in entries),
+            "out": sum(entry.get("direction") == "OUT" for entry in entries),
+            "by_type": by_type,
+            "max_dwell_seconds": max(
+                (int(entry.get("dwell_seconds", 0)) for entry in entries),
+                default=0,
+            ),
+        }
+
+    cumulative_signals = [
+        signal for signal in signals if in_range(signal, report_start)
+    ]
+    interval_signals = [
+        signal for signal in cumulative_signals
+        if in_range(signal, interval_start)
+    ]
+
+    def signal_summary(entries: list[dict]) -> dict[str, int]:
+        summary: dict[str, int] = {}
+        for entry in entries:
+            event_type = entry.get("event_type", "unknown")
+            summary[event_type] = summary.get(event_type, 0) + 1
+        return summary
+
+    health_events = [
+        signal
+        for signal in signals
+        if signal.get("event_type") == "camera_health"
+        and (
+            (timestamp := _parse_gate_entry_time(signal)) is not None
+            and timestamp < report_end
+        )
+    ]
+    if health_events:
+        latest_health = health_events[-1].get("metadata", {}).get(
+            "state", "unknown"
+        )
+        health_status = (
+            "healthy"
+            if latest_health in {"healthy", "online"}
+            else str(latest_health)
+        )
+    else:
+        health_status = "no health alert reported"
+
+    replay_discrepancies = [
+        signal for signal in cumulative_signals
+        if signal.get("event_type") == "replay_discrepancy"
+    ]
+    report.update({
+        "interval_vehicles": vehicle_summary(interval_vehicles),
+        "total_vehicles": vehicle_summary(c1_vehicles),
+        "interval_signals": signal_summary(interval_signals),
+        "total_signals": signal_summary(cumulative_signals),
+        "health_status": health_status,
+        "replay_discrepancies": len(replay_discrepancies),
+        "replay_status": (
+            f"{len(replay_discrepancies)} discrepancy event(s); official total unchanged"
+            if replay_discrepancies
+            else "No replay discrepancy flagged"
+        ),
+        "failed_alerts": failed_alerts,
+    })
+    return report
+
+
+def _generate_event_id_headcount_pdf(report: dict) -> bytes:
+    from fpdf import FPDF
+
+    if "interval_vehicles" not in report:
+        report = _enrich_event_id_headcount_report(report, [], [])
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    title = (
+        "PPIS C1 FINAL HEAD COUNT REPORT"
+        if report["is_final"] else "PPIS C1 TWO-HOUR HEAD COUNT REPORT"
+    )
+    pdf.set_font("Helvetica", "B", 17)
+    pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(
+        0, 6, f"Reporting interval: {report['interval_display']}",
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
+    pdf.cell(
+        0, 6, f"Generated: {report['generated_at']}",
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
+    pdf.ln(4)
+
+    def section(title_text: str) -> None:
+        pdf.set_fill_color(47, 84, 150)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(
+            0, 8, f"  {title_text}", new_x="LMARGIN", new_y="NEXT", fill=True,
+        )
+        pdf.set_text_color(0, 0, 0)
+
+    def row(label: str, value: object, fill: tuple[int, int, int]) -> None:
+        pdf.set_fill_color(*fill)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(145, 9, f"  {label}", border=1, fill=True, new_x="RIGHT")
+        pdf.cell(
+            0, 9, str(value), border=1, fill=True, align="C",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+
+    section("LATEST COMPLETED INTERVAL")
+    row("Persons entered (IN)", report["interval_in"], (226, 239, 218))
+    row("Tracker-observed exits (OUT)", report["interval_out"], (255, 230, 230))
+    row("Provisional movement balance", report["interval_net"], (221, 235, 247))
+    pdf.set_font("Helvetica", "I", 9)
+    if report["interval_verified_in_applied"]:
+        interval_status = (
+            f"Trusted C1 hourly count replaced the lower tracker result: "
+            f"{report['interval_in']} official IN versus "
+            f"{report['tracker_interval_in']} tracker-observed IN."
+        )
+    elif report["interval_event_id_crossings"]:
+        interval_status = (
+            f"Updated event-ID crossings in this interval: "
+            f"{report['interval_event_id_in']} IN / "
+            f"{report['interval_event_id_out']} OUT."
+        )
+    else:
+        interval_status = "No updated event-ID C1 crossing was recorded in this interval."
+    pdf.multi_cell(
+        0, 6, interval_status, new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(3)
+
+    section("OFFICIAL C1 COUNT SINCE 6:00 AM IST")
+    row("Total persons entered (IN)", report["total_in"], (226, 239, 218))
+    row("Tracker-observed exits (OUT)", report["total_out"], (255, 230, 230))
+    row("Provisional movement balance", report["net_movement"], (221, 235, 247))
+    pdf.set_font("Helvetica", "I", 9)
+    if report["verified_in_hours"]:
+        pdf.multi_cell(
+            0,
+            6,
+            f"Trusted C1 hourly counter available for {report['verified_in_hours']}/"
+            f"{report['completed_in_hours']} completed hours. For each hour, the "
+            "higher C1 count replaces the lower tracker count; the two are never added. "
+            "OUT remains tracker-observed, so the movement balance is not a campus "
+            "occupancy claim.",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+    pdf.ln(3)
+
+    section("TRACKER EVENT-ID DIAGNOSTICS")
+    row("Tracker entries observed (IN)", report["tracker_total_in"], (240, 240, 240))
+    row("Tracker event-ID entries (IN)", report["event_id_in"], (240, 240, 240))
+    row("Tracker event-ID exits (OUT)", report["event_id_out"], (240, 240, 240))
+    pdf.ln(4)
+
+    section("SEPARATE C1 VEHICLE ANALYTICS")
+    interval_vehicles = report["interval_vehicles"]
+    total_vehicles = report["total_vehicles"]
+    vehicle_types = ", ".join(
+        f"{vehicle_type}: {count}"
+        for vehicle_type, count in sorted(total_vehicles["by_type"].items())
+    ) or "None"
+    row(
+        "Interval vehicles (IN / OUT)",
+        f"{interval_vehicles['in']} / {interval_vehicles['out']}",
+        (240, 240, 240),
+    )
+    row(
+        "Cumulative vehicles (IN / OUT)",
+        f"{total_vehicles['in']} / {total_vehicles['out']}",
+        (240, 240, 240),
+    )
+    row("Vehicle types", vehicle_types, (240, 240, 240))
+    row(
+        "Maximum observed vehicle dwell (seconds)",
+        total_vehicles["max_dwell_seconds"],
+        (240, 240, 240),
+    )
+    pdf.ln(4)
+
+    section("ANONYMOUS GATE INTELLIGENCE")
+    signal_counts = ", ".join(
+        f"{event_type.replace('_', ' ')}: {count}"
+        for event_type, count in sorted(report["interval_signals"].items())
+    ) or "None"
+    row("Camera health", report["health_status"], (240, 240, 240))
+    row(
+        "Interval operational signals",
+        sum(report["interval_signals"].values()),
+        (240, 240, 240),
+    )
+    pdf.set_font("Helvetica", "", 8)
+    pdf.multi_cell(
+        0,
+        5,
+        f"Signal breakdown: {signal_counts}",
+        border=1,
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    row(
+        "Replay discrepancy events",
+        report["replay_discrepancies"],
+        (240, 240, 240),
+    )
+    if report["replay_discrepancies"]:
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.multi_cell(
+            0,
+            5,
+            "Replay evidence is verification-only; official totals were not rewritten.",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+    row("Pending/failed alert deliveries", report["failed_alerts"], (240, 240, 240))
+    pdf.ln(4)
+
+    section("LEGACY AND STORAGE STATUS")
+    pdf.set_font("Helvetica", "", 9)
+    for label, value in (
+        ("Preserved legacy count (IN / OUT)", f"{report['legacy_in']} / {report['legacy_out']}"),
+        ("Distinct updated event-ID crossings", report["event_id_crossings"]),
+        ("Raw stored C1 rows (IN / OUT)", f"{report['raw_in']} / {report['raw_out']}"),
+        ("Official source", "ENTRY GATE-OUTSIDE (CP Plus C1)"),
+    ):
+        pdf.cell(140, 8, f"  {label}", border=1, new_x="RIGHT")
+        pdf.cell(
+            0, 8, str(value), border=1, align="C",
+            new_x="LMARGIN", new_y="NEXT",
+        )
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.multi_cell(
+        0, 5,
+        "The tracker section contains crossings received from the tracker-ID "
+        "implementation. Legacy rows remain stored separately with their historical "
+        "120-second deduplication behavior. Trusted completed-hour C1 camera counts "
+        "replace a lower tracker IN count for that same hour and are never added to it; "
+        "a retry with the same event ID is ignored.",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.multi_cell(
+        0, 5,
+        "Net movement is not proof of total campus occupancy. Face, TrueFace, DVR, "
+        "visitor and vehicle observations remain separate and non-additive. No names, "
+        "images or biometric data are included.",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
+async def _claim_event_id_report(
+    date: str, period_key: str, recipient: str, claimed_at: str,
+) -> bool:
+    db = await _get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO gate_headcount_report_deliveries "
+            "(date, period_key, recipient, status, claimed_at) "
+            "VALUES (?, ?, ?, 'claimed', ?) "
+            "ON CONFLICT(date, period_key, recipient) DO UPDATE SET "
+            "status = 'claimed', claimed_at = excluded.claimed_at, sent_at = '' "
+            "WHERE gate_headcount_report_deliveries.status = 'failed'",
+            (date, period_key, recipient, claimed_at),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+    finally:
+        await db.close()
+
+
+async def _finish_event_id_report(
+    date: str, period_key: str, recipient: str, sent: bool, timestamp: str,
+) -> None:
+    db = await _get_db()
+    try:
+        await db.execute(
+            "UPDATE gate_headcount_report_deliveries SET status = ?, sent_at = ? "
+            "WHERE date = ? AND period_key = ? AND recipient = ?",
+            (
+                "sent" if sent else "failed",
+                timestamp if sent else "",
+                date,
+                period_key,
+                recipient,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def send_event_id_headcount_report(
+    *, final: bool = False, now: datetime | None = None,
+) -> int:
+    current = now or datetime.now(IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=IST)
+    else:
+        current = current.astimezone(IST)
+
+    report_date = current.strftime("%Y-%m-%d")
+    db = await _get_db()
+    try:
+        entries = await _get_gate_entries(db, report_date)
+        verified_in_counts = await _get_cpplus_native_hourly_counts(db, report_date)
+        vehicles = await _get_vehicle_entries(db, report_date)
+        signals = await _get_c1_intelligence_events(db, report_date)
+        pending_alerts = await _get_pending_c1_alert_count(db, report_date)
+    finally:
+        await db.close()
+    report = _build_event_id_headcount_report(
+        entries,
+        current,
+        final=final,
+        verified_in_counts=verified_in_counts,
+    )
+    if report["report_end"] <= report["report_start"]:
+        logger.info("[GATE] No completed two-hour C1 interval is due yet")
+        return 0
+    if report["missing_verified_hours"]:
+        missing = ", ".join(
+            f"{hour.strftime('%H:00')}-{(hour + timedelta(hours=1)).strftime('%H:00')}"
+            for hour in report["missing_verified_hours"]
+        )
+        logger.warning(
+            "[GATE] Withholding official C1 report %s; trusted native counts "
+            "are missing for %s",
+            report["interval_display"],
+            missing,
+        )
+        return 0
+    report = _enrich_event_id_headcount_report(
+        report,
+        vehicles,
+        signals,
+        failed_alerts=pending_alerts,
+    )
+    pdf_bytes = _generate_event_id_headcount_pdf(report)
+    filename = (
+        f"PPIS_C1_{'Final' if final else 'Two_Hour'}_Headcount_"
+        f"{report['date']}_{report['period_key']}.pdf"
+    )
+
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        upload_media_bytes_cloud,
+    )
+
+    document_id = await upload_media_bytes_cloud(
+        pdf_bytes, "application/pdf", filename,
+    )
+    if not document_id:
+        logger.error("[GATE] Event-ID head-count PDF upload failed")
+        return 0
+
+    sent_count = 0
+    for recipient in GATE_REPORT_WHATSAPP_PHONES:
+        if not await _claim_event_id_report(
+            report["date"], report["period_key"], recipient,
+            report["generated_at"],
+        ):
+            continue
+        try:
+            sent = await send_cloud_template_message(
+                recipient,
+                GATE_REPORT_WHATSAPP_TEMPLATE,
+                body_params=[
+                    report["generated_at"],
+                    str(report["interval_in"]),
+                    str(report["total_in"]),
+                ],
+                header_document_id=document_id,
+                header_document_filename=filename,
+            )
+        except Exception:
+            logger.exception(
+                "[GATE] Event-ID head-count report failed for recipient ending %s",
+                recipient[-4:],
+            )
+            sent = False
+        await _finish_event_id_report(
+            report["date"], report["period_key"], recipient, sent,
+            datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST"),
+        )
+        if sent:
+            sent_count += 1
+    logger.info(
+        "[GATE] Event-ID %s report %s: IN=%d OUT=%d NET=%d sent=%d",
+        "final" if final else "two-hour",
+        report["interval_display"],
+        report["total_in"],
+        report["total_out"],
+        report["net_movement"],
+        sent_count,
+    )
+    return sent_count
+
+
+async def send_reconciliation_report(*, final: bool = False):
+    """Count CP Plus IN crossings and WhatsApp an interval or final report."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     today_display = now.strftime("%d-%m-%Y")
     time_display = now.strftime("%I:%M %p")
-    day_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
-    interval_start = max(day_start, now - timedelta(minutes=30))
 
     db = await _get_db()
     try:
         gate_entries = await _get_gate_entries(db, today, direction="IN")
+        recording_counts = await _get_cpplus_hourly_recounts(db, today)
+        hourly_observations = await _get_cpplus_hourly_observations(db, today)
+        candidate_boundary_events = await _get_candidate_boundary_events(db, today)
     finally:
         await db.close()
 
+    latest_completed_hour = 16 if final else min(now.hour - 1, 16)
+    if (
+        latest_completed_hour >= 6
+        and latest_completed_hour not in recording_counts
+    ):
+        logger.warning(
+            "[GATE] CP Plus camera recount unavailable for %02d:00-%02d:00; "
+            "verified-only policy is withholding the report",
+            latest_completed_hour, latest_completed_hour + 1,
+        )
+
     cpplus_entries = [
-        entry for entry in gate_entries
-        if _is_cpplus_camera(entry.get("camera", ""))
+        entry for entry in gate_entries if _official_cpplus_entry(entry)
     ]
 
     def _entry_time(entry: dict) -> datetime | None:
@@ -2926,18 +5203,43 @@ async def send_reconciliation_report():
             return None
 
     entry_times = [timestamp for entry in cpplus_entries if (timestamp := _entry_time(entry))]
-    counted_times = [timestamp for timestamp in entry_times if day_start <= timestamp <= now]
-    interval_entries = sum(interval_start <= timestamp <= now for timestamp in counted_times)
-    total_entries = len(counted_times)
-    interval_display = f"{interval_start.strftime('%I:%M %p')} - {time_display} IST"
-    report = {
-        "interval_entries": interval_entries,
-        "total_entries": total_entries,
-        "interval_display": interval_display,
-    }
+    report = _build_cpplus_head_count_report(
+        entry_times,
+        now,
+        final=final,
+        recording_counts=recording_counts,
+        count_start=_official_cpplus_count_start(),
+    )
+    if not _is_fully_camera_verified(report):
+        logger.warning(
+            "[GATE] Verified-only policy withheld %sreport: %d/%d completed "
+            "hours verified",
+            "final " if final else "",
+            report["recording_verified_hours"],
+            report["completed_hours"],
+        )
+        return
+
+    interval_entries = report["interval_entries"]
+    total_entries = report["total_entries"]
+    interval_start = now.replace(
+        hour=latest_completed_hour, minute=0, second=0, microsecond=0
+    )
+    report["candidate_boundary_observations"] = (
+        _build_candidate_boundary_observations(
+            candidate_boundary_events,
+            interval_start,
+            interval_start + timedelta(hours=1),
+        )
+    )
+    report["c1_recording_verification"] = _build_c1_recording_verification(
+        report["interval_entries"],
+        hourly_observations.get(latest_completed_hour, {}),
+    )
 
     pdf_bytes = _generate_cpplus_head_count_pdf(report, today_display, time_display)
-    pdf_filename = f"CPPlus_Head_Count_{today}_{now.strftime('%H%M')}.pdf"
+    report_label = "Final_" if final else ""
+    pdf_filename = f"PPIS_Verified_{report_label}Head_Count_{today}_{now.strftime('%H%M')}.pdf"
 
     if GATE_REPORT_WHATSAPP_PHONES:
         try:
@@ -2973,9 +5275,298 @@ async def send_reconciliation_report():
             logger.error("[GATE] CP Plus head-count WhatsApp error: %s", e)
 
     logger.info(
-        "[GATE] CP Plus head-count report at %s: interval=%d, since_6am=%d",
-        time_display, interval_entries, total_entries,
+        "[GATE] CP Plus %shead-count report at %s: interval=%d, official_total=%d, peak=%s (%d)",
+        "final " if final else "", time_display, interval_entries, total_entries,
+        report["peak_hour"], report["peak_count"],
     )
+
+
+async def _release_cpplus_correction_claims(
+    date: str, hour_start: str, phones: list[str]
+) -> None:
+    if not phones:
+        return
+    db = await _get_db()
+    try:
+        await db.executemany(
+            "DELETE FROM cpplus_recount_corrections "
+            "WHERE date = ? AND hour_start = ? AND phone = ? AND sent_at = ''",
+            [(date, hour_start, phone) for phone in phones],
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _send_verified_cpplus_correction(recount: dict) -> None:
+    """Send one verified-only report per recipient for a completed recount hour."""
+    if recount["source"] not in {
+        "camera_native_counter",
+        "camera_sd_recording",
+        "school_pc_recording",
+    }:
+        return
+    if not _headcount_delivery_window_open():
+        logger.info(
+            "[GATE] Suppressing head-count delivery outside 06:00-17:59 IST: %s",
+            recount["hour_start"],
+        )
+        return
+    date = recount["date"]
+    hour_start = recount["hour_start"]
+    hour_end = recount["hour_end"]
+    start_dt = datetime.strptime(hour_start, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=IST
+    )
+    end_dt = datetime.strptime(hour_end, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=IST
+    )
+    if recount["source"] == "camera_native_counter":
+        segment_ready = await _wait_for_cpplus_segment_observation(
+            date, hour_start,
+        )
+        if not segment_ready:
+            logger.warning(
+                "[GATE] In-hour recording check still pending after %ds for %s",
+                CPPLUS_SEGMENT_VERIFICATION_WAIT_SECONDS, hour_start,
+            )
+
+    claimed_at = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    stale_before = (
+        datetime.now(IST) - timedelta(minutes=15)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    claimed_phones = []
+    db = await _get_db()
+    try:
+        await db.execute(
+            "DELETE FROM cpplus_recount_corrections "
+            "WHERE sent_at = '' AND claimed_at < ?",
+            (stale_before,),
+        )
+        for phone in GATE_REPORT_WHATSAPP_PHONES:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO cpplus_recount_corrections "
+                "(date, hour_start, phone, claimed_at, sent_at) "
+                "VALUES (?, ?, ?, ?, '')",
+                (date, hour_start, phone, claimed_at),
+            )
+            if cursor.rowcount:
+                claimed_phones.append(phone)
+        await db.commit()
+        if not claimed_phones:
+            return
+        gate_entries = await _get_gate_entries(db, date)
+        recording_counts = await _get_cpplus_hourly_recounts(db, date)
+        face_attendance = await _get_face_attendance_records(db, date)
+        trueface_attendance = await _get_trueface_attendance(db, date)
+        dvr_sightings = await _get_teacher_sightings(db, date)
+        registered_people = await _get_all_teachers(db)
+        contact_categories = await _get_contact_categories(db)
+        pending_review_count = await _get_pending_attendance_reviews(db, date)
+        vehicle_entries = await _get_vehicle_entries(db, date)
+        candidate_boundary_events = await _get_candidate_boundary_events(db, date)
+        hourly_observations = await _get_cpplus_hourly_observations(db, date)
+    finally:
+        await db.close()
+
+    cpplus_entries = [
+        entry for entry in gate_entries
+        if entry.get("direction") == "IN" and _official_cpplus_entry(entry)
+    ]
+    entry_times = []
+    for entry in cpplus_entries:
+        try:
+            entry_times.append(
+                datetime.strptime(
+                    entry.get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=IST)
+            )
+        except (TypeError, ValueError):
+            continue
+
+    provisional_count = sum(
+        start_dt <= timestamp < end_dt for timestamp in entry_times
+    )
+    report = _build_cpplus_head_count_report(
+        entry_times,
+        end_dt,
+        recording_counts=recording_counts,
+        count_start=_official_cpplus_count_start(),
+    )
+    if not _is_fully_camera_verified(report):
+        logger.error(
+            "[GATE] Refusing verified report for %s with only %d/%d completed "
+            "hours verified",
+            hour_start,
+            report["recording_verified_hours"],
+            report["completed_hours"],
+        )
+        await _release_cpplus_correction_claims(
+            date, hour_start, claimed_phones
+        )
+        return
+
+    report["camera_observations"] = _build_non_cpplus_camera_observations(
+        gate_entries, start_dt, end_dt
+    )
+    report["all_source_attendance"] = _build_all_source_attendance(
+        face_attendance,
+        trueface_attendance,
+        dvr_sightings,
+        gate_entries,
+        registered_people,
+        contact_categories,
+        date,
+        end_dt,
+        pending_review_count,
+    )
+    report["vehicle_observations"] = _build_vehicle_observations(
+        vehicle_entries, start_dt, end_dt
+    )
+    report["candidate_boundary_observations"] = (
+        _build_candidate_boundary_observations(
+            candidate_boundary_events, start_dt, end_dt
+        )
+    )
+    report["c1_recording_verification"] = _build_c1_recording_verification(
+        report["interval_entries"], hourly_observations.get(start_dt.hour, {}),
+    )
+    generated_at = datetime.now(IST)
+    date_display = start_dt.strftime("%d-%m-%Y")
+    pdf_bytes = _generate_cpplus_head_count_pdf(
+        report,
+        date_display,
+        generated_at.strftime("%I:%M %p"),
+    )
+    verified_only = _verified_only_policy_applies(end_dt)
+    report_type = "Head_Count" if verified_only else "Correction"
+    pdf_filename = (
+        f"PPIS_Verified_{report_type}_{date}_{start_dt.strftime('%H%M')}.pdf"
+    )
+
+    try:
+        doc_id = await upload_media_bytes_cloud(
+            pdf_bytes, "application/pdf", pdf_filename
+        )
+        if not doc_id:
+            logger.error(
+                "[GATE] Verified-only head-count PDF upload failed for %s",
+                hour_start,
+            )
+            await _release_cpplus_correction_claims(
+                date, hour_start, claimed_phones
+            )
+            return
+
+        if verified_only:
+            template = GATE_REPORT_WHATSAPP_TEMPLATE
+            body_params = [
+                f"{date_display} {generated_at.strftime('%I:%M %p')} IST",
+                str(report["interval_entries"]),
+                str(report["total_entries"]),
+            ]
+        else:
+            template = GATE_VERIFIED_CORRECTION_WHATSAPP_TEMPLATE
+            interval_display = (
+                f"{date_display} {start_dt.strftime('%I:%M %p')} - "
+                f"{end_dt.strftime('%I:%M %p')} IST"
+            )
+            body_params = [
+                interval_display,
+                str(report["interval_entries"]),
+                str(report["total_entries"]),
+                str(provisional_count),
+            ]
+        for phone in claimed_phones:
+            sent = await send_cloud_template_message(
+                phone,
+                template,
+                body_params=body_params,
+                header_document_id=doc_id,
+                header_document_filename=pdf_filename,
+            )
+            db = await _get_db()
+            try:
+                if sent:
+                    await db.execute(
+                        "UPDATE cpplus_recount_corrections SET sent_at = ? "
+                        "WHERE date = ? AND hour_start = ? AND phone = ?",
+                        (
+                            datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                            date,
+                            hour_start,
+                            phone,
+                        ),
+                    )
+                else:
+                    await db.execute(
+                        "DELETE FROM cpplus_recount_corrections "
+                        "WHERE date = ? AND hour_start = ? AND phone = ? "
+                        "AND sent_at = ''",
+                        (date, hour_start, phone),
+                    )
+                await db.commit()
+            finally:
+                await db.close()
+            logger.info(
+                "[GATE] Verified-only head-count report %s → %s: %s",
+                hour_start,
+                phone,
+                "OK" if sent else "FAILED",
+            )
+    except Exception as exc:
+        await _release_cpplus_correction_claims(
+            date, hour_start, claimed_phones
+        )
+        logger.error(
+            "[GATE] Verified-only head-count report failed for %s: %s",
+            hour_start,
+            exc,
+        )
+
+
+async def send_pending_cpplus_corrections() -> None:
+    """Retry unsent verified-only reports for trusted recounts completed today."""
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    db = await _get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT date, hour_start, hour_end, in_count, processed_frames, "
+            "source, verified_at FROM cpplus_hourly_recounts "
+            "WHERE date = ? AND source IN "
+            "('camera_native_counter', 'camera_sd_recording', "
+            "'school_pc_recording') ORDER BY hour_start",
+            (today,),
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    for row in rows:
+        await _send_verified_cpplus_correction({
+            "date": row[0],
+            "hour_start": row[1],
+            "hour_end": row[2],
+            "in_count": row[3],
+            "processed_frames": row[4],
+            "source": row[5],
+            "verified_at": row[6],
+        })
+
+
+def send_pending_cpplus_corrections_sync() -> None:
+    """Sync wrapper for retrying verified recount corrections."""
+    asyncio.run(send_pending_cpplus_corrections())
+
+
+def send_event_id_headcount_report_sync() -> None:
+    """Send the latest completed two-hour C1 event-ID report."""
+    asyncio.run(send_event_id_headcount_report())
+
+
+def send_final_event_id_headcount_report_sync() -> None:
+    """Send the final 6:00 AM-5:00 PM IST C1 event-ID report."""
+    asyncio.run(send_event_id_headcount_report(final=True))
 
 
 def send_reconciliation_report_sync():
@@ -2989,6 +5580,19 @@ def send_reconciliation_report_sync():
             loop.run_until_complete(send_reconciliation_report())
     except RuntimeError:
         asyncio.run(send_reconciliation_report())
+
+
+def send_final_cpplus_report_sync():
+    """Sync wrapper for the final daily report after monitoring closes."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(send_reconciliation_report(final=True))
+        else:
+            loop.run_until_complete(send_reconciliation_report(final=True))
+    except RuntimeError:
+        asyncio.run(send_reconciliation_report(final=True))
 
 
 # ============================================================
@@ -3033,6 +5637,7 @@ async def live_dashboard_data():
     return {
         "timestamp": now.strftime("%d-%m-%Y %H:%M:%S IST"),
         "date": today,
+        "official_count_start": recon.get("official_count_start", ""),
         # Per school spec
         "entry_summary": {
             "total_persons_entered": total_entries,
@@ -3127,10 +5732,13 @@ async def live_dashboard_data():
 
 _LIVE_SNAPSHOT_CAMERAS = [
     {"key": "ENTRY GATE-1", "label": "Entry Gate 1"},
-    {"key": "ENTRY GATE- 2", "label": "Entry Gate 2"},
+    {"key": "ENTRY GATE-2", "label": "Entry Gate 2"},
+    {"key": "GALLERY MID", "label": "Gallery Mid"},
     {"key": "Basement Main Gate", "label": "Basement Main Gate"},
     {"key": "Reception C1", "label": "Reception C1"},
     {"key": "Reception C2", "label": "Reception C2"},
+    {"key": "Reception C3", "label": "Reception C3"},
+    {"key": "Reception C4", "label": "Reception C4"},
     {"key": "DISPERSAL EXIT", "label": "Dispersal Exit"},
 ]
 

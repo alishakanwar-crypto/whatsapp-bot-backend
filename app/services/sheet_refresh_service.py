@@ -51,8 +51,14 @@ PI_SHEET_GRADE_GIDS = [
     "353406549", "1466129543", "1448970633", "743552850", "43691386",
     "1591415360", "2010955306", "1384983764", "1505127962", "1630447148",
     "1059379388", "187664454", "573773967", "1080176279", "696644819",
-    "523098156", "255213929",
+    "523098156", "255213929", "1291854348",
 ]
+
+PI_SHEET_BOT_ENABLED_STUDENTS = {
+    " ".join(name.upper().split())
+    for name in os.getenv("PI_SHEET_BOT_ENABLED_STUDENTS", "").split(",")
+    if name.strip()
+}
 
 # Known male teachers (for honorific)
 MALE_TEACHERS = {"shyam manohar", "tarun dhall", "christy joseph", "deepak"}
@@ -665,6 +671,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
     - Replaces all rows in pi_sheet_students
     """
     active_students: list[dict] = []
+    snapshot_students: list[dict] = []
 
     async with httpx.AsyncClient() as client:
         for gid in PI_SHEET_GRADE_GIDS:
@@ -721,6 +728,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
 
                 # --- Parse student rows ---
                 in_withdrawal = False
+                snapshot_only_withdrawal = False
                 for i in range(header_idx + 1, len(rows)):
                     row = rows[i]
                     row_text = ",".join(row).strip().lower()
@@ -728,14 +736,6 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     if not row_text or row_text.replace(",", "").strip() == "":
                         continue
 
-                    # Detect withdrawal section markers.
-                    # A marker row is any row whose first non-empty cell
-                    # contains "withdraw" (covers "Withdrawal 2025-26",
-                    # "Withdrawals in Session 2023-24", "Potential
-                    # Withdrawal 2023-24", etc.).  Once we enter a
-                    # withdrawal section, every subsequent row is skipped
-                    # (withdrawn students are never followed by active
-                    # students in these sheets).
                     first_cell = ""
                     for cell in row:
                         if cell.strip():
@@ -743,9 +743,12 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                             break
                     if "withdraw" in first_cell:
                         in_withdrawal = True
+                        snapshot_only_withdrawal = (
+                            "withdrawal 2026-27" in first_cell
+                        )
                         continue
 
-                    if in_withdrawal:
+                    if in_withdrawal and not snapshot_only_withdrawal:
                         continue
 
                     if name_col >= len(row):
@@ -775,12 +778,18 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         if ct.startswith("withdraw") or ct.startswith("(withdraw"):
                             _is_inline_withdrawn = True
                             break
-                    if _is_inline_withdrawn:
+                    if _is_inline_withdrawn and not snapshot_only_withdrawal:
                         logger.debug(
                             f"PI SHEET TAB gid={gid}: skipping withdrawn "
                             f"student '{name}' (inline marker)"
                         )
                         continue
+
+                    normalized_name = " ".join(name.upper().split())
+                    bot_enabled = (
+                        not PI_SHEET_BOT_ENABLED_STUDENTS
+                        or normalized_name in PI_SHEET_BOT_ENABLED_STUDENTS
+                    )
 
                     grade = (
                         row[grade_col].strip()
@@ -802,14 +811,15 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         else ""
                     )
 
-                    active_students.append(
-                        {
-                            "name": name,
-                            "grade": grade,
-                            "father_phone": fp,
-                            "mother_phone": mp,
-                        }
-                    )
+                    student = {
+                        "name": name,
+                        "grade": grade,
+                        "father_phone": fp,
+                        "mother_phone": mp,
+                    }
+                    if bot_enabled and not in_withdrawal:
+                        active_students.append(student)
+                    snapshot_students.append(student)
 
             except Exception as e:
                 logger.warning(f"PI SHEET TAB gid={gid}: {e}")
@@ -906,6 +916,12 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 (phone, phone),
             )
             for row in await rows_to_save.fetchall():
+                normalized_name = " ".join((row[0] or "").upper().split())
+                if (
+                    PI_SHEET_BOT_ENABLED_STUDENTS
+                    and normalized_name not in PI_SHEET_BOT_ENABLED_STUDENTS
+                ):
+                    continue
                 protected.append(dict(zip(
                     ["student_name", "grade", "father_name", "mother_name",
                      "father_mobile", "mother_mobile", "address", "transport"],
@@ -920,6 +936,20 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 "(student_name, grade, father_name, mother_name, "
                 "father_mobile, mother_mobile, address, transport) "
                 "VALUES (?, ?, '', '', ?, ?, '', '')",
+                (s["name"], s["grade"], s["father_phone"], s["mother_phone"]),
+            )
+
+        await db.execute("DELETE FROM snapshot_access_students")
+        snapshot_keys: set[tuple[str, str]] = set()
+        for s in snapshot_students:
+            key = (s["name"].upper().strip(), s["grade"])
+            if key in snapshot_keys:
+                continue
+            snapshot_keys.add(key)
+            await db.execute(
+                "INSERT INTO snapshot_access_students "
+                "(student_name, grade, father_mobile, mother_mobile) "
+                "VALUES (?, ?, ?, ?)",
                 (s["name"], s["grade"], s["father_phone"], s["mother_phone"]),
             )
 
@@ -1060,10 +1090,16 @@ async def populate_parent_phones() -> bool:
         names = [n.strip() for n in raw_name.split("&")] if is_multi_student else [raw_name]
 
         for i, name in enumerate(names):
+            norm_name = " ".join(name.upper().split())
+            if (
+                PI_SHEET_BOT_ENABLED_STUDENTS
+                and norm_name not in PI_SHEET_BOT_ENABLED_STUDENTS
+            ):
+                continue
             grade = grades[i] if i < len(grades) else (grades[0] if grades else "")
             if not grade:
                 continue
-            key = (name.upper(), grade)
+            key = (norm_name, grade)
             if key not in student_map:
                 student_map[key] = {
                     "student_name": name,

@@ -15,7 +15,6 @@ Protocol (v1 — legacy single message):
 """
 
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -26,7 +25,6 @@ from collections.abc import Awaitable, Callable
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from starlette.websockets import WebSocketState
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +34,9 @@ router = APIRouter()
 # Agent connection state
 # ---------------------------------------------------------------------------
 _agent_ws: WebSocket | None = None
+_agent_websockets: list[WebSocket] = []
 _pending_requests: dict[str, asyncio.Future] = {}
+_pending_request_websockets: dict[str, WebSocket] = {}
 # Accumulate individual images for v2 protocol (request_id -> list of image dicts)
 _pending_images: dict[str, list] = {}
 SnapshotImageCallback = Callable[[dict], Awaitable[None]]
@@ -292,113 +292,119 @@ async def request_snapshot(
     timeout: float = 60.0,
     image_callback: SnapshotImageCallback | None = None,
 ) -> dict:
-    """Request a snapshot from the campus agent.
-
-    Returns dict with keys:
-      success: bool
-      images: list[dict] — list of {image_base64, description, filename}
-      image_count: int
-      error: str — only if not success
-    """
+    """Request a snapshot from the campus agent."""
     global _agent_ws
 
-    # Wait for agent to reconnect if it's briefly disconnected (e.g. after OOM kill)
-    if _agent_ws is None:
-        connected = await wait_for_agent(max_wait=30.0)
-        if not connected:
-            # ---- Fallback: proxy through another app where agent IS connected ----
-            logger.info("Agent not connected locally — trying proxy fallback")
-            proxy_result = await _proxy_snapshot_request(classroom)
-            if proxy_result is not None:
-                return proxy_result
-            return {"success": False, "error": "Campus agent is not connected"}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last_error = "Campus agent connection is unstable"
 
-    request_id = str(uuid.uuid4())
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
-    _pending_requests[request_id] = future
-    _pending_images[request_id] = []  # Initialize image accumulator
-    if image_callback is not None:
-        _pending_image_callbacks[request_id] = image_callback
+    for attempt in range(3):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
 
-    # Capture the WebSocket reference in a local variable to avoid race
-    # condition where _agent_ws becomes None between null-check and send.
-    ws = _agent_ws
-    if ws is None:
-        _pending_requests.pop(request_id, None)
-        _pending_images.pop(request_id, None)
-        _pending_image_callbacks.pop(request_id, None)
-        return {"success": False, "error": "Campus agent disconnected before request could be sent"}
+        if _agent_ws is None:
+            connected = await wait_for_agent(max_wait=min(15.0, remaining))
+            if not connected:
+                if attempt == 0:
+                    logger.info(
+                        "Agent not connected locally — trying proxy fallback"
+                    )
+                    proxy_result = await _proxy_snapshot_request(classroom)
+                    if proxy_result is not None:
+                        return proxy_result
+                last_error = "Campus agent is not connected"
+                continue
 
-    # Send the request — if the WebSocket is stale, retry once after reconnect
-    try:
-        await ws.send_json({
-            "type": "snapshot_request",
-            "classroom": classroom,
-            "request_id": request_id,
-        })
-        logger.info(f"Sent snapshot request {request_id} for classroom: {classroom}")
-    except Exception as send_err:
-        # WebSocket may be stale after OOM restart — clear it and wait for reconnect
-        logger.warning(f"Failed to send snapshot request (stale WS?): {send_err}")
-        _agent_ws = None
-        _pending_requests.pop(request_id, None)
-        _pending_images.pop(request_id, None)
-        _pending_image_callbacks.pop(request_id, None)
-        # Give the agent time to reconnect, then retry once
-        reconnected = await wait_for_agent(max_wait=30.0)
-        if not reconnected:
-            return {"success": False, "error": "Campus agent disconnected during request"}
-        # Retry with a fresh request
+        ws = _agent_ws
+        if ws is None:
+            last_error = "Campus agent disconnected before request could be sent"
+            continue
+
         request_id = str(uuid.uuid4())
-        future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = loop.create_future()
         _pending_requests[request_id] = future
+        _pending_request_websockets[request_id] = ws
         _pending_images[request_id] = []
         if image_callback is not None:
             _pending_image_callbacks[request_id] = image_callback
-        ws = _agent_ws
-        if ws is None:
-            _pending_requests.pop(request_id, None)
-            _pending_images.pop(request_id, None)
-            _pending_image_callbacks.pop(request_id, None)
-            return {"success": False, "error": "Campus agent disconnected before retry"}
+
         try:
             await ws.send_json({
                 "type": "snapshot_request",
                 "classroom": classroom,
                 "request_id": request_id,
             })
-            logger.info(f"Retry snapshot request {request_id} for classroom: {classroom}")
-        except Exception as retry_err:
-            logger.error(f"Retry snapshot request also failed: {retry_err}")
+            logger.info(
+                "Sent snapshot request %s for classroom: %s (attempt %d/3)",
+                request_id,
+                classroom,
+                attempt + 1,
+            )
+        except Exception as send_err:
+            logger.warning(
+                "Failed to send snapshot request (stale WS?): %s", send_err
+            )
+            if _agent_ws is ws:
+                _agent_ws = next(
+                    (
+                        candidate
+                        for candidate in reversed(_agent_websockets)
+                        if candidate is not ws
+                    ),
+                    None,
+                )
             _pending_requests.pop(request_id, None)
+            _pending_request_websockets.pop(request_id, None)
             _pending_images.pop(request_id, None)
             _pending_image_callbacks.pop(request_id, None)
-            return {"success": False, "error": "Campus agent connection is unstable"}
+            last_error = "Campus agent disconnected during request"
+            continue
 
-    # Now wait for the agent to send back the snapshot images
-    try:
-        result = await asyncio.wait_for(future, timeout=timeout)
-        return result
-    except asyncio.TimeoutError:
-        logger.error(f"Snapshot request {request_id} timed out after {timeout}s")
-        # Return any images we collected before timeout
-        collected = _pending_images.pop(request_id, [])
-        if collected:
-            logger.info(f"Timeout but collected {len(collected)} images before timeout")
+        try:
+            result = await asyncio.wait_for(
+                future, timeout=max(0.1, deadline - loop.time())
+            )
+            if (
+                result.get("success")
+                or result.get("error") != "Agent disconnected"
+            ):
+                return result
+            last_error = "Campus agent disconnected during request"
+            logger.info(
+                "Retrying snapshot for %s after agent disconnect", classroom
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Snapshot request %s timed out after %.1fs", request_id, timeout
+            )
+            collected = _pending_images.get(request_id, [])
+            if collected:
+                logger.info(
+                    "Timeout but collected %d images before timeout",
+                    len(collected),
+                )
+                return {
+                    "success": True,
+                    "classroom": classroom,
+                    "image_count": len(collected),
+                    "images": collected,
+                }
             return {
-                "success": True,
-                "classroom": classroom,
-                "image_count": len(collected),
-                "images": collected,
+                "success": False,
+                "error": "Snapshot request timed out — camera may be offline",
             }
-        return {"success": False, "error": "Snapshot request timed out — camera may be offline"}
-    except Exception as e:
-        logger.error(f"Snapshot request error: {e}")
-        return {"success": False, "error": str(e)}
-    finally:
-        _pending_requests.pop(request_id, None)
-        _pending_images.pop(request_id, None)
-        _pending_image_callbacks.pop(request_id, None)
+        except Exception as error:
+            logger.error("Snapshot request error: %s", error)
+            return {"success": False, "error": str(error)}
+        finally:
+            _pending_requests.pop(request_id, None)
+            _pending_request_websockets.pop(request_id, None)
+            _pending_images.pop(request_id, None)
+            _pending_image_callbacks.pop(request_id, None)
+
+    return {"success": False, "error": last_error}
 
 
 async def _store_snapshot_image(data: dict) -> None:
@@ -451,11 +457,12 @@ async def agent_websocket(websocket: WebSocket):
     # Verify agent secret
     secret = websocket.headers.get("x-agent-secret", "")
     if AGENT_SECRET and secret != AGENT_SECRET:
-        logger.warning(f"Agent WebSocket rejected: invalid secret")
+        logger.warning("Agent WebSocket rejected: invalid secret")
         await websocket.close(code=4001, reason="Invalid agent secret")
         return
 
     await websocket.accept()
+    _agent_websockets.append(websocket)
     _agent_ws = websocket
     _health_state["last_connected_at"] = time.time()
     _health_state["consecutive_failures"] = 0  # reset on fresh connection
@@ -551,14 +558,22 @@ async def agent_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Agent WebSocket error: {e}")
     finally:
+        if websocket in _agent_websockets:
+            _agent_websockets.remove(websocket)
         if _agent_ws is websocket:
-            _agent_ws = None
+            _agent_ws = (
+                _agent_websockets[-1] if _agent_websockets else None
+            )
             _health_state["last_disconnected_at"] = time.time()
-        # Cancel any pending requests — resolve with partially-collected
-        # images when available (instead of blanket clear which races with
-        # the timeout handler in request_snapshot).
-        for req_id, future in list(_pending_requests.items()):
-            if not future.done():
+
+        disconnected_requests = [
+            req_id
+            for req_id, request_ws in _pending_request_websockets.items()
+            if request_ws is websocket
+        ]
+        for req_id in disconnected_requests:
+            future = _pending_requests.get(req_id)
+            if future and not future.done():
                 collected = _pending_images.pop(req_id, [])
                 if collected:
                     future.set_result({
@@ -568,9 +583,11 @@ async def agent_websocket(websocket: WebSocket):
                         "images": collected,
                     })
                 else:
-                    future.set_result({"success": False, "error": "Agent disconnected"})
-        # Clean up any remaining orphaned image buffers
-        _pending_images.clear()
+                    future.set_result({
+                        "success": False,
+                        "error": "Agent disconnected",
+                    })
+            _pending_request_websockets.pop(req_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -731,12 +748,6 @@ async def snapshot_endpoint(request: Request):
     if not classroom:
         return JSONResponse(
             {"error": "No classroom specified"}, status_code=400
-        )
-
-    if not is_agent_connected():
-        return JSONResponse(
-            {"success": False, "error": "Agent not connected on this app"},
-            status_code=503,
         )
 
     result = await request_snapshot(classroom, timeout=55.0)

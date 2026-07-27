@@ -47,6 +47,20 @@ async def init_db():
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS showcase_reminder_deliveries (
+                event_date TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'generated',
+                claimed_at TEXT NOT NULL,
+                accepted_at TEXT NOT NULL DEFAULT '',
+                status_updated_at TEXT NOT NULL DEFAULT '',
+                wa_message_id TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (event_date, recipient)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_showcase_reminder_message_id
+                ON showcase_reminder_deliveries (wa_message_id);
+
             INSERT OR IGNORE INTO settings (key, value) VALUES (
                 'system_prompt',
                 'You are a helpful AI assistant responding via WhatsApp/SMS for PP International School (PPIS), a CBSE affiliated Senior Secondary School in Pitampura, New Delhi. Keep your responses concise and friendly. Use simple formatting suitable for messaging apps. You are bilingual — you can understand and respond in both English and Hindi. If the parent writes in Hindi (Devanagari script or Hinglish/romanized Hindi), respond in Hindi. If they write in English, respond in English. Always be polite and helpful.'
@@ -88,6 +102,28 @@ async def init_db():
                 transport TEXT DEFAULT '',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS snapshot_access_students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_name TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                father_mobile TEXT DEFAULT '',
+                mother_mobile TEXT DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_name, grade)
+            );
+
+            CREATE TABLE IF NOT EXISTS snapshot_access_grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_name TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_name, grade, phone)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_snapshot_access_grants_phone
+                ON snapshot_access_grants (phone);
 
             CREATE TABLE IF NOT EXISTS leave_applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -355,13 +391,76 @@ async def init_db():
                 reconciled INTEGER DEFAULT 0,
                 matched_pin TEXT DEFAULT '',
                 notes TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                event_id TEXT DEFAULT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_gate_entries_date
                 ON gate_entries (date);
             CREATE INDEX IF NOT EXISTS idx_gate_entries_date_dir
                 ON gate_entries (date, direction);
+
+            CREATE TABLE IF NOT EXISTS cpplus_hourly_recounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hour_start TEXT NOT NULL,
+                hour_end TEXT NOT NULL,
+                in_count INTEGER NOT NULL,
+                processed_frames INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'camera_recording',
+                verified_at TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(date, hour_start)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_cpplus_recounts_date
+                ON cpplus_hourly_recounts (date);
+
+            CREATE TABLE IF NOT EXISTS cpplus_native_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hour_start TEXT NOT NULL,
+                hour_end TEXT NOT NULL,
+                in_count INTEGER NOT NULL,
+                received_at TEXT NOT NULL,
+                UNIQUE(date, hour_start)
+            );
+
+            CREATE TABLE IF NOT EXISTS cpplus_hourly_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hour_start TEXT NOT NULL,
+                hour_end TEXT NOT NULL,
+                in_count INTEGER NOT NULL,
+                processed_frames INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                UNIQUE(date, hour_start, source)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_cpplus_hourly_observations_date
+                ON cpplus_hourly_observations (date);
+
+            CREATE TABLE IF NOT EXISTS cpplus_recount_corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hour_start TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                claimed_at TEXT NOT NULL,
+                sent_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(date, hour_start, phone)
+            );
+
+            CREATE TABLE IF NOT EXISTS gate_headcount_report_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'claimed',
+                claimed_at TEXT NOT NULL,
+                sent_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(date, period_key, recipient)
+            );
 
             CREATE TABLE IF NOT EXISTS vehicle_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -371,11 +470,55 @@ async def init_db():
                 direction TEXT NOT NULL DEFAULT 'IN',
                 vehicle_type TEXT NOT NULL DEFAULT 'car',
                 snapshot TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                event_id TEXT DEFAULT NULL,
+                dwell_seconds INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_vehicle_entries_date
                 ON vehicle_entries (date);
+
+            CREATE TABLE IF NOT EXISTS c1_intelligence_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT UNIQUE NOT NULL,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                verification_only INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_c1_intelligence_date
+                ON c1_intelligence_events (date, timestamp);
+
+            CREATE TABLE IF NOT EXISTS c1_alert_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'claimed',
+                claimed_at TEXT NOT NULL,
+                sent_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(event_id, recipient)
+            );
+
+            CREATE TABLE IF NOT EXISTS candidate_boundary_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT UNIQUE NOT NULL,
+                date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                boundary TEXT NOT NULL,
+                camera TEXT NOT NULL,
+                image_direction TEXT NOT NULL,
+                line_position REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT 'dvr_line_crossing_audit',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_candidate_boundary_events_date
+                ON candidate_boundary_events (date);
 
             CREATE TABLE IF NOT EXISTS gate_daily_summary (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -600,6 +743,34 @@ async def init_db():
         except Exception:
             pass  # column already exists
 
+        try:
+            await db.execute(
+                "ALTER TABLE gate_entries ADD COLUMN event_id TEXT DEFAULT NULL"
+            )
+        except Exception:
+            pass
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_entries_event_id "
+            "ON gate_entries (event_id) WHERE event_id IS NOT NULL"
+        )
+        try:
+            await db.execute(
+                "ALTER TABLE vehicle_entries ADD COLUMN event_id TEXT DEFAULT NULL"
+            )
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "ALTER TABLE vehicle_entries ADD COLUMN dwell_seconds INTEGER "
+                "NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_entries_event_id "
+            "ON vehicle_entries (event_id) WHERE event_id IS NOT NULL"
+        )
+
         # visitor_dvr_sightings: add classification + snapshot + direction columns
         for col_name, col_def in [
             ("classification", "TEXT DEFAULT 'Visitor'"),
@@ -621,23 +792,54 @@ async def init_db():
         except Exception:
             pass  # column already exists
 
-        # gate_entries / vehicle_entries: add event_id for ingest idempotency.
-        # A partial UNIQUE index makes retried POSTs with the same event_id a
-        # no-op (INSERT OR IGNORE) while leaving legacy '' rows unconstrained.
-        for table in ("gate_entries", "vehicle_entries"):
+        showcase_columns = await db.execute(
+            "PRAGMA table_info(showcase_reminder_deliveries)"
+        )
+        column_names = {row[1] for row in await showcase_columns.fetchall()}
+        if "recipient" not in column_names:
+            legacy_recipient = os.getenv(
+                "SHOWCASE_REMINDER_PHONE", "918076455224",
+            )
+            await db.commit()
+            await db.execute("BEGIN IMMEDIATE")
             try:
                 await db.execute(
-                    f"ALTER TABLE {table} ADD COLUMN event_id TEXT DEFAULT ''"
+                    "DROP TABLE IF EXISTS showcase_reminder_deliveries_v2"
                 )
-            except Exception:
-                pass  # column already exists
-            try:
+                await db.execute("""
+                    CREATE TABLE showcase_reminder_deliveries_v2 (
+                        event_date TEXT NOT NULL,
+                        recipient TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'generated',
+                        claimed_at TEXT NOT NULL,
+                        accepted_at TEXT NOT NULL DEFAULT '',
+                        status_updated_at TEXT NOT NULL DEFAULT '',
+                        wa_message_id TEXT NOT NULL DEFAULT '',
+                        PRIMARY KEY (event_date, recipient)
+                    )
+                """)
                 await db.execute(
-                    f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_event "
-                    f"ON {table} (event_id) WHERE event_id != ''"
+                    "INSERT INTO showcase_reminder_deliveries_v2 "
+                    "(event_date, recipient, status, claimed_at, accepted_at, "
+                    "status_updated_at, wa_message_id) "
+                    "SELECT event_date, ?, status, claimed_at, accepted_at, "
+                    "status_updated_at, wa_message_id "
+                    "FROM showcase_reminder_deliveries",
+                    (legacy_recipient,),
                 )
+                await db.execute("DROP TABLE showcase_reminder_deliveries")
+                await db.execute(
+                    "ALTER TABLE showcase_reminder_deliveries_v2 "
+                    "RENAME TO showcase_reminder_deliveries"
+                )
+                await db.execute(
+                    "CREATE INDEX idx_showcase_reminder_message_id "
+                    "ON showcase_reminder_deliveries (wa_message_id)"
+                )
+                await db.commit()
             except Exception:
-                pass
+                await db.rollback()
+                raise
 
         # Do NOT overwrite the system prompt — it is managed via the API
         await db.commit()

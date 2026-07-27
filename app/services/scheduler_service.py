@@ -9,9 +9,13 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.services.whatsapp_service import send_whatsapp_message
+from app.services.whatsapp_service import _send_cloud_text, send_whatsapp_message
 from app.services.sheet_refresh_service import refresh_teacher_data_sync, populate_parent_phones_sync, refresh_pi_sheet_full_sync
 from app.services.email_polling_service import poll_homework_emails_sync
+from app.services.showcase_reminder_service import (
+    IST as SHOWCASE_IST,
+    send_showcase_reminders_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -710,21 +714,31 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
-    # --- Gate Reconciliation Reports (every 30 min) ---
-    # 6:00 AM - 5:00 PM IST → half-hourly gate head count report
-    # IST → UTC: subtract 5h30m (6 AM IST = 00:30 UTC, 5 PM IST = 11:30 UTC)
-    from app.routes.gate import send_reconciliation_report_sync
-    for ist_minutes in range(6 * 60, 17 * 60 + 1, 30):  # 06:00–17:00 IST every 30 min
-        utc_total = (ist_minutes - 330) % (24 * 60)  # subtract 5:30, wrap across midnight
-        utc_h, utc_m = divmod(utc_total, 60)
-        ist_h, ist_min = divmod(ist_minutes, 60)
-        scheduler.add_job(
-            send_reconciliation_report_sync,
-            trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
-            id=f"gate_report_{ist_h:02d}{ist_min:02d}",
-            replace_existing=True,
-        )
-    logger.info("Scheduled gate reconciliation reports every 30 min 6:00 AM - 5:00 PM IST")
+    # --- C1 Event-ID Head Count Reports (two-hour intervals + final) ---
+    from app.routes.gate import (
+        send_event_id_headcount_report_sync,
+        send_final_event_id_headcount_report_sync,
+    )
+    scheduler.add_job(
+        send_event_id_headcount_report_sync,
+        trigger=CronTrigger(
+            hour="8,10,12,14,16", minute=0, second=0, timezone=SHOWCASE_IST,
+        ),
+        id="gate_event_id_two_hour_report",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_final_event_id_headcount_report_sync,
+        trigger=CronTrigger(
+            hour=17, minute=0, second=0, timezone=SHOWCASE_IST,
+        ),
+        id="gate_event_id_final_report",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled C1 event-ID reports every two hours from 6:00 AM "
+        "through 4:00 PM IST, with the final 6:00 AM-5:00 PM report at 5:00 PM"
+    )
 
     # --- C1 Anonymous Gate Analytics ---
     # Hourly analytics 07:00–17:00 IST, final analytics at 17:15 IST, and a
@@ -890,6 +904,25 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled daily homework doc clear at 3:00 PM IST (9:30 UTC)")
 
+    # Musical Showcase reminders at 9:00 AM IST, three days before each event.
+    scheduler.add_job(
+        send_showcase_reminders_sync,
+        trigger=CronTrigger(
+            hour=9, minute=0, second=0, timezone=SHOWCASE_IST,
+        ),
+        id="musical_showcase_reminders",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_showcase_reminders_sync,
+        trigger=DateTrigger(
+            run_date=datetime.now(SHOWCASE_IST) + timedelta(seconds=45),
+        ),
+        id="musical_showcase_reminders_initial",
+        replace_existing=True,
+    )
+    logger.info("Scheduled musical showcase reminders at 9:00 AM IST")
+
     # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
     # for reference only. No job scheduled.
 
@@ -908,8 +941,6 @@ def _send_teacher_cwhw_reminder_sync() -> None:
 
 async def _send_teacher_cwhw_reminder() -> None:
     """Send the approved reminder message to all 36 class teachers via WhatsApp."""
-    from app.services.whatsapp_service import send_cloud_template_message, _send_cloud_text
-
     _TEACHER_PHONES = [
         # (Grade, Teacher Name, Phone Numbers)
         ("Popsicles", "Sanya Mehra / Anu", ["9289234655"]),
