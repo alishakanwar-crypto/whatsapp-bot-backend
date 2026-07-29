@@ -89,7 +89,9 @@ def due_showcases(today: date) -> dict[date, list[Showcase]]:
 
 
 def format_showcase_details(showcases: list[Showcase]) -> str:
-    return "\n".join(
+    # Meta Cloud API rejects template body parameters that contain newlines,
+    # tabs, or 4+ consecutive spaces, so multiple items are joined on one line.
+    return " | ".join(
         f"{item.grade_class} — {item.theme_occasion}: {item.presentation_item} "
         f"(Incharges: {item.teacher_incharges})"
         for item in showcases

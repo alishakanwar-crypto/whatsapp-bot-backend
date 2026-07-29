@@ -86,6 +86,8 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Grade I — Friendship Day: Harmony of Hearts", details)
         self.assertIn("Grade II — Theme of the Month: We Are a Family Song", details)
         self.assertIn("Grade VIII — Poetry: Kavita Prastuti", details)
+        self.assertNotIn("\n", details)
+        self.assertNotIn("\t", details)
 
     async def test_sends_one_template_and_deduplicates_event_date(self):
         send = AsyncMock(return_value=True)
