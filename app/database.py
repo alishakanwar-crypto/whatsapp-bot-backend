@@ -61,6 +61,69 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_showcase_reminder_message_id
                 ON showcase_reminder_deliveries (wa_message_id);
 
+            CREATE TABLE IF NOT EXISTS route_duty_reminders (
+                duty_date TEXT NOT NULL,
+                route TEXT NOT NULL,
+                teacher_label TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'generated',
+                claimed_at TEXT NOT NULL DEFAULT '',
+                accepted_at TEXT NOT NULL DEFAULT '',
+                acknowledged_at TEXT NOT NULL DEFAULT '',
+                status_updated_at TEXT NOT NULL DEFAULT '',
+                wa_message_id TEXT NOT NULL DEFAULT '',
+                UNIQUE(duty_date, route, teacher_label, recipient)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_route_duty_reminder_message_id
+                ON route_duty_reminders (wa_message_id);
+
+            CREATE TABLE IF NOT EXISTS route_duty_leave_conflicts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                teacher_label TEXT NOT NULL,
+                teacher_name TEXT NOT NULL,
+                leave_date TEXT NOT NULL,
+                route TEXT NOT NULL,
+                source_message_id TEXT NOT NULL DEFAULT '',
+                detected_at TEXT NOT NULL,
+                alerted_at TEXT NOT NULL DEFAULT '',
+                alert_status TEXT NOT NULL DEFAULT 'pending',
+                UNIQUE(teacher_label, leave_date, route)
+            );
+
+            CREATE TABLE IF NOT EXISTS route_duty_missed (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                teacher_name TEXT NOT NULL,
+                duty_date TEXT NOT NULL,
+                route TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT 'Leave',
+                compensation_status TEXT NOT NULL DEFAULT 'Pending',
+                comp_date TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE(teacher_name, duty_date, route)
+            );
+
+            CREATE TABLE IF NOT EXISTS route_duty_teachers (
+                label TEXT PRIMARY KEY,
+                canonical_name TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS route_duty_report_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_type TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'generated',
+                claimed_at TEXT NOT NULL DEFAULT '',
+                wa_message_id TEXT NOT NULL DEFAULT '',
+                status_updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(report_type, period_key, recipient)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_route_duty_report_message_id
+                ON route_duty_report_log (wa_message_id);
+
             INSERT OR IGNORE INTO settings (key, value) VALUES (
                 'system_prompt',
                 'You are a helpful AI assistant responding via WhatsApp/SMS for PP International School (PPIS), a CBSE affiliated Senior Secondary School in Pitampura, New Delhi. Keep your responses concise and friendly. Use simple formatting suitable for messaging apps. You are bilingual — you can understand and respond in both English and Hindi. If the parent writes in Hindi (Devanagari script or Hinglish/romanized Hindi), respond in Hindi. If they write in English, respond in English. Always be polite and helpful.'
@@ -675,6 +738,19 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_summer_camp_name
                 ON summer_camp_students (student_name);
         """)
+
+        extra_phones = os.getenv("ROUTE_DUTY_EXTRA_PHONES", "")
+        if extra_phones:
+            try:
+                for label, phone in json.loads(extra_phones).items():
+                    await db.execute(
+                        "INSERT OR REPLACE INTO route_duty_teachers "
+                        "(label, phone) VALUES (?, ?)",
+                        (label, str(phone)),
+                    )
+                await db.commit()
+            except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("Invalid ROUTE_DUTY_EXTRA_PHONES JSON: %s", exc)
 
         # ------------------------------------------------------------------
         # Schema migrations — add columns that may not exist in older DBs
