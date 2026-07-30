@@ -72,6 +72,12 @@ async def init_db():
                 status_updated_at TEXT NOT NULL DEFAULT ''
             );
 
+            CREATE TABLE IF NOT EXISTS sci_spectrum_welcomed (
+                phone TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                welcomed_at TEXT NOT NULL
+            );
+
             INSERT OR IGNORE INTO settings (key, value) VALUES (
                 'system_prompt',
                 'You are a helpful AI assistant responding via WhatsApp/SMS for PP International School (PPIS), a CBSE affiliated Senior Secondary School in Pitampura, New Delhi. Keep your responses concise and friendly. Use simple formatting suitable for messaging apps. You are bilingual — you can understand and respond in both English and Hindi. If the parent writes in Hindi (Devanagari script or Hinglish/romanized Hindi), respond in Hindi. If they write in English, respond in English. Always be polite and helpful.'

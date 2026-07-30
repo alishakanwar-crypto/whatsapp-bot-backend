@@ -2,8 +2,10 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 from app import database
 from app.services import sci_spectrum_service as sci_spectrum
@@ -14,7 +16,7 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "sci-spectrum.db"
         with sqlite3.connect(self.db_path) as db:
-            db.execute(
+            db.executescript(
                 """
                 CREATE TABLE sci_spectrum_deliveries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,12 +28,21 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
                     created_at TEXT NOT NULL,
                     status_updated_at TEXT NOT NULL DEFAULT ''
                 )
+                ;
+                CREATE TABLE sci_spectrum_welcomed (
+                    phone TEXT PRIMARY KEY,
+                    name TEXT NOT NULL DEFAULT '',
+                    welcomed_at TEXT NOT NULL
+                )
                 """
             )
         self.teachers_path = Path(self.temp_dir.name) / "teachers.json"
         self.teachers_path.write_text(
             json.dumps([{"name": "Dr Example", "phone": "919000000001"}]),
             encoding="utf-8",
+        )
+        self.event_now = datetime(
+            2026, 8, 1, 8, 0, tzinfo=ZoneInfo("Asia/Kolkata")
         )
 
     def tearDown(self):
@@ -42,7 +53,10 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
         self.db_patch.start()
         self.env_patch = patch.dict(
             "os.environ",
-            {"SCI_SPECTRUM_TEACHERS_FILE": str(self.teachers_path)},
+            {
+                "SCI_SPECTRUM_TEACHERS_FILE": str(self.teachers_path),
+                "SCI_SPECTRUM_SHEET_CSV_URL": "",
+            },
             clear=False,
         )
         self.env_patch.start()
@@ -82,7 +96,7 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_welcome_and_thankyou_never_deduplicate(self):
+    async def test_welcome_poll_deduplicates_but_thankyou_does_not(self):
         sender = AsyncMock(return_value=True)
         with (
             patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
@@ -96,17 +110,130 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
                 sender,
             ),
         ):
-            self.assertEqual(await sci_spectrum.send_welcome_messages(), 1)
-            self.assertEqual(await sci_spectrum.send_welcome_messages(), 1)
+            self.assertEqual(
+                await sci_spectrum.send_welcome_messages(self.event_now), 1
+            )
+            self.assertEqual(
+                await sci_spectrum.send_welcome_messages(self.event_now), 0
+            )
             self.assertEqual(await sci_spectrum.send_thankyou_messages(), 2)
             self.assertEqual(await sci_spectrum.send_thankyou_messages(), 2)
 
-        self.assertEqual(sender.await_count, 6)
+        self.assertEqual(sender.await_count, 5)
         with sqlite3.connect(self.db_path) as db:
             self.assertEqual(
                 db.execute("SELECT COUNT(*) FROM sci_spectrum_deliveries").fetchone()[0],
-                6,
+                5,
             )
+
+    async def test_fetch_sheet_teachers_parses_and_normalizes_rows(self):
+        class Response:
+            text = (
+                "S.No,Teacher Name,WhatsApp Number\n"
+                "1,Dr Sheet,9000000003\n"
+                "2,No Phone,\n"
+                "3,,919000000004\n"
+                "4,Invalid,12345\n"
+            )
+
+            def raise_for_status(self):
+                return None
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, url, timeout):
+                return Response()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"SCI_SPECTRUM_SHEET_CSV_URL": "https://example.test/teachers.csv"},
+            ),
+            patch.object(sci_spectrum.httpx, "AsyncClient", return_value=Client()),
+        ):
+            teachers = await sci_spectrum._fetch_sheet_teachers()
+
+        self.assertEqual(
+            teachers, [{"name": "Dr Sheet", "phone": "919000000003"}]
+        )
+
+    async def test_live_welcome_poll_sends_new_teachers_once(self):
+        first = [
+            {"name": "Teacher One", "phone": "919000000001"},
+            {"name": "Teacher Two", "phone": "919000000002"},
+        ]
+        second = first + [{"name": "Teacher Three", "phone": "919000000003"}]
+        fetch = AsyncMock(side_effect=[first, first, second])
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.dict(
+                "os.environ",
+                {"SCI_SPECTRUM_SHEET_CSV_URL": "https://example.test/live.csv"},
+            ),
+            patch.object(sci_spectrum, "_fetch_sheet_teachers", fetch),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 2
+            )
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 0
+            )
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 1
+            )
+
+        self.assertEqual(sender.await_count, 3)
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute(
+                "SELECT phone FROM sci_spectrum_welcomed ORDER BY phone"
+            ).fetchall()
+        self.assertEqual(
+            rows,
+            [
+                ("919000000001",),
+                ("919000000002",),
+                ("919000000003",),
+            ],
+        )
+
+    async def test_failed_welcome_releases_claim_for_retry(self):
+        teachers = [{"name": "Retry Teacher", "phone": "919000000005"}]
+        sender = AsyncMock(side_effect=[False, True])
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.dict(
+                "os.environ",
+                {"SCI_SPECTRUM_SHEET_CSV_URL": "https://example.test/live.csv"},
+            ),
+            patch.object(
+                sci_spectrum, "_fetch_sheet_teachers",
+                AsyncMock(return_value=teachers),
+            ),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 0
+            )
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 1
+            )
+
+        self.assertEqual(sender.await_count, 2)
 
     async def test_empty_teacher_file_skips_without_sending(self):
         self.teachers_path.write_text("[]", encoding="utf-8")
