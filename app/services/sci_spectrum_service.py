@@ -18,7 +18,29 @@ from app.services import whatsapp_service
 
 logger = logging.getLogger(__name__)
 
-EVENT_DATE = date(2026, 8, 1)
+DEFAULT_EVENT_DATE = date(2026, 8, 1)
+
+
+def _configured_event_date() -> date:
+    raw_date = os.getenv("SCI_SPECTRUM_EVENT_DATE", "").strip()
+    if not raw_date:
+        logger.warning(
+            "SCI_SPECTRUM_EVENT_DATE is missing; using %s",
+            DEFAULT_EVENT_DATE.isoformat(),
+        )
+        return DEFAULT_EVENT_DATE
+    try:
+        return date.fromisoformat(raw_date)
+    except ValueError:
+        logger.warning(
+            "Invalid SCI_SPECTRUM_EVENT_DATE %r; using %s",
+            raw_date,
+            DEFAULT_EVENT_DATE.isoformat(),
+        )
+        return DEFAULT_EVENT_DATE
+
+
+EVENT_DATE = _configured_event_date()
 IST = ZoneInfo("Asia/Kolkata")
 SCI_SPECTRUM_ENABLED = os.getenv("SCI_SPECTRUM_ENABLED", "0") == "1"
 TEACHERS_FILE = os.getenv(

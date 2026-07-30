@@ -961,7 +961,7 @@ def start_scheduler() -> None:
         scheduler.add_job(
             poll_and_send_welcomes_sync,
             trigger=CronTrigger(
-                hour="8-11",
+                hour=os.getenv("SCI_SPECTRUM_WELCOME_POLL_HOURS", "8-11"),
                 minute="*/3",
                 second=0,
                 timezone=SCI_SPECTRUM_IST,

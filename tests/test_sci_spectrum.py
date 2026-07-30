@@ -2,7 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
@@ -198,6 +198,50 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             teachers, [{"name": "Dr Sheet", "phone": "919000000003"}]
         )
+
+    async def test_event_date_configures_welcome_poll_guard(self):
+        configured_date = date(2026, 8, 3)
+        configured_now = datetime(
+            2026, 8, 3, 8, 0, tzinfo=ZoneInfo("Asia/Kolkata")
+        )
+        other_date = datetime(
+            2026, 8, 4, 8, 0, tzinfo=ZoneInfo("Asia/Kolkata")
+        )
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(sci_spectrum, "EVENT_DATE", configured_date),
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.object(
+                sci_spectrum,
+                "_load_teachers",
+                AsyncMock(
+                    return_value=[
+                        {"name": "Configured Teacher", "phone": "919000000006"}
+                    ]
+                ),
+            ),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(configured_now), 1
+            )
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(other_date), 0
+            )
+
+        self.assertEqual(sender.await_count, 1)
+
+    async def test_invalid_event_date_uses_default(self):
+        with patch.dict(
+            "os.environ", {"SCI_SPECTRUM_EVENT_DATE": "not-a-date"}
+        ):
+            self.assertEqual(
+                sci_spectrum._configured_event_date(), date(2026, 8, 1)
+            )
 
     async def test_live_welcome_poll_sends_new_teachers_once(self):
         first = [
