@@ -20,8 +20,8 @@ from app.services.sci_spectrum_service import (
     EVENT_DATE as SCI_SPECTRUM_EVENT_DATE,
     IST as SCI_SPECTRUM_IST,
     SCI_SPECTRUM_ENABLED,
+    poll_and_send_welcomes_sync,
     send_thankyou_messages_sync,
-    send_welcome_messages_sync,
 )
 
 logger = logging.getLogger(__name__)
@@ -959,14 +959,14 @@ def start_scheduler() -> None:
                 )
 
         scheduler.add_job(
-            send_welcome_messages_sync,
-            trigger=DateTrigger(
-                run_date=_sci_spectrum_run_at(
-                    "SCI_SPECTRUM_WELCOME_TIME", "08:00",
-                ),
+            poll_and_send_welcomes_sync,
+            trigger=CronTrigger(
+                hour="8-11",
+                minute="*/3",
+                second=0,
                 timezone=SCI_SPECTRUM_IST,
             ),
-            id="sci_spectrum_welcome",
+            id="sci_spectrum_welcome_poll",
             replace_existing=True,
         )
         scheduler.add_job(
