@@ -56,6 +56,7 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             {
                 "SCI_SPECTRUM_TEACHERS_FILE": str(self.teachers_path),
                 "SCI_SPECTRUM_SHEET_CSV_URL": "",
+                "SCI_SPECTRUM_THANKYOU_QR_URL": "",
             },
             clear=False,
         )
@@ -74,7 +75,10 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "SCI_SPECTRUM_EVIDENCE_PHONES": (
                         "919599488106,918076455224,919111111111"
-                    )
+                    ),
+                    "SCI_SPECTRUM_THANKYOU_QR_URL": (
+                        "https://example.test/scispectrum-qr.png"
+                    ),
                 },
             ),
             patch.object(
@@ -94,6 +98,13 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
                 "918076455224",
                 "919111111111",
             ],
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["header_image_url"]
+                == "https://example.test/scispectrum-qr.png"
+                for call in sender.await_args_list
+            )
         )
 
     async def test_thankyou_sends_evidence_when_teacher_source_is_empty(self):
@@ -140,6 +151,12 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await sci_spectrum.send_thankyou_messages(), 2)
 
         self.assertEqual(sender.await_count, 5)
+        self.assertTrue(
+            all(
+                "header_image_url" not in call.kwargs
+                for call in sender.await_args_list[2:]
+            )
+        )
         with sqlite3.connect(self.db_path) as db:
             self.assertEqual(
                 db.execute("SELECT COUNT(*) FROM sci_spectrum_deliveries").fetchone()[0],
