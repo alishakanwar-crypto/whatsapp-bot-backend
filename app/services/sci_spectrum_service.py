@@ -36,6 +36,7 @@ CARD_URL = os.getenv(
 )
 DEEPA_PHONE = os.getenv("SCI_SPECTRUM_DEEPI_PHONE", "")
 SHEET_CSV_URL = os.getenv("SCI_SPECTRUM_SHEET_CSV_URL", "")
+THANKYOU_QR_URL = os.getenv("SCI_SPECTRUM_THANKYOU_QR_URL", "")
 
 
 def _normalize_phone(phone: str) -> str:
@@ -261,13 +262,19 @@ async def send_thankyou_messages(now: datetime | None = None) -> int:
         logger.warning("SCI-Spectrum thankyou skipped: no recipients configured")
         return 0
     current = now or datetime.now(IST)
+    qr_url = os.getenv("SCI_SPECTRUM_THANKYOU_QR_URL", THANKYOU_QR_URL).strip()
     accepted = 0
     for recipient, name in entries:
         try:
+            send_kwargs = {
+                "to": recipient,
+                "template_name": THANKYOU_TEMPLATE,
+                "language_code": "en",
+            }
+            if qr_url:
+                send_kwargs["header_image_url"] = qr_url
             sent = await whatsapp_service.send_cloud_template_message(
-                to=recipient,
-                template_name=THANKYOU_TEMPLATE,
-                language_code="en",
+                **send_kwargs,
             )
         except Exception:
             logger.exception(
