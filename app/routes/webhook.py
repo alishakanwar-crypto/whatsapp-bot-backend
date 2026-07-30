@@ -21,6 +21,7 @@ from app.services.showcase_reminder_service import (
     IST as SHOWCASE_IST,
     record_showcase_delivery_status,
 )
+from app.services.sci_spectrum_service import record_sci_spectrum_delivery_status
 from app.services.email_service import send_email_async
 from app.services.bulk_service import pause_for_bot_reply, resume_after_bot_reply
 from app.services.openai_service import (
@@ -5224,6 +5225,11 @@ async def _record_showcase_statuses(body: dict) -> None:
                 except (KeyError, TypeError, ValueError):
                     continue
                 await record_showcase_delivery_status(
+                    status.get("id", ""),
+                    status.get("status", ""),
+                    occurred_at,
+                )
+                await record_sci_spectrum_delivery_status(
                     status.get("id", ""),
                     status.get("status", ""),
                     occurred_at,

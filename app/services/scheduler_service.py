@@ -16,6 +16,13 @@ from app.services.showcase_reminder_service import (
     IST as SHOWCASE_IST,
     send_showcase_reminders_sync,
 )
+from app.services.sci_spectrum_service import (
+    EVENT_DATE as SCI_SPECTRUM_EVENT_DATE,
+    IST as SCI_SPECTRUM_IST,
+    SCI_SPECTRUM_ENABLED,
+    send_thankyou_messages_sync,
+    send_welcome_messages_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -922,6 +929,58 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled musical showcase reminders at 9:00 AM IST")
+
+    if SCI_SPECTRUM_ENABLED:
+        def _sci_spectrum_run_at(env_name: str, default: str) -> datetime:
+            try:
+                hour, minute = (
+                    int(part) for part in os.getenv(env_name, default).split(":", 1)
+                )
+                return datetime(
+                    SCI_SPECTRUM_EVENT_DATE.year,
+                    SCI_SPECTRUM_EVENT_DATE.month,
+                    SCI_SPECTRUM_EVENT_DATE.day,
+                    hour,
+                    minute,
+                    tzinfo=SCI_SPECTRUM_IST,
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid %s; using %s", env_name, default,
+                )
+                hour, minute = (int(part) for part in default.split(":"))
+                return datetime(
+                    SCI_SPECTRUM_EVENT_DATE.year,
+                    SCI_SPECTRUM_EVENT_DATE.month,
+                    SCI_SPECTRUM_EVENT_DATE.day,
+                    hour,
+                    minute,
+                    tzinfo=SCI_SPECTRUM_IST,
+                )
+
+        scheduler.add_job(
+            send_welcome_messages_sync,
+            trigger=DateTrigger(
+                run_date=_sci_spectrum_run_at(
+                    "SCI_SPECTRUM_WELCOME_TIME", "08:00",
+                ),
+                timezone=SCI_SPECTRUM_IST,
+            ),
+            id="sci_spectrum_welcome",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            send_thankyou_messages_sync,
+            trigger=DateTrigger(
+                run_date=_sci_spectrum_run_at(
+                    "SCI_SPECTRUM_THANKYOU_TIME", "11:45",
+                ),
+                timezone=SCI_SPECTRUM_IST,
+            ),
+            id="sci_spectrum_thankyou",
+            replace_existing=True,
+        )
+        logger.info("Scheduled SCI-Spectrum one-time jobs in IST")
 
     # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
     # for reference only. No job scheduled.
