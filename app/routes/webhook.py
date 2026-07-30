@@ -22,6 +22,11 @@ from app.services.showcase_reminder_service import (
     record_showcase_delivery_status,
 )
 from app.services.sci_spectrum_service import record_sci_spectrum_delivery_status
+from app.services.route_duty_service import (
+    IST as ROUTE_DUTY_IST,
+    mark_reminder_acknowledged,
+    record_route_duty_delivery_status,
+)
 from app.services.email_service import send_email_async
 from app.services.bulk_service import pause_for_bot_reply, resume_after_bot_reply
 from app.services.openai_service import (
@@ -5234,6 +5239,11 @@ async def _record_showcase_statuses(body: dict) -> None:
                     status.get("status", ""),
                     occurred_at,
                 )
+                await record_route_duty_delivery_status(
+                    status.get("id", ""),
+                    status.get("status", ""),
+                    occurred_at,
+                )
 
 
 @router.post("/webhook/cloud")
@@ -5357,6 +5367,13 @@ async def receive_cloud_api_message(request: Request):
                     logger.warning(f"[REPLY CONTEXT] DB fallback failed: {_e2}")
 
     logger.info(f"Cloud API message from {sender}: {message_text} | media: {media_info is not None}")
+
+    if message_text and message_text.strip().lower() in {
+        "ok", "noted", "yes", "received", "acknowledged", "👍", "thik", "theek",
+    }:
+        await mark_reminder_acknowledged(
+            sender, datetime.now(ROUTE_DUTY_IST),
+        )
 
     # --- Silently ignore reactions, stickers, and other non-content messages ---
     # These should NOT be forwarded to teachers or processed by GPT.
