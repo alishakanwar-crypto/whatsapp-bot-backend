@@ -1073,8 +1073,9 @@ async def init_db():
             try:
                 for label, phone in json.loads(extra_phones).items():
                     await db.execute(
-                        "INSERT OR REPLACE INTO route_duty_teachers "
-                        "(label, phone) VALUES (?, ?)",
+                        "INSERT INTO route_duty_teachers (label, phone) "
+                        "VALUES (?, ?) ON CONFLICT(label) DO UPDATE SET "
+                        "phone = excluded.phone",
                         (label, str(phone)),
                     )
                 await db.commit()

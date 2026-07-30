@@ -20,13 +20,13 @@ IST = ZoneInfo("Asia/Kolkata")
 ROUTE_DUTY_ENABLED = os.getenv("ROUTE_DUTY_ENABLED", "0") == "1"
 HARPREET_PHONE = os.getenv("ROUTE_DUTY_HARPREET_PHONE", "919599488106")
 REMINDER_TEMPLATE = os.getenv(
-    "ROUTE_DUTY_REMINDER_TEMPLATE", "ppis_route_duty_reminder"
+    "ROUTE_DUTY_REMINDER_TEMPLATE", "ppis_route_duty_reminder_v2"
 )
 ALERT_TEMPLATE = os.getenv(
     "ROUTE_DUTY_ALERT_TEMPLATE", "ppis_route_duty_alert"
 )
 REPORT_TEMPLATE = os.getenv(
-    "ROUTE_DUTY_REPORT_TEMPLATE", "ppis_route_duty_report"
+    "ROUTE_DUTY_REPORT_TEMPLATE", "ppis_route_duty_report_v2"
 )
 REPORT_TIME = "13:30"
 LEAVE_IMAP_HOST = os.getenv("LEAVE_IMAP_HOST", "imap.gmail.com")
@@ -562,7 +562,14 @@ async def _schedule_teacher_matches(text: str) -> list[dict]:
             _normalize_name(alias) and _normalize_name(alias) in normalized_text
             for alias in aliases
         ):
-            matches.append(item)
+            matches.append(
+                {
+                    "date": item["date"],
+                    "route": item["route"],
+                    "teacher_label": item["teacher_pdf"],
+                    "report_time": item.get("report_time", REPORT_TIME),
+                }
+            )
     return matches
 
 
@@ -656,7 +663,7 @@ async def poll_leave_mailbox(now: datetime | None = None) -> int:
                                 template_name=ALERT_TEMPLATE,
                                 language_code="en",
                                 body_params=[
-                                    duty["teacher_pdf"],
+                                    duty["teacher_label"],
                                     leave_date.strftime("%d/%m/%Y"),
                                     duty["route"],
                                 ],
@@ -670,7 +677,7 @@ async def poll_leave_mailbox(now: datetime | None = None) -> int:
                                     (
                                         _now_string(),
                                         "accepted" if sent else "failed",
-                                        duty["teacher_pdf"],
+                                        duty["teacher_label"],
                                         duty["date"],
                                         duty["route"],
                                     ),
@@ -794,10 +801,11 @@ async def send_monthly_report(now: datetime | None = None) -> bool:
         logger.info("Route duty monthly report disabled")
         return False
     current = now or datetime.now(IST)
-    end = current.astimezone(IST).date()
-    start = end - timedelta(days=29)
+    current_date = current.astimezone(IST).date()
+    last_day = current_date.replace(day=1) - timedelta(days=1)
+    start = last_day.replace(day=1)
     return await _send_period_report(
-        "monthly", end.strftime("%Y-%m"), start, end, current
+        "monthly", last_day.strftime("%Y-%m"), start, last_day, current
     )
 
 
@@ -835,14 +843,16 @@ async def mark_reminder_acknowledged(
     recipient: str, now: datetime | None = None
 ) -> bool:
     current = now or datetime.now(IST)
-    target = (current.astimezone(IST).date() + timedelta(days=1)).isoformat()
+    target = (
+        await _next_working_day(current.astimezone(IST).date())
+    ).isoformat()
     db = await get_db()
     try:
         cursor = await db.execute(
             "UPDATE route_duty_reminders SET acknowledged_at = ? "
             "WHERE rowid = (SELECT rowid FROM route_duty_reminders "
             "WHERE recipient = ? AND duty_date = ? AND acknowledged_at = '' "
-            "ORDER BY claimed_at DESC LIMIT 1)",
+            "ORDER BY rowid DESC LIMIT 1)",
             (_now_string(current), _normalize_phone(recipient), target),
         )
         await db.commit()

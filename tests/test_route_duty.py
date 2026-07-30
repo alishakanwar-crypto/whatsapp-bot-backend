@@ -153,6 +153,85 @@ class RouteDutyTests(unittest.IsolatedAsyncioTestCase):
                 db.execute("SELECT COUNT(*) FROM route_duty_missed").fetchone()[0], 1
             )
 
+    async def test_raw_schedule_leave_match_uses_normalized_duty_shape(self):
+        matches = await route_duty._schedule_teacher_matches(
+            "Approved leave for Ms Surbhi on 28/07/2026"
+        )
+        duty = next(match for match in matches if match["date"] == "2026-07-28")
+        self.assertEqual(
+            duty,
+            {
+                "date": "2026-07-28",
+                "route": "Route 17",
+                "teacher_label": "Ms Surbhi",
+                "report_time": "13:30",
+            },
+        )
+        self.assertTrue(
+            await route_duty._create_leave_conflict(
+                duty,
+                "leave-raw-schedule",
+                datetime(2026, 7, 20, tzinfo=route_duty.IST),
+            )
+        )
+
+    async def test_monthly_report_uses_previous_calendar_month(self):
+        with (
+            patch.object(route_duty, "ROUTE_DUTY_ENABLED", True),
+            patch.object(
+                route_duty, "_send_period_report", AsyncMock(return_value=True)
+            ) as send_report,
+        ):
+            self.assertTrue(
+                await route_duty.send_monthly_report(
+                    datetime(2026, 8, 1, 17, 0, tzinfo=route_duty.IST)
+                )
+            )
+        send_report.assert_awaited_once_with(
+            "monthly",
+            "2026-07",
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            datetime(2026, 8, 1, 17, 0, tzinfo=route_duty.IST),
+        )
+
+    async def test_acknowledgement_uses_next_working_day_and_latest_row(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                "INSERT INTO route_duty_reminders "
+                "(duty_date, route, teacher_label, recipient, claimed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (
+                        "2026-07-27",
+                        "Route 2",
+                        "Ms Lipi",
+                        "919876543210",
+                        "31-07-2026 16:00:00 IST",
+                    ),
+                    (
+                        "2026-07-27",
+                        "Route 3",
+                        "Ms Surbhi",
+                        "919876543210",
+                        "01-08-2026 16:00:00 IST",
+                    ),
+                ],
+            )
+        self.assertTrue(
+            await route_duty.mark_reminder_acknowledged(
+                "9876543210",
+                datetime(2026, 7, 24, 17, 0, tzinfo=route_duty.IST),
+            )
+        )
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute(
+                "SELECT route, acknowledged_at FROM route_duty_reminders "
+                "ORDER BY rowid"
+            ).fetchall()
+        self.assertEqual(rows[0][1], "")
+        self.assertTrue(rows[1][1])
+
     async def test_reminders_claim_once_and_send_with_cloud_template(self):
         with sqlite3.connect(self.db_path) as db:
             db.execute(
