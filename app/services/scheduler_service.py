@@ -23,6 +23,14 @@ from app.services.sci_spectrum_service import (
     poll_and_send_welcomes_sync,
     send_thankyou_messages_sync,
 )
+from app.services.route_duty_service import (
+    IST as ROUTE_DUTY_IST,
+    poll_leave_mailbox_sync,
+    send_duty_reminders_sync,
+    send_harpreet_daily_report_sync,
+    send_monthly_report_sync,
+    send_weekly_report_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -981,6 +989,42 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         logger.info("Scheduled SCI-Spectrum one-time jobs in IST")
+
+    scheduler.add_job(
+        send_duty_reminders_sync,
+        trigger=CronTrigger(hour=16, minute=0, timezone=ROUTE_DUTY_IST),
+        id="route_duty_reminders",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_harpreet_daily_report_sync,
+        trigger=CronTrigger(hour=16, minute=5, timezone=ROUTE_DUTY_IST),
+        id="route_duty_harpreet_report",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        poll_leave_mailbox_sync,
+        trigger=IntervalTrigger(minutes=15),
+        id="route_duty_leave_poll",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_weekly_report_sync,
+        trigger=CronTrigger(
+            day_of_week="sun", hour=17, minute=0, timezone=ROUTE_DUTY_IST,
+        ),
+        id="route_duty_weekly",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_monthly_report_sync,
+        trigger=CronTrigger(
+            day=1, hour=17, minute=0, timezone=ROUTE_DUTY_IST,
+        ),
+        id="route_duty_monthly",
+        replace_existing=True,
+    )
+    logger.info("Scheduled route duty reminders/reports and leave polling in IST")
 
     # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
     # for reference only. No job scheduled.
