@@ -142,6 +142,10 @@ def _normalize_name(name: str) -> str:
     return " ".join(value.upper().split())
 
 
+def _route_number(route: str) -> str:
+    return re.sub(r"\D", "", route or "") or route
+
+
 def _canonical_names(label: str) -> list[str]:
     if label in TEACHER_CANONICAL_NAMES:
         return TEACHER_CANONICAL_NAMES[label]
@@ -333,7 +337,7 @@ async def send_duty_reminders(now: datetime | None = None) -> int:
                     language_code="en",
                     body_params=[
                         target.strftime("%d/%m/%Y"),
-                        duty["route"],
+                        _route_number(duty["route"]),
                     ],
                 )
             except Exception:
@@ -665,7 +669,7 @@ async def poll_leave_mailbox(now: datetime | None = None) -> int:
                                 body_params=[
                                     duty["teacher_label"],
                                     leave_date.strftime("%d/%m/%Y"),
-                                    duty["route"],
+                                    _route_number(duty["route"]),
                                 ],
                             )
                             db = await get_db()

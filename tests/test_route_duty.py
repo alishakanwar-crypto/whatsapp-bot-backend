@@ -1,9 +1,10 @@
 import sqlite3
 import tempfile
 import unittest
+from email.message import EmailMessage
 from datetime import date, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app import database
 from app.services import route_duty_service as route_duty
@@ -258,7 +259,40 @@ class RouteDutyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, 1)
         self.assertEqual(second, 0)
         sender.assert_awaited_once()
-        self.assertEqual(sender.await_args.kwargs["body_params"], ["28/07/2026", "Route 2"])
+        self.assertEqual(sender.await_args.kwargs["body_params"], ["28/07/2026", "2"])
+
+    async def test_leave_alert_uses_numeric_route_template_param(self):
+        message = EmailMessage()
+        message["Message-ID"] = "<leave-alert-1>"
+        message["Subject"] = "Approved leave for Ms Surbhi on 28/07/2026"
+        message.set_content("Approved leave for Ms Surbhi on 28/07/2026")
+        mailbox = Mock()
+        mailbox.search.return_value = ("OK", [b"1"])
+        mailbox.fetch.return_value = ("OK", [(b"header", message.as_bytes())])
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(route_duty, "ROUTE_DUTY_ENABLED", True),
+            patch.object(route_duty, "LEAVE_IMAP_PASSWORD", "test-password"),
+            patch(
+                "app.services.route_duty_service.imaplib.IMAP4_SSL",
+                return_value=mailbox,
+            ),
+            patch.object(
+                route_duty.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            self.assertEqual(
+                await route_duty.poll_leave_mailbox(
+                    datetime(2026, 7, 20, tzinfo=route_duty.IST)
+                ),
+                1,
+            )
+        self.assertEqual(
+            sender.await_args.kwargs["body_params"],
+            ["Ms Surbhi", "28/07/2026", "17"],
+        )
 
     async def test_disabled_send_and_poll_are_noops(self):
         with (
