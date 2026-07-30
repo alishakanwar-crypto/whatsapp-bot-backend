@@ -116,7 +116,7 @@ async def _fetch_sheet_teachers() -> list[dict[str, str]]:
     if not url:
         return []
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.get(url, timeout=20.0)
             response.raise_for_status()
         reader = csv.DictReader(io.StringIO(response.text))
