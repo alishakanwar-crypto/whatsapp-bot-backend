@@ -253,13 +253,13 @@ async def send_thankyou_messages(now: datetime | None = None) -> int:
         logger.info("SCI-Spectrum thankyou messages disabled")
         return 0
     teachers = await _load_teachers()
-    if not teachers:
-        logger.warning("SCI-Spectrum thankyou skipped: no teachers configured")
-        return 0
     entries = (
         [(teacher["phone"], teacher["name"]) for teacher in teachers]
         + [(phone, "") for phone in _evidence_recipients()]
     )
+    if not entries:
+        logger.warning("SCI-Spectrum thankyou skipped: no recipients configured")
+        return 0
     current = now or datetime.now(IST)
     accepted = 0
     for recipient, name in entries:

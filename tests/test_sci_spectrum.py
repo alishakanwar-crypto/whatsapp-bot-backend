@@ -96,6 +96,26 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_thankyou_sends_evidence_when_teacher_source_is_empty(self):
+        sender = AsyncMock(return_value=True)
+        evidence = ["919599488106", "918076455224", "919111111111"]
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.object(sci_spectrum, "_load_teachers", AsyncMock(return_value=[])),
+            patch.object(sci_spectrum, "_evidence_recipients", return_value=evidence),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            accepted = await sci_spectrum.send_thankyou_messages()
+
+        self.assertEqual(accepted, len(evidence))
+        self.assertEqual(
+            [call.kwargs["to"] for call in sender.await_args_list], evidence
+        )
+
     async def test_welcome_poll_deduplicates_but_thankyou_does_not(self):
         sender = AsyncMock(return_value=True)
         with (
@@ -247,8 +267,8 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             self.assertEqual(await sci_spectrum.send_welcome_messages(), 0)
-            self.assertEqual(await sci_spectrum.send_thankyou_messages(), 0)
-        sender.assert_not_awaited()
+            self.assertEqual(await sci_spectrum.send_thankyou_messages(), 2)
+        self.assertEqual(sender.await_count, 2)
 
     async def test_feature_gate_default_off_skips_all_sends(self):
         sender = AsyncMock(return_value=True)
