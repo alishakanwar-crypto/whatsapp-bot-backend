@@ -152,6 +152,34 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             [call.kwargs["to"] for call in sender.await_args_list],
         )
 
+    async def test_welcome_sends_configured_evidence_recipients_once(self):
+        evidence = ["919599488106", "918076455224", "919560892325"]
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.object(sci_spectrum, "EVENT_DATE", self.event_now.date()),
+            patch.object(sci_spectrum, "_load_teachers", AsyncMock(return_value=[])),
+            patch.object(sci_spectrum, "_fixed_recipients", return_value=[]),
+            patch.dict(
+                "os.environ",
+                {"SCI_SPECTRUM_WELCOME_EVIDENCE_PHONES": ",".join(evidence)},
+            ),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 3
+            )
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 0
+            )
+        self.assertEqual(
+            [call.kwargs["to"] for call in sender.await_args_list], evidence
+        )
+
     async def test_fixed_recipients_receive_thankyou(self):
         fixed_phone = "919000000010"
         sender = AsyncMock(return_value=True)
