@@ -107,6 +107,77 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_fixed_recipients_normalize_and_filter_numbers(self):
+        fixed = [
+            {"name": "Ten Digit", "phone": "9000000010"},
+            {"name": "Duplicate", "phone": "919000000010"},
+            {"name": "Landline", "phone": "011-23456789"},
+            {"name": "Invalid", "phone": "not-a-phone"},
+            {"name": "Wrong Length", "phone": "91900000001"},
+        ]
+        with patch.dict(
+            "os.environ", {"SCI_SPECTRUM_FIXED_RECIPIENTS": json.dumps(fixed)}
+        ):
+            self.assertEqual(
+                sci_spectrum._fixed_recipients(),
+                [{"name": "Ten Digit", "phone": "919000000010"}],
+            )
+
+    async def test_fixed_recipients_receive_welcome(self):
+        fixed_phone = "919000000010"
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.object(sci_spectrum, "EVENT_DATE", self.event_now.date()),
+            patch.object(sci_spectrum, "_load_teachers", AsyncMock(return_value=[])),
+            patch.dict(
+                "os.environ",
+                {
+                    "SCI_SPECTRUM_FIXED_RECIPIENTS": json.dumps(
+                        [{"name": "Fixed Coordinator", "phone": "9000000010"}]
+                    )
+                },
+            ),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 1
+            )
+        self.assertIn(
+            fixed_phone,
+            [call.kwargs["to"] for call in sender.await_args_list],
+        )
+
+    async def test_fixed_recipients_receive_thankyou(self):
+        fixed_phone = "919000000010"
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.object(sci_spectrum, "_load_teachers", AsyncMock(return_value=[])),
+            patch.object(sci_spectrum, "_evidence_recipients", return_value=[]),
+            patch.dict(
+                "os.environ",
+                {
+                    "SCI_SPECTRUM_FIXED_RECIPIENTS": json.dumps(
+                        [{"name": "Fixed Principal", "phone": "9000000010"}]
+                    )
+                },
+            ),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+        ):
+            self.assertEqual(await sci_spectrum.send_thankyou_messages(), 1)
+        self.assertEqual(
+            [call.kwargs["to"] for call in sender.await_args_list], [fixed_phone]
+        )
+
     async def test_thankyou_sends_evidence_when_teacher_source_is_empty(self):
         sender = AsyncMock(return_value=True)
         evidence = ["919599488106", "918076455224", "919111111111"]
