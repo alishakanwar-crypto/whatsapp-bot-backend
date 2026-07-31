@@ -205,6 +205,15 @@ def _evidence_recipients() -> list[str]:
     return recipients
 
 
+def _welcome_evidence_recipients() -> list[str]:
+    configured = os.getenv("SCI_SPECTRUM_WELCOME_EVIDENCE_PHONES", "")
+    return [
+        phone
+        for phone in (_normalize_phone(value) for value in configured.split(","))
+        if phone
+    ]
+
+
 async def _record_attempt(
     phase: str,
     recipient: str,
@@ -268,7 +277,14 @@ async def poll_and_send_welcomes(now: datetime | None = None) -> int:
         logger.info("SCI-Spectrum welcome polling skipped outside event date")
         return 0
     teachers = await _load_teachers()
-    recipients = teachers + _fixed_recipients()
+    recipients = (
+        teachers
+        + _fixed_recipients()
+        + [
+            {"name": "", "phone": phone}
+            for phone in _welcome_evidence_recipients()
+        ]
+    )
     if not recipients:
         logger.warning("SCI-Spectrum welcome polling skipped: no teachers configured")
         return 0
