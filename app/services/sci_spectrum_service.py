@@ -160,6 +160,36 @@ async def _load_teachers() -> list[dict[str, str]]:
     return _load_json_teachers()
 
 
+def _fixed_recipients() -> list[dict[str, str]]:
+    """Static coordinators/principals that always get welcome + thank-you.
+
+    Configured via SCI_SPECTRUM_FIXED_RECIPIENTS as a JSON list of
+    {"name": ..., "phone": ...}. Invalid or landline numbers are dropped.
+    """
+    raw = os.getenv("SCI_SPECTRUM_FIXED_RECIPIENTS", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("SCI_SPECTRUM_FIXED_RECIPIENTS is not valid JSON")
+        return []
+    if not isinstance(data, list):
+        logger.warning("SCI_SPECTRUM_FIXED_RECIPIENTS must be a JSON list")
+        return []
+    recipients: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        phone = _normalize_phone(item.get("phone", ""))
+        if len(phone) != 12 or not phone.startswith("91") or phone in seen:
+            continue
+        seen.add(phone)
+        recipients.append({"name": str(item.get("name", "") or ""), "phone": phone})
+    return recipients
+
+
 def _evidence_recipients() -> list[str]:
     configured = os.getenv("SCI_SPECTRUM_EVIDENCE_PHONES", "")
     if configured:
@@ -238,11 +268,12 @@ async def poll_and_send_welcomes(now: datetime | None = None) -> int:
         logger.info("SCI-Spectrum welcome polling skipped outside event date")
         return 0
     teachers = await _load_teachers()
-    if not teachers:
+    recipients = teachers + _fixed_recipients()
+    if not recipients:
         logger.warning("SCI-Spectrum welcome polling skipped: no teachers configured")
         return 0
     accepted = 0
-    for teacher in teachers:
+    for teacher in recipients:
         recipient = teacher["phone"]
         name = teacher["name"]
         if not await _claim_welcome(recipient, name, current):
@@ -278,6 +309,10 @@ async def send_thankyou_messages(now: datetime | None = None) -> int:
     teachers = await _load_teachers()
     entries = (
         [(teacher["phone"], teacher["name"]) for teacher in teachers]
+        + [
+            (recipient["phone"], recipient["name"])
+            for recipient in _fixed_recipients()
+        ]
         + [(phone, "") for phone in _evidence_recipients()]
     )
     if not entries:
