@@ -152,6 +152,84 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             [call.kwargs["to"] for call in sender.await_args_list],
         )
 
+    async def test_welcome_display_name_cleans_name_and_uses_fallback(self):
+        self.assertEqual(
+            sci_spectrum._welcome_display_name(
+                "  Dr Asha   (External School)  "
+            ),
+            "Dr Asha",
+        )
+        self.assertEqual(
+            sci_spectrum._welcome_display_name("  (External School) "),
+            "Ma'am",
+        )
+        self.assertEqual(sci_spectrum._welcome_display_name(""), "Ma'am")
+
+    async def test_welcome_name_enabled_passes_cleaned_body_param(self):
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.object(sci_spectrum, "WELCOME_NAME_ENABLED", True),
+            patch.object(sci_spectrum, "EVENT_DATE", self.event_now.date()),
+            patch.object(
+                sci_spectrum,
+                "_load_teachers",
+                AsyncMock(
+                    return_value=[
+                        {
+                            "name": "  Dr Asha   (External School) ",
+                            "phone": "919000000010",
+                        }
+                    ]
+                ),
+            ),
+            patch.object(sci_spectrum, "_fixed_recipients", return_value=[]),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+            patch.dict(
+                "os.environ", {"SCI_SPECTRUM_WELCOME_USE_NAME": "1"}
+            ),
+        ):
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 1
+            )
+        self.assertEqual(
+            sender.await_args.kwargs["body_params"], ["Dr Asha"]
+        )
+
+    async def test_welcome_name_disabled_omits_body_params(self):
+        sender = AsyncMock(return_value=True)
+        with (
+            patch.object(sci_spectrum, "SCI_SPECTRUM_ENABLED", True),
+            patch.object(sci_spectrum, "WELCOME_NAME_ENABLED", False),
+            patch.object(sci_spectrum, "EVENT_DATE", self.event_now.date()),
+            patch.object(
+                sci_spectrum,
+                "_load_teachers",
+                AsyncMock(
+                    return_value=[
+                        {"name": "Dr Asha", "phone": "919000000010"}
+                    ]
+                ),
+            ),
+            patch.object(sci_spectrum, "_fixed_recipients", return_value=[]),
+            patch.object(
+                sci_spectrum.whatsapp_service,
+                "send_cloud_template_message",
+                sender,
+            ),
+            patch.dict(
+                "os.environ", {"SCI_SPECTRUM_WELCOME_USE_NAME": "0"}
+            ),
+        ):
+            self.assertEqual(
+                await sci_spectrum.poll_and_send_welcomes(self.event_now), 1
+            )
+        self.assertNotIn("body_params", sender.await_args.kwargs)
+
     async def test_welcome_sends_configured_evidence_recipients_once(self):
         evidence = ["919599488106", "918076455224", "919560892325"]
         sender = AsyncMock(return_value=True)

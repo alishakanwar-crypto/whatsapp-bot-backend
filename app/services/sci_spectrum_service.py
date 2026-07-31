@@ -59,6 +59,22 @@ CARD_URL = os.getenv(
 DEEPA_PHONE = os.getenv("SCI_SPECTRUM_DEEPI_PHONE", "")
 SHEET_CSV_URL = os.getenv("SCI_SPECTRUM_SHEET_CSV_URL", "")
 THANKYOU_QR_URL = os.getenv("SCI_SPECTRUM_THANKYOU_QR_URL", "")
+WELCOME_NAME_ENABLED = os.getenv("SCI_SPECTRUM_WELCOME_USE_NAME", "0") == "1"
+WELCOME_NAME_FALLBACK = os.getenv(
+    "SCI_SPECTRUM_WELCOME_NAME_FALLBACK", "Ma'am"
+)
+
+
+def _welcome_display_name(name: str) -> str:
+    """Greeting name for the welcome template {{1}}.
+
+    Strips any parenthetical (e.g. a school affiliation) and collapses
+    whitespace. Falls back to a neutral salutation when no name is known
+    (e.g. evidence recipients).
+    """
+    cleaned = re.sub(r"\(.*?\)", "", str(name or ""))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or WELCOME_NAME_FALLBACK
 
 
 def _normalize_phone(phone: str) -> str:
@@ -295,11 +311,16 @@ async def poll_and_send_welcomes(now: datetime | None = None) -> int:
         if not await _claim_welcome(recipient, name, current):
             continue
         try:
+            welcome_kwargs: dict = {
+                "to": recipient,
+                "template_name": WELCOME_TEMPLATE,
+                "language_code": "en",
+                "header_image_url": CARD_URL,
+            }
+            if WELCOME_NAME_ENABLED:
+                welcome_kwargs["body_params"] = [_welcome_display_name(name)]
             sent = await whatsapp_service.send_cloud_template_message(
-                to=recipient,
-                template_name=WELCOME_TEMPLATE,
-                language_code="en",
-                header_image_url=CARD_URL,
+                **welcome_kwargs,
             )
         except Exception:
             logger.exception(
