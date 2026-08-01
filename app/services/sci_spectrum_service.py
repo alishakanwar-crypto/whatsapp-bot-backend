@@ -59,6 +59,13 @@ CARD_URL = os.getenv(
 DEEPA_PHONE = os.getenv("SCI_SPECTRUM_DEEPI_PHONE", "")
 SHEET_CSV_URL = os.getenv("SCI_SPECTRUM_SHEET_CSV_URL", "")
 THANKYOU_QR_URL = os.getenv("SCI_SPECTRUM_THANKYOU_QR_URL", "")
+FEEDBACK_TEMPLATE = os.getenv(
+    "SCI_FEEDBACK_TEMPLATE", "ppis_scispectrum_feedback"
+)
+FEEDBACK_CARD_URL = os.getenv(
+    "SCI_FEEDBACK_CARD_URL",
+    "https://ppis-whatsapp-bot.fly.dev/static/sci_spectrum_feedback.jpg",
+)
 WELCOME_NAME_ENABLED = os.getenv("SCI_SPECTRUM_WELCOME_USE_NAME", "0") == "1"
 WELCOME_NAME_FALLBACK = os.getenv(
     "SCI_SPECTRUM_WELCOME_NAME_FALLBACK", "Ma'am"
@@ -381,6 +388,44 @@ async def send_thankyou_messages(now: datetime | None = None) -> int:
     return accepted
 
 
+async def send_feedback_resends(now: datetime | None = None) -> int:
+    current = now or datetime.now(IST)
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT recipient, COALESCE(MAX(name), '') AS name "
+            "FROM sci_spectrum_deliveries "
+            "WHERE phase = 'feedback' "
+            "GROUP BY recipient "
+            "HAVING SUM(CASE WHEN status IN "
+            "('accepted', 'sent', 'delivered', 'read') THEN 1 ELSE 0 END) = 0"
+        )
+        pending = [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+    accepted = 0
+    for entry in pending:
+        recipient = entry["recipient"]
+        name = entry["name"]
+        try:
+            sent = await whatsapp_service.send_cloud_template_message(
+                to=recipient,
+                template_name=FEEDBACK_TEMPLATE,
+                language_code="en",
+                header_image_url=FEEDBACK_CARD_URL,
+            )
+        except Exception:
+            logger.exception(
+                "SCI-Spectrum feedback resend failed for recipient ending %s",
+                recipient[-4:],
+            )
+            sent = False
+        await _record_attempt("feedback", recipient, name, sent, current)
+        accepted += int(sent)
+    return accepted
+
+
 async def record_sci_spectrum_delivery_status(
     wa_message_id: str, status: str, occurred_at: datetime
 ) -> bool:
@@ -427,3 +472,7 @@ def poll_and_send_welcomes_sync() -> None:
 
 def send_thankyou_messages_sync() -> None:
     _run_sync(send_thankyou_messages())
+
+
+def send_feedback_resends_sync() -> None:
+    _run_sync(send_feedback_resends())
