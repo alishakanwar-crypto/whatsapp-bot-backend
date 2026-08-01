@@ -107,6 +107,47 @@ class SciSpectrumTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_feedback_resends_only_pending_unique_recipients(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                "INSERT INTO sci_spectrum_deliveries "
+                "(phase, recipient, name, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("feedback", "919000000010", "Pending Teacher", "failed", ""),
+                    ("feedback", "919000000010", "", "failed", ""),
+                    ("feedback", "919000000011", "Delivered Teacher", "failed", ""),
+                    ("feedback", "919000000011", "Delivered Teacher", "delivered", ""),
+                ],
+            )
+        sender = AsyncMock(return_value=True)
+        with patch.object(
+            sci_spectrum.whatsapp_service,
+            "send_cloud_template_message",
+            sender,
+        ):
+            accepted = await sci_spectrum.send_feedback_resends(self.event_now)
+
+        self.assertEqual(accepted, 1)
+        sender.assert_awaited_once_with(
+            to="919000000010",
+            template_name="ppis_scispectrum_feedback",
+            language_code="en",
+            header_image_url=(
+                "https://ppis-whatsapp-bot.fly.dev/static/"
+                "sci_spectrum_feedback.jpg"
+            ),
+        )
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute(
+                "SELECT recipient, status FROM sci_spectrum_deliveries "
+                "WHERE phase = 'feedback' ORDER BY id"
+            ).fetchall()
+        self.assertEqual(
+            rows[-1],
+            ("919000000010", "accepted"),
+        )
+
     async def test_fixed_recipients_normalize_and_filter_numbers(self):
         fixed = [
             {"name": "Ten Digit", "phone": "9000000010"},

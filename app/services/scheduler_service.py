@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 import httpx
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -21,6 +21,7 @@ from app.services.sci_spectrum_service import (
     IST as SCI_SPECTRUM_IST,
     SCI_SPECTRUM_ENABLED,
     poll_and_send_welcomes_sync,
+    send_feedback_resends_sync,
     send_thankyou_messages_sync,
 )
 from app.services.route_duty_service import (
@@ -989,6 +990,45 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         logger.info("Scheduled SCI-Spectrum one-time jobs in IST")
+
+    feedback_date = os.getenv("SCI_FEEDBACK_RESEND_DATE", "").strip()
+    if feedback_date:
+        feedback_time = os.getenv("SCI_FEEDBACK_RESEND_TIME", "08:30").strip()
+        try:
+            resend_date = date.fromisoformat(feedback_date)
+            resend_hour, resend_minute = (
+                int(part) for part in feedback_time.split(":", 1)
+            )
+            if not 0 <= resend_hour <= 23 or not 0 <= resend_minute <= 59:
+                raise ValueError("time outside valid range")
+            resend_run_at = datetime(
+                resend_date.year,
+                resend_date.month,
+                resend_date.day,
+                resend_hour,
+                resend_minute,
+                tzinfo=SCI_SPECTRUM_IST,
+            )
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid SCI feedback resend date/time: %s %s; skipping job",
+                feedback_date,
+                feedback_time,
+            )
+        else:
+            scheduler.add_job(
+                send_feedback_resends_sync,
+                trigger=DateTrigger(
+                    run_date=resend_run_at,
+                    timezone=SCI_SPECTRUM_IST,
+                ),
+                id="sci_spectrum_feedback_resend",
+                replace_existing=True,
+            )
+            logger.info(
+                "Scheduled SCI-Spectrum feedback resend for %s",
+                resend_run_at.isoformat(),
+            )
 
     scheduler.add_job(
         send_duty_reminders_sync,
