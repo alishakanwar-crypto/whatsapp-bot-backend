@@ -58,7 +58,7 @@ class DailyWorkReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second)
         sender.assert_awaited_once_with(
             to="918076455224",
-            template_name="ppis_daily_work_report",
+            template_name="ppis_daily_report_reminder",
             language_code="en",
             body_params=["Tuesday, 04-08-2026"],
         )
