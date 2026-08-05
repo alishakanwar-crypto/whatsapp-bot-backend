@@ -17,7 +17,7 @@ DAILY_WORK_REPORT_PHONE = os.getenv(
     "DAILY_WORK_REPORT_PHONE",
     "918076455224",
 )
-DAILY_WORK_REPORT_TEMPLATE = "ppis_daily_work_report"
+DAILY_WORK_REPORT_TEMPLATE = "ppis_daily_report_reminder"
 
 
 def _in_ist(now: datetime | None) -> datetime:
