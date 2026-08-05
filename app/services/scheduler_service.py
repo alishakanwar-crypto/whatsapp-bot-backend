@@ -32,6 +32,10 @@ from app.services.route_duty_service import (
     send_monthly_report_sync,
     send_weekly_report_sync,
 )
+from app.services.daily_work_report_service import (
+    IST as DAILY_WORK_REPORT_IST,
+    send_daily_work_report_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1029,6 +1033,20 @@ def start_scheduler() -> None:
                 "Scheduled SCI-Spectrum feedback resend for %s",
                 resend_run_at.isoformat(),
             )
+
+    scheduler.add_job(
+        send_daily_work_report_sync,
+        trigger=CronTrigger(
+            day_of_week="mon-sat",
+            hour=15,
+            minute=0,
+            second=0,
+            timezone=DAILY_WORK_REPORT_IST,
+        ),
+        id="daily_work_report",
+        replace_existing=True,
+    )
+    logger.info("Scheduled daily work report at 3:00 PM IST, Monday-Saturday")
 
     scheduler.add_job(
         send_duty_reminders_sync,
