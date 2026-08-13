@@ -22,10 +22,11 @@ import io
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import PlainTextResponse
 
 logger = logging.getLogger("app.trueface")
@@ -334,6 +335,68 @@ async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool
         return False
 
 
+async def _deliver_trueface_notifications(
+    notifications: list[dict],
+    received_monotonic: float,
+) -> None:
+    """Deliver one event batch in order after the HTTP response is sent."""
+    for notification in notifications:
+        kind = notification["kind"]
+        pin = notification["pin"]
+        timestamp = notification["timestamp"]
+        key = f"{pin}-{timestamp}"
+        name = notification["name"]
+        phone = notification["phone"]
+        time_str = notification["time_str"]
+        send_started = time.monotonic()
+        logger.info(
+            "[TRUEFACE] WA_SEND_START key=%s received_to_send_start=%.3fs",
+            key,
+            send_started - received_monotonic,
+        )
+        if kind == "arrival":
+            wa_ok = await _send_arrival_whatsapp(name, phone, time_str)
+        else:
+            wa_ok = await _send_departure_whatsapp(name, phone, time_str)
+        logger.info(
+            "[TRUEFACE] WA_SEND_COMPLETE key=%s send_elapsed=%.3fs outcome=%s",
+            key,
+            time.monotonic() - send_started,
+            "success" if wa_ok else "failed",
+        )
+
+        db = await _get_db()
+        try:
+            if wa_ok:
+                column = (
+                    "arrival_whatsapp"
+                    if kind == "arrival"
+                    else "departure_whatsapp"
+                )
+                await db.execute(
+                    f"UPDATE trueface_attendance SET {column} = 1 "
+                    "WHERE pin = ? AND date = ?",
+                    (pin, notification["date"]),
+                )
+                await db.commit()
+        finally:
+            await db.close()
+
+        if kind == "arrival":
+            logger.info(
+                f"[TRUEFACE] ARRIVAL: {name} at {time_str} WA={wa_ok}"
+            )
+            asyncio.ensure_future(
+                _notify_chairman_arrival(
+                    name, time_str, notification.get("photo", "")
+                )
+            )
+        else:
+            logger.info(
+                f"[TRUEFACE] DEPARTURE: {name} at {time_str} WA={wa_ok}"
+            )
+
+
 async def _get_db_photo_b64(name: str) -> str:
     """Fetch the stored face photo from the DVR database for a teacher."""
     import base64
@@ -589,7 +652,10 @@ async def _log_mood_from_trueface(name: str, timestamp: str, photo_b64: str):
 # ============================================================
 
 @router.post("/api/trueface/event")
-async def receive_trueface_event(request: Request):
+async def receive_trueface_event(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
     """Receive a face-recognition event from the browser poller.
 
     Body: {"pin": "1", "name": "alisha ahuja", "timestamp": "2026-05-22 07:30:00"}
@@ -597,6 +663,7 @@ async def receive_trueface_event(request: Request):
 
     Returns which events were processed as arrival/departure.
     """
+    received_monotonic = time.monotonic()
     body = await request.json()
     events = body if isinstance(body, list) else [body]
 
@@ -605,6 +672,7 @@ async def receive_trueface_event(request: Request):
 
     db = await _get_db()
     results = []
+    notifications: list[dict] = []
     try:
         for evt in events:
             pin = str(evt.get("pin", "")).strip()
@@ -678,26 +746,29 @@ async def receive_trueface_event(request: Request):
                 )
                 await db.commit()
 
-                wa_ok = False
                 if phone:
-                    wa_ok = await _send_arrival_whatsapp(name, phone, time_str)
-                    if wa_ok:
-                        await db.execute(
-                            "UPDATE trueface_attendance SET arrival_whatsapp = 1 "
-                            "WHERE pin = ? AND date = ?",
-                            (pin, today),
-                        )
-                        await db.commit()
-
-                # Notify chairman of each arrival
-                asyncio.ensure_future(
-                    _notify_chairman_arrival(name, time_str, photo_b64)
-                )
-
-                logger.info(f"[TRUEFACE] ARRIVAL: {name} at {time_str} WA={wa_ok}")
+                    notifications.append({
+                        "kind": "arrival",
+                        "pin": pin,
+                        "name": name,
+                        "phone": phone,
+                        "timestamp": timestamp,
+                        "date": today,
+                        "time_str": time_str,
+                        "photo": photo_b64,
+                    })
+                    wa_result = "queued"
+                else:
+                    wa_result = False
+                    logger.info(
+                        f"[TRUEFACE] ARRIVAL: {name} at {time_str} WA=False"
+                    )
+                    asyncio.ensure_future(
+                        _notify_chairman_arrival(name, time_str, photo_b64)
+                    )
                 results.append({
                     "pin": pin, "name": name, "status": "arrival",
-                    "time": time_str, "whatsapp": wa_ok,
+                    "time": time_str, "whatsapp": wa_result,
                 })
 
             elif not record["departure_time"] and evt_hour >= DEPARTURE_HOUR:
@@ -709,21 +780,25 @@ async def receive_trueface_event(request: Request):
                 )
                 await db.commit()
 
-                wa_ok = False
                 if phone:
-                    wa_ok = await _send_departure_whatsapp(name, phone, time_str)
-                    if wa_ok:
-                        await db.execute(
-                            "UPDATE trueface_attendance SET departure_whatsapp = 1 "
-                            "WHERE pin = ? AND date = ?",
-                            (pin, today),
-                        )
-                        await db.commit()
-
-                logger.info(f"[TRUEFACE] DEPARTURE: {name} at {time_str} WA={wa_ok}")
+                    notifications.append({
+                        "kind": "departure",
+                        "pin": pin,
+                        "name": name,
+                        "phone": phone,
+                        "timestamp": timestamp,
+                        "date": today,
+                        "time_str": time_str,
+                    })
+                    wa_result = "queued"
+                else:
+                    wa_result = False
+                    logger.info(
+                        f"[TRUEFACE] DEPARTURE: {name} at {time_str} WA=False"
+                    )
                 results.append({
                     "pin": pin, "name": name, "status": "departure",
-                    "time": time_str, "whatsapp": wa_ok,
+                    "time": time_str, "whatsapp": wa_result,
                 })
 
             elif not record["departure_time"] and evt_hour < DEPARTURE_HOUR:
@@ -753,6 +828,12 @@ async def receive_trueface_event(request: Request):
     finally:
         await db.close()
 
+    if notifications:
+        background_tasks.add_task(
+            _deliver_trueface_notifications,
+            notifications,
+            received_monotonic,
+        )
     return {"status": "ok", "results": results}
 
 
