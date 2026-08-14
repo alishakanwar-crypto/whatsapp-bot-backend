@@ -734,6 +734,19 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace departure report at 4:30 PM IST (11:00 UTC)")
 
+    # Alert admins if no arrival has been recorded by mid-morning on a school day
+    from app.routes.trueface import check_poller_silence_sync
+    scheduler.add_job(
+        check_poller_silence_sync,
+        trigger=CronTrigger(
+            day_of_week="mon-sat", hour="8,9,10", minute=0, second=0,
+            timezone=SHOWCASE_IST,
+        ),
+        id="trueface_poller_silence_check",
+        replace_existing=True,
+    )
+    logger.info("Scheduled TrueFace poller silence check at 8/9/10 AM IST (Mon-Sat)")
+
     # --- C1 Event-ID Head Count Reports (two-hour intervals + final) ---
     from app.routes.gate import (
         send_event_id_headcount_report_sync,
