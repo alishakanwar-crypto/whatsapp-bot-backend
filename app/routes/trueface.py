@@ -53,6 +53,19 @@ WHATSAPP_DISABLED = os.environ.get("TRUEFACE_WHATSAPP_DISABLED", "").lower() in 
 # Departure is only recorded after this hour.
 DEPARTURE_HOUR = int(os.environ.get("TRUEFACE_DEPARTURE_HOUR", "11"))
 
+# Admins alerted when the campus poller goes quiet on a school day
+ALERT_PHONES = [
+    p.strip()
+    for p in os.environ.get("TRUEFACE_ALERT_PHONES", "918076455224").split(",")
+    if p.strip()
+]
+# Approved Cloud API alert template — delivers outside the 24-hour window
+POLLER_ALERT_TEMPLATE = os.environ.get("TRUEFACE_ALERT_TEMPLATE", "ppis_gate_alert")
+
+# Last time the campus poller reached the cloud (heartbeat or attendance event)
+_last_poller_contact: dict[str, str] = {}
+_poller_alert_sent_date = ""
+
 # Persons whose mood should be logged from TrueFace photos
 MOOD_TRACKED_NAMES = {
     "RAHUL GUPTA": "Chairman",
@@ -333,6 +346,100 @@ async def _send_departure_whatsapp(name: str, phone: str, time_str: str) -> bool
     except Exception as e:
         logger.error(f"[TRUEFACE] Departure WhatsApp error for {phone}: {e}")
         return False
+
+
+def _record_poller_contact(source: str) -> None:
+    """Remember when the campus poller last reached the cloud."""
+    _last_poller_contact["at"] = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
+    _last_poller_contact["source"] = source
+
+
+async def check_poller_silence() -> bool:
+    """Alert admins on a school day when no arrival has been recorded yet."""
+    global _poller_alert_sent_date
+
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+
+    if now.weekday() == 6:  # Sunday — TrueFace attendance is off
+        return False
+    if _poller_alert_sent_date == today:
+        return False
+
+    db = await _get_db()
+    try:
+        attendance = await _get_all_attendance(db, today)
+    finally:
+        await db.close()
+
+    if any(a.get("arrival_time") for a in attendance):
+        return False
+
+    contact_at = _last_poller_contact.get("at")
+    if contact_at:
+        poller_line = f"Poller last reached the cloud at {contact_at}."
+    else:
+        poller_line = "The poller has not reached the cloud at all today."
+
+    detail = (
+        f"No teacher arrival recorded today. {poller_line} "
+        "No arrival WhatsApp will go out until the poller is running again — "
+        "run restart_all_admin.vbs on the campus PC."
+    )
+    message = (
+        "*PPIS — TrueFace attendance alert*\n\n"
+        f"No teacher arrival has been recorded today "
+        f"({now.strftime('%d-%m-%Y')}) as of "
+        f"{now.strftime('%I:%M %p')} IST.\n"
+        f"{poller_line}\n\n"
+        "Teachers will get no arrival WhatsApp until this is fixed. "
+        "On the campus PC, run restart_all_admin.vbs to restart the "
+        "TrueFace poller."
+    )
+
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        send_whatsapp_message,
+    )
+
+    body_params = [
+        "TrueFace poller silent",
+        "TrueFace 3000",
+        now.strftime("%d-%m-%Y %H:%M:%S IST"),
+        detail,
+    ]
+
+    sent = False
+    for phone in ALERT_PHONES:
+        try:
+            ok = await send_cloud_template_message(
+                phone, POLLER_ALERT_TEMPLATE, body_params=body_params
+            )
+            if not ok:
+                ok = await send_whatsapp_message(phone, message)
+            if ok:
+                sent = True
+        except Exception as e:
+            logger.error("[TRUEFACE] Poller alert failed for %s: %s", phone, e)
+
+    logger.warning(
+        "[TRUEFACE] Poller silence alert for %s — %s (notified=%s)",
+        today, poller_line, sent,
+    )
+    _poller_alert_sent_date = today
+    return sent
+
+
+def check_poller_silence_sync():
+    """Sync wrapper for scheduler."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(check_poller_silence())
+        else:
+            loop.run_until_complete(check_poller_silence())
+    except RuntimeError:
+        asyncio.run(check_poller_silence())
 
 
 async def _deliver_trueface_notifications(
@@ -664,6 +771,7 @@ async def receive_trueface_event(
     Returns which events were processed as arrival/departure.
     """
     received_monotonic = time.monotonic()
+    _record_poller_contact("event")
     body = await request.json()
     events = body if isinstance(body, list) else [body]
 
@@ -1449,6 +1557,13 @@ async def trigger_departure_report():
     return {"status": "ok", "type": "departure"}
 
 
+@router.post("/api/trueface/heartbeat")
+async def trueface_heartbeat():
+    """Record that the campus poller is alive even when it sees no faces."""
+    _record_poller_contact("heartbeat")
+    return {"status": "ok", "at": _last_poller_contact.get("at")}
+
+
 @router.get("/api/trueface/status")
 async def trueface_status():
     """Get TrueFace integration status."""
@@ -1464,4 +1579,6 @@ async def trueface_status():
         "registered_teachers": len(teachers),
         "today_present": len([a for a in attendance if a.get("arrival_time")]),
         "today_departed": len([a for a in attendance if a.get("departure_time")]),
+        "last_poller_contact": _last_poller_contact.get("at"),
+        "last_poller_contact_source": _last_poller_contact.get("source"),
     }
