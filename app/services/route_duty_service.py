@@ -20,7 +20,7 @@ IST = ZoneInfo("Asia/Kolkata")
 ROUTE_DUTY_ENABLED = os.getenv("ROUTE_DUTY_ENABLED", "0") == "1"
 HARPREET_PHONE = os.getenv("ROUTE_DUTY_HARPREET_PHONE", "919599488106")
 REMINDER_TEMPLATE = os.getenv(
-    "ROUTE_DUTY_REMINDER_TEMPLATE", "ppis_route_duty_reminder_v2"
+    "ROUTE_DUTY_REMINDER_TEMPLATE", "ppis_route_duty_reminder_v3"
 )
 ALERT_TEMPLATE = os.getenv(
     "ROUTE_DUTY_ALERT_TEMPLATE", "ppis_route_duty_alert"
