@@ -231,6 +231,18 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS staff_birthday_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                staff_name TEXT NOT NULL,
+                wish_date TEXT NOT NULL,
+                phone TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'claimed',
+                wa_message_id TEXT NOT NULL DEFAULT '',
+                claimed_at TEXT NOT NULL DEFAULT '',
+                status_updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(staff_name, wish_date)
+            );
+
             -- Campus Agent cloud config tables
             CREATE TABLE IF NOT EXISTS agent_dvrs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

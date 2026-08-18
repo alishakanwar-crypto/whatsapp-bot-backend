@@ -24,6 +24,10 @@ from app.services.sci_spectrum_service import (
     send_feedback_resends_sync,
     send_thankyou_messages_sync,
 )
+from app.services.staff_birthday_service import (
+    IST as STAFF_BIRTHDAY_IST,
+    send_birthday_wishes_sync as send_staff_birthday_wishes_sync,
+)
 from app.services.route_duty_service import (
     IST as ROUTE_DUTY_IST,
     poll_leave_mailbox_sync,
@@ -1096,6 +1100,14 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled route duty reminders/reports and leave polling in IST")
+
+    scheduler.add_job(
+        send_staff_birthday_wishes_sync,
+        trigger=CronTrigger(hour=9, minute=0, timezone=STAFF_BIRTHDAY_IST),
+        id="staff_birthday_wishes",
+        replace_existing=True,
+    )
+    logger.info("Scheduled staff birthday posters at 9:00 AM IST")
 
     # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
     # for reference only. No job scheduled.
