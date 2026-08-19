@@ -768,56 +768,65 @@ def start_scheduler() -> None:
 
     # --- C1 Event-ID Head Count Reports (two-hour intervals + final) ---
     from app.routes.gate import (
+        GATE_REPORT_WHATSAPP_PHONES,
         send_event_id_headcount_report_sync,
         send_final_event_id_headcount_report_sync,
     )
-    scheduler.add_job(
-        send_event_id_headcount_report_sync,
-        trigger=CronTrigger(
-            hour="8,10,12,14,16", minute=0, second=0, timezone=SHOWCASE_IST,
-        ),
-        id="gate_event_id_two_hour_report",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        send_final_event_id_headcount_report_sync,
-        trigger=CronTrigger(
-            hour=17, minute=0, second=0, timezone=SHOWCASE_IST,
-        ),
-        id="gate_event_id_final_report",
-        replace_existing=True,
-    )
-    logger.info(
-        "Scheduled C1 event-ID reports every two hours from 6:00 AM "
-        "through 4:00 PM IST, with the final 6:00 AM-5:00 PM report at 5:00 PM"
-    )
+    if GATE_REPORT_WHATSAPP_PHONES:
+        scheduler.add_job(
+            send_event_id_headcount_report_sync,
+            trigger=CronTrigger(
+                hour="8,10,12,14,16", minute=0, second=0, timezone=SHOWCASE_IST,
+            ),
+            id="gate_event_id_two_hour_report",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            send_final_event_id_headcount_report_sync,
+            trigger=CronTrigger(
+                hour=17, minute=0, second=0, timezone=SHOWCASE_IST,
+            ),
+            id="gate_event_id_final_report",
+            replace_existing=True,
+        )
+        logger.info(
+            "Scheduled C1 event-ID reports every two hours from 6:00 AM "
+            "through 4:00 PM IST, with the final 6:00 AM-5:00 PM report at 5:00 PM"
+        )
+    else:
+        logger.info("C1 head-count WhatsApp reports are disabled; no jobs scheduled")
 
     # --- C1 Anonymous Gate Analytics ---
     # Hourly analytics 07:00–17:00 IST, final analytics at 17:15 IST, and a
     # congestion/loitering sweep every 5 min during operating hours.
     # IST → UTC: subtract 5h30m.
     from app.services.gate_analytics_service import (
+        GATE_COUNT_REPORTS_ENABLED,
         hourly_analytics_sync, final_analytics_sync, congestion_sweep_sync,
     )
-    for ist_hour in range(7, 18):  # 07:00–17:00 IST, on the hour
-        utc_total = (ist_hour * 60 - 330) % (24 * 60)
-        utc_h, utc_m = divmod(utc_total, 60)
-        scheduler.add_job(
-            hourly_analytics_sync,
-            trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
-            id=f"gate_hourly_analytics_{ist_hour:02d}",
-            replace_existing=True,
-        )
-    logger.info("Scheduled C1 hourly gate analytics 7:00 AM - 5:00 PM IST")
+    if GATE_COUNT_REPORTS_ENABLED:
+        for ist_hour in range(7, 18):  # 07:00–17:00 IST, on the hour
+            utc_total = (ist_hour * 60 - 330) % (24 * 60)
+            utc_h, utc_m = divmod(utc_total, 60)
+            scheduler.add_job(
+                hourly_analytics_sync,
+                trigger=CronTrigger(hour=utc_h, minute=utc_m, second=0),
+                id=f"gate_hourly_analytics_{ist_hour:02d}",
+                replace_existing=True,
+            )
+        logger.info("Scheduled C1 hourly gate analytics 7:00 AM - 5:00 PM IST")
+    else:
+        logger.info("C1 hourly/final head-count summaries are disabled")
 
     # Final end-of-day analytics at 17:15 IST (11:45 UTC).
-    scheduler.add_job(
-        final_analytics_sync,
-        trigger=CronTrigger(hour=11, minute=45, second=0),
-        id="gate_final_analytics",
-        replace_existing=True,
-    )
-    logger.info("Scheduled C1 final gate analytics at 5:15 PM IST")
+    if GATE_COUNT_REPORTS_ENABLED:
+        scheduler.add_job(
+            final_analytics_sync,
+            trigger=CronTrigger(hour=11, minute=45, second=0),
+            id="gate_final_analytics",
+            replace_existing=True,
+        )
+        logger.info("Scheduled C1 final gate analytics at 5:15 PM IST")
 
     # Congestion + loitering sweep every 5 min, 06:00–17:00 IST (00:30–11:30 UTC).
     scheduler.add_job(
