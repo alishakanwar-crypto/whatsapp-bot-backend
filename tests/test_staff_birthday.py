@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app import database
 from app.services import staff_birthday_service as birthdays
+from app.services import staff_email_service as staff_emails
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -30,8 +31,27 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
                     wa_message_id TEXT NOT NULL DEFAULT '',
                     claimed_at TEXT NOT NULL DEFAULT '',
                     status_updated_at TEXT NOT NULL DEFAULT '',
+                    email TEXT NOT NULL DEFAULT '',
+                    email_status TEXT NOT NULL DEFAULT '',
                     UNIQUE(staff_name, wish_date)
-                )
+                );
+                CREATE TABLE staff_birthday_email_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    staff_name TEXT NOT NULL,
+                    wish_date TEXT NOT NULL,
+                    email TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'claimed',
+                    sent_at TEXT NOT NULL DEFAULT '',
+                    UNIQUE(staff_name, wish_date)
+                );
+                CREATE TABLE staff_emails (
+                    staff_name TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'pi_sheet',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO staff_emails (staff_name, email)
+                VALUES ('harnoor kaur', 'harnoor.kaur@ppischool.in')
                 """
             )
 
@@ -100,9 +120,13 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
             birthdays, "POSTER_BASE_URL", "https://example.test/birthday_posters"
         )
         self.base_patch.start()
+        self.email = AsyncMock(return_value=True)
+        self.email_patch = patch.object(birthdays, "send_email_async", self.email)
+        self.email_patch.start()
 
     async def asyncTearDown(self):
         for patcher in (
+            self.email_patch,
             self.base_patch,
             self.enabled_patch,
             self.poster_patch,
@@ -195,6 +219,68 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(self.db_path) as db:
             count = db.execute("SELECT COUNT(*) FROM staff_birthday_log").fetchone()[0]
         self.assertEqual(count, 0)
+
+    async def test_wish_is_emailed_with_the_poster_and_copied_to_principal(self):
+        with patch.object(
+            birthdays.whatsapp_service,
+            "send_cloud_template_message",
+            AsyncMock(return_value=True),
+        ), patch.object(
+            birthdays.whatsapp_service, "send_cloud_text", AsyncMock(return_value=True)
+        ):
+            summary = await birthdays.send_birthday_wishes(now=self.now)
+
+        self.assertEqual([e["emailed"] for e in summary["sent"]], [True])
+        recipients = [call.args[0] for call in self.email.await_args_list]
+        self.assertEqual(
+            recipients, ["harnoor.kaur@ppischool.in", birthdays.PRINCIPAL_EMAIL]
+        )
+        for call in self.email.await_args_list:
+            attachments = call.kwargs["attachments"]
+            self.assertEqual([name for name, _ in attachments], ["harnoor_kaur.jpg"])
+
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT email, email_status FROM staff_birthday_log "
+                "WHERE staff_name = 'Harnoor Kaur'"
+            ).fetchone()
+        self.assertEqual(row, ("harnoor.kaur@ppischool.in", "sent"))
+
+    async def test_staff_without_a_saved_email_is_only_wished_on_whatsapp(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("DELETE FROM staff_emails")
+        with patch.object(staff_emails, "TEACHER_DATA", []), patch.object(
+            birthdays.whatsapp_service,
+            "send_cloud_template_message",
+            AsyncMock(return_value=True),
+        ), patch.object(
+            birthdays.whatsapp_service, "send_cloud_text", AsyncMock(return_value=True)
+        ):
+            summary = await birthdays.send_birthday_wishes(now=self.now)
+
+        self.email.assert_not_awaited()
+        self.assertEqual([e["name"] for e in summary["sent"]], ["Harnoor Kaur"])
+        with sqlite3.connect(self.db_path) as db:
+            status = db.execute(
+                "SELECT email_status FROM staff_birthday_log "
+                "WHERE staff_name = 'Harnoor Kaur'"
+            ).fetchone()[0]
+        self.assertEqual(status, "no address")
+
+    async def test_email_delivery_is_not_repeated_when_whatsapp_fails(self):
+        send = AsyncMock(side_effect=[False, True])
+        with patch.object(
+            birthdays.whatsapp_service, "send_cloud_template_message", send
+        ), patch.object(
+            birthdays.whatsapp_service, "send_cloud_text", AsyncMock(return_value=True)
+        ):
+            failed = await birthdays.send_birthday_wishes(now=self.now)
+            second = await birthdays.send_birthday_wishes(now=self.now)
+
+        self.assertEqual([e["name"] for e in failed["failed"]], ["Harnoor Kaur"])
+        self.assertEqual([e["name"] for e in second["sent"]], ["Harnoor Kaur"])
+        # One wish email plus one proof copy — the retry must not mail again.
+        self.assertEqual(self.email.await_count, 2)
 
     def test_upcoming_lists_birthdays_in_calendar_order(self):
         entries = birthdays.upcoming(days=2, now=self.now)

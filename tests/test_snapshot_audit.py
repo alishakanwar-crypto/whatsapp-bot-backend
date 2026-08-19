@@ -161,7 +161,81 @@ class SnapshotAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second["alerted"])
         body = sender.await_args_list[0].args[1]
         self.assertIn("919899347270", body)
-        self.assertIn("Requests not delivered: 1", body)
+        self.assertIn("Unresolved after auto-repair: 1", body)
+
+    async def test_live_sheet_reread_repairs_access_during_the_request(self):
+        async def fake_refresh():
+            await self._exec(
+                "INSERT INTO snapshot_access_students "
+                "(student_name, grade, father_mobile, mother_mobile) "
+                "VALUES (?, ?, ?, ?)",
+                ("SNAISHA JAIN", "Nursery 2", "919718884500", "919899347270"),
+            )
+
+        with (
+            patch("app.database.get_db", new=self._open_db()),
+            patch.object(audit, "_last_resync_at", None),
+            patch.object(
+                sheets, "fetch_all_pi_sheet_tabs", new=AsyncMock(wraps=fake_refresh)
+            ),
+        ):
+            wards = await audit.repair_access_now("919899347270")
+
+        self.assertEqual(
+            [(w["student_name"], w["grade"]) for w in wards],
+            [("SNAISHA JAIN", "Nursery 2")],
+        )
+
+    async def test_unknown_number_stays_refused_after_live_reread(self):
+        with (
+            patch("app.database.get_db", new=self._open_db()),
+            patch.object(audit, "_last_resync_at", None),
+            patch.object(
+                sheets, "fetch_all_pi_sheet_tabs", new=AsyncMock(return_value=True)
+            ),
+        ):
+            self.assertEqual(await audit.repair_access_now("919000000000"), [])
+
+    async def test_failure_is_resolved_once_the_photo_is_delivered(self):
+        with patch("app.database.get_db", new=self._open_db()):
+            await audit.log_snapshot_request(
+                "919718884500",
+                "Show my child",
+                audit.OUTCOME_CAPTURE_FAILED,
+                reason="camera stream did not start",
+                location="NUR-2",
+            )
+            await audit.log_snapshot_request(
+                "919718884500",
+                "Show my child",
+                audit.OUTCOME_DELIVERED,
+                reason="delivered on automatic retry",
+                location="NUR-2",
+            )
+            summary = await audit.resolve_open_failures()
+
+        self.assertEqual((summary["open"], summary["repaired"]), (1, 1))
+        self.assertEqual(
+            await self._exec(
+                "SELECT COUNT(*) FROM snapshot_request_audit "
+                "WHERE resolved = 0 AND outcome = ?",
+                (audit.OUTCOME_CAPTURE_FAILED,),
+            ),
+            [(0,)],
+        )
+
+    async def test_undelivered_failure_stays_open_for_the_admins(self):
+        with patch("app.database.get_db", new=self._open_db()):
+            await audit.log_snapshot_request(
+                "919718884501",
+                "Show my child",
+                audit.OUTCOME_CAPTURE_FAILED,
+                reason="camera stream did not start",
+                location="NUR-2",
+            )
+            summary = await audit.resolve_open_failures()
+
+        self.assertEqual((summary["open"], summary["repaired"]), (1, 0))
 
 
 class PartialSheetRefreshTests(unittest.IsolatedAsyncioTestCase):

@@ -2,15 +2,21 @@
 
 Every live-snapshot request a parent or admin sends is recorded with its
 outcome, so a request that was refused or never delivered can be found and
-fixed the next day instead of being reconstructed from chat logs.
+fixed instead of being reconstructed from chat logs.
 
-Two things keep parents from silently losing access:
+Failures are repaired while the parent is still in the conversation, not the
+next day:
 
 * ``recover_snapshot_access`` — when a request is refused but the sender is a
   known parent in the school's student records, the missing snapshot-access
   row is rebuilt on the spot and a full PI Sheet re-sync is triggered.
-* ``run_daily_snapshot_audit`` — a daily IST report of every request that was
-  not delivered, WhatsApped to the admins with the reason for each one.
+* ``repair_access_now`` — the same repair plus, when the sender is still not
+  found, a live PI Sheet re-read before the request is refused, so a genuine
+  parent is served on their first attempt.
+* ``resolve_open_failures`` — replays the repair over every request logged as
+  undelivered and marks the ones that are now fixed as resolved.
+* ``run_daily_snapshot_audit`` — safety net: repairs first, then alerts the
+  administrators about the requests that could not be resolved automatically.
 """
 
 import asyncio
@@ -53,6 +59,8 @@ AUDIT_ALERT_PHONES = ("919971166562", "919599488106")
 
 # The self-heal repair runs a full PI Sheet re-sync at most this often.
 _RESYNC_MIN_GAP = timedelta(minutes=30)
+# A live re-read blocks the parent's request, so it is given a hard budget.
+_LIVE_RESYNC_TIMEOUT = 75.0
 _last_resync_at: datetime | None = None
 
 
@@ -211,6 +219,146 @@ async def recover_snapshot_access(sender: str) -> list[dict]:
     return recovered
 
 
+async def _cached_wards(sender: str) -> list[dict]:
+    """Students in the snapshot cache whose parent number is this sender."""
+    from app.database import get_db
+
+    last10 = _last10(sender)
+    if len(last10) < 10:
+        return []
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT student_name, grade FROM snapshot_access_students "
+            "WHERE father_mobile LIKE ? OR mother_mobile LIKE ?",
+            (f"%{last10}%", f"%{last10}%"),
+        )
+        rows = await cur.fetchall()
+    except Exception as exc:
+        logger.warning(f"SNAPSHOT AUDIT: access check failed for {sender}: {exc}")
+        return []
+    finally:
+        await db.close()
+    return [
+        {"student_name": row[0], "grade": row[1], "parent_phones": [sender]}
+        for row in rows
+    ]
+
+
+async def repair_access_now(sender: str) -> list[dict]:
+    """Repair a refused sender's access immediately, before refusing them.
+
+    First rebuilds the access row from the school's student records. If the
+    number is still not found, the PI Sheet is re-read live (rate limited) and
+    the cache is checked again — a class tab that failed to sync earlier is
+    therefore fixed during this very request instead of the next day.
+    """
+    global _last_resync_at
+
+    recovered = await recover_snapshot_access(sender)
+    if recovered:
+        return recovered
+
+    now = datetime.now(IST)
+    if _last_resync_at is not None and now - _last_resync_at < _RESYNC_MIN_GAP:
+        return []
+    _last_resync_at = now
+
+    from app.services.sheet_refresh_service import fetch_all_pi_sheet_tabs
+
+    try:
+        await asyncio.wait_for(fetch_all_pi_sheet_tabs(), timeout=_LIVE_RESYNC_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"SNAPSHOT AUDIT: live PI Sheet re-read for {sender} timed out"
+        )
+        return []
+    except Exception as exc:
+        logger.error(f"SNAPSHOT AUDIT: live PI Sheet re-read failed: {exc}")
+        return []
+
+    wards = await _cached_wards(sender)
+    if wards:
+        logger.warning(
+            f"SNAPSHOT AUDIT: live PI Sheet re-read restored access for {sender}"
+        )
+    return wards
+
+
+async def mark_resolved(sender: str, day: str = "", note: str = "") -> None:
+    """Mark this sender's undelivered requests for the day as resolved."""
+    from app.database import get_db
+
+    day = day or datetime.now(IST).strftime("%Y-%m-%d")
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE snapshot_request_audit SET resolved = 1, "
+            "reason = CASE WHEN ? = '' THEN reason ELSE reason || ' | ' || ? END "
+            "WHERE request_date = ? AND sender_phone = ? AND resolved = 0",
+            (note, note, day, sender),
+        )
+        await db.commit()
+    except Exception as exc:
+        logger.warning(f"SNAPSHOT AUDIT: could not mark {sender} resolved: {exc}")
+    finally:
+        await db.close()
+
+
+async def resolve_open_failures(day: str = "") -> dict:
+    """Repair every undelivered request of the day; returns what is still open.
+
+    Access problems are repaired from the school's student records. Operational
+    failures (camera offline, capture or delivery error) count as resolved only
+    when that same sender was served a photo later in the day — the request-time
+    retry usually does this within seconds. Everything else stays open so the
+    administrators are told about it.
+    """
+    from app.database import get_db
+
+    day = day or datetime.now(IST).strftime("%Y-%m-%d")
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT DISTINCT sender_phone, outcome FROM snapshot_request_audit "
+            "WHERE request_date = ? AND resolved = 0 AND outcome IN "
+            f"({','.join('?' * len(FAILED_OUTCOMES))})",
+            (day, *FAILED_OUTCOMES),
+        )
+        open_rows = await cur.fetchall()
+        cur = await db.execute(
+            "SELECT DISTINCT sender_phone FROM snapshot_request_audit "
+            "WHERE request_date = ? AND outcome = ?",
+            (day, OUTCOME_DELIVERED),
+        )
+        served = {row[0] for row in await cur.fetchall()}
+    finally:
+        await db.close()
+
+    repaired = 0
+    for sender_phone, outcome in open_rows:
+        if outcome in (OUTCOME_BLOCKED_UNAUTHORIZED, OUTCOME_NO_CLASSROOM):
+            if await recover_snapshot_access(sender_phone) or await _cached_wards(
+                sender_phone
+            ):
+                await mark_resolved(
+                    sender_phone, day, "auto-repaired: parent access restored"
+                )
+                repaired += 1
+            continue
+        if sender_phone in served:
+            await mark_resolved(
+                sender_phone, day, "auto-repaired: photo delivered on retry"
+            )
+            repaired += 1
+
+    logger.info(
+        f"SNAPSHOT AUDIT {day}: auto-repaired {repaired} of {len(open_rows)} "
+        f"undelivered request(s)"
+    )
+    return {"date": day, "open": len(open_rows), "repaired": repaired}
+
+
 def _expand_grade(grade: str) -> str:
     """Expand short grade forms used in the DOB sheet ('Nur 2' -> 'Nursery 2')."""
     g = " ".join(grade.strip().split())
@@ -238,13 +386,18 @@ async def run_daily_snapshot_audit(report_date: str = "") -> dict:
     from app.services.whatsapp_service import send_whatsapp_force
 
     day = report_date or datetime.now(IST).strftime("%Y-%m-%d")
+
+    # Repair before reporting — the administrators are only told about what
+    # could not be fixed automatically.
+    repair = await resolve_open_failures(day)
+
     db = await get_db()
     try:
         cur = await db.execute(
             "SELECT sender_phone, student_name, grade, requested_at_ist, "
             "outcome, reason, in_pi_sheet_cache, COUNT(*) "
             "FROM snapshot_request_audit "
-            "WHERE request_date = ? AND outcome IN "
+            "WHERE request_date = ? AND resolved = 0 AND outcome IN "
             f"({','.join('?' * len(FAILED_OUTCOMES))}) "
             "GROUP BY sender_phone, outcome "
             "ORDER BY outcome, sender_phone",
@@ -268,9 +421,12 @@ async def run_daily_snapshot_audit(report_date: str = "") -> dict:
         already_reported = sent_row[0] if sent_row else -1
 
         if not failures:
-            logger.info(f"SNAPSHOT AUDIT {day}: no failed snapshot requests")
+            logger.info(
+                f"SNAPSHOT AUDIT {day}: every undelivered request was "
+                f"auto-repaired ({repair['repaired']} of {repair['open']})"
+            )
             return {"date": day, "failed": 0, "recovered": recovered_count,
-                    "alerted": False}
+                    "repaired": repair["repaired"], "alerted": False}
 
         if already_reported == len(failures):
             logger.info(
@@ -278,17 +434,18 @@ async def run_daily_snapshot_audit(report_date: str = "") -> dict:
                 f"failures, skipping duplicate alert"
             )
             return {"date": day, "failed": len(failures),
-                    "recovered": recovered_count, "alerted": False}
+                    "recovered": recovered_count,
+                    "repaired": repair["repaired"], "alerted": False}
 
         lines = [
             "PPIS Bot — Live Snapshot Audit",
             f"Date: {datetime.strptime(day, '%Y-%m-%d').strftime('%d-%m-%Y')} (IST)",
             "",
-            f"Requests not delivered: {len(failures)}",
+            f"Unresolved after auto-repair: {len(failures)}",
         ]
-        if recovered_count:
+        if recovered_count or repair["repaired"]:
             lines.append(
-                f"Auto-repaired parent access: {recovered_count} request(s)"
+                f"Auto-repaired: {recovered_count + repair['repaired']} request(s)"
             )
         lines.append("")
 
@@ -332,7 +489,8 @@ async def run_daily_snapshot_audit(report_date: str = "") -> dict:
         )
         await db.commit()
         return {"date": day, "failed": len(failures),
-                "recovered": recovered_count, "alerted": True}
+                "recovered": recovered_count,
+                "repaired": repair["repaired"], "alerted": True}
     finally:
         await db.close()
 

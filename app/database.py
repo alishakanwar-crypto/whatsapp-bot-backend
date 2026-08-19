@@ -231,6 +231,23 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS staff_birthday_email_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                staff_name TEXT NOT NULL,
+                wish_date TEXT NOT NULL,
+                email TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'claimed',
+                sent_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(staff_name, wish_date)
+            );
+
+            CREATE TABLE IF NOT EXISTS staff_emails (
+                staff_name TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'pi_sheet',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE IF NOT EXISTS staff_birthday_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 staff_name TEXT NOT NULL,
@@ -811,6 +828,21 @@ async def init_db():
         try:
             await db.execute(
                 "ALTER TABLE messages ADD COLUMN wa_message_id TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE staff_birthday_log ADD COLUMN email TEXT NOT NULL DEFAULT ''"
+            )
+        except Exception:
+            pass  # column already exists
+
+        try:
+            await db.execute(
+                "ALTER TABLE staff_birthday_log "
+                "ADD COLUMN email_status TEXT NOT NULL DEFAULT ''"
             )
         except Exception:
             pass  # column already exists
