@@ -11,6 +11,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.services.whatsapp_service import _send_cloud_text, send_whatsapp_message
 from app.services.sheet_refresh_service import refresh_teacher_data_sync, populate_parent_phones_sync, refresh_pi_sheet_full_sync
+from app.services.snapshot_audit_service import (
+    IST as SNAPSHOT_AUDIT_IST,
+    run_daily_snapshot_audit_sync,
+)
 from app.services.email_polling_service import poll_homework_emails_sync
 from app.services.showcase_reminder_service import (
     IST as SHOWCASE_IST,
@@ -622,6 +626,17 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled daily PI Sheet full refresh at 07:30 IST (02:00 UTC)")
+
+    # --- Daily Live Snapshot Audit ---
+    # Report every snapshot request that was not delivered, at 20:00 IST, so
+    # refused or failed requests are fixed the same day.
+    scheduler.add_job(
+        run_daily_snapshot_audit_sync,
+        trigger=CronTrigger(hour=20, minute=0, timezone=SNAPSHOT_AUDIT_IST),
+        id="snapshot_audit_daily",
+        replace_existing=True,
+    )
+    logger.info("Scheduled daily snapshot audit at 20:00 IST")
 
     # --- Teacher Homework Email Polling ---
     # Poll info@ppischool.in IMAP inbox every 60 minutes (was 30 — caused OOM on 256MB)

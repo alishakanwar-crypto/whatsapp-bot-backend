@@ -11,6 +11,7 @@ Published CSV URL for the first tab (Gmail_Updation_2026_27):
 https://docs.google.com/spreadsheets/d/e/2PACX-1vQ6ZUQa6hhQ_9QXYIuJuWsleqSZ5vgXbWrRvDfvFpqdEx0iW28Z1GlpLdt9T1F9AvX4BdgPjAmfvH96/pub?output=csv&gid=74061219
 """
 
+import asyncio
 import csv
 import io
 import json
@@ -18,10 +19,21 @@ import logging
 import os
 import re as _re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+IST = ZoneInfo("Asia/Kolkata")
+
+# A class tab that cannot be fetched or parsed is retried before the refresh
+# gives up on it — a single flaky read must never erase a whole class.
+TAB_FETCH_ATTEMPTS = 3
+TAB_FETCH_TIMEOUT = 30.0
+
+# Admins notified when the PI Sheet refresh cannot rebuild the full dataset.
+SHEET_ALERT_PHONES = ("919971166562", "919599488106")
 
 # Published Google Sheet CSV URL (first tab: Gmail_Updation_2026_27)
 SHEET_CSV_URL = os.getenv(
@@ -660,6 +672,19 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
+async def _alert_sheet_refresh_problem(detail: str) -> None:
+    """WhatsApp the admins when the PI Sheet refresh could not rebuild fully."""
+    from app.services.whatsapp_service import send_whatsapp_force
+
+    stamp = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
+    text = f"PPIS Bot — Student Data Sync Alert\n\n{detail}\n\nTime: {stamp}"
+    for phone in SHEET_ALERT_PHONES:
+        try:
+            await send_whatsapp_force(phone, text)
+        except Exception as exc:
+            logger.warning(f"PI SHEET ALERT: could not notify {phone}: {exc}")
+
+
 async def fetch_all_pi_sheet_tabs() -> bool:
     """Fetch ALL grade tabs from the published PI Sheet and rebuild pi_sheet_students.
 
@@ -672,23 +697,46 @@ async def fetch_all_pi_sheet_tabs() -> bool:
     """
     active_students: list[dict] = []
     snapshot_students: list[dict] = []
+    failed_gids: list[str] = []
 
     async with httpx.AsyncClient() as client:
         for gid in PI_SHEET_GRADE_GIDS:
             try:
                 url = f"{PI_SHEET_PUB_BASE}&gid={gid}"
-                resp = await client.get(url, timeout=20, follow_redirects=True)
-                if resp.status_code != 200:
-                    logger.warning(f"PI SHEET TAB gid={gid}: HTTP {resp.status_code}")
+                resp = None
+                for attempt in range(TAB_FETCH_ATTEMPTS):
+                    try:
+                        resp = await client.get(
+                            url, timeout=TAB_FETCH_TIMEOUT, follow_redirects=True
+                        )
+                        if resp.status_code == 200:
+                            break
+                        logger.warning(
+                            f"PI SHEET TAB gid={gid}: HTTP {resp.status_code} "
+                            f"(attempt {attempt + 1}/{TAB_FETCH_ATTEMPTS})"
+                        )
+                    except httpx.HTTPError as exc:
+                        logger.warning(
+                            f"PI SHEET TAB gid={gid}: {exc} "
+                            f"(attempt {attempt + 1}/{TAB_FETCH_ATTEMPTS})"
+                        )
+                        resp = None
+                    if attempt + 1 < TAB_FETCH_ATTEMPTS:
+                        await asyncio.sleep(2 * (attempt + 1))
+
+                if resp is None or resp.status_code != 200:
+                    failed_gids.append(gid)
                     continue
 
                 text = resp.text
                 if not text or len(text) < 30:
+                    failed_gids.append(gid)
                     continue
 
                 reader = csv.reader(io.StringIO(text))
                 rows = list(reader)
                 if len(rows) < 2:
+                    failed_gids.append(gid)
                     continue
 
                 # --- Find header row ---
@@ -704,6 +752,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     if header_idx >= 0:
                         break
                 if header_idx < 0 or name_col < 0:
+                    failed_gids.append(gid)
                     continue
 
                 header_cells = [c.strip() for c in rows[header_idx]]
@@ -823,10 +872,16 @@ async def fetch_all_pi_sheet_tabs() -> bool:
 
             except Exception as e:
                 logger.warning(f"PI SHEET TAB gid={gid}: {e}")
+                failed_gids.append(gid)
                 continue
 
     if not active_students:
         logger.error("PI SHEET FULL REFRESH: No students found across any tab")
+        await _alert_sheet_refresh_problem(
+            "PI Sheet refresh found no students across any class tab, so the "
+            "saved student data was left untouched. Live snapshots keep working "
+            "with the previously saved data."
+        )
         return False
 
     # --- Deduplicate by (NAME, GRADE) ---
@@ -892,8 +947,54 @@ async def fetch_all_pi_sheet_tabs() -> bool:
     # --- Replace all rows in pi_sheet_students ---
     from app.database import get_db
 
+    # A tab that could not be fetched or parsed contributes no students, so a
+    # full replace would silently wipe every child of those classes and their
+    # parents would lose live-snapshot access. In that case only the classes
+    # that were actually read are replaced; the rest keep their saved rows.
+    fetched_grades = {s["grade"] for s in snapshot_students if s["grade"]}
+    partial = bool(failed_gids)
+    if partial:
+        logger.error(
+            f"PI SHEET FULL REFRESH: {len(failed_gids)} of "
+            f"{len(PI_SHEET_GRADE_GIDS)} class tabs unreadable "
+            f"({', '.join(failed_gids)}) — keeping saved rows for classes "
+            f"that were not read"
+        )
+
     db = await get_db()
     try:
+        # Compare like with like: in a partial sync only the classes that were
+        # read get replaced, so only their saved rows may legitimately change.
+        if partial and fetched_grades:
+            placeholders = ",".join("?" * len(fetched_grades))
+            prev_cur = await db.execute(
+                "SELECT COUNT(*) FROM snapshot_access_students "
+                f"WHERE grade IN ({placeholders})",
+                tuple(fetched_grades),
+            )
+        else:
+            prev_cur = await db.execute(
+                "SELECT COUNT(*) FROM snapshot_access_students"
+            )
+        previous_snapshot_rows = (await prev_cur.fetchone())[0]
+        if (
+            previous_snapshot_rows > 0
+            and len(snapshot_students) < previous_snapshot_rows * 0.8
+        ):
+            logger.error(
+                f"PI SHEET FULL REFRESH: refusing to write — only "
+                f"{len(snapshot_students)} students parsed vs "
+                f"{previous_snapshot_rows} already saved"
+            )
+            await _alert_sheet_refresh_problem(
+                f"Today's PI Sheet sync only read {len(snapshot_students)} "
+                f"students but {previous_snapshot_rows} are already saved, so "
+                f"the saved student data was kept and nothing was deleted. "
+                f"Live snapshots are unaffected. Please check the PI Sheet "
+                f"sharing/publish settings."
+            )
+            return False
+
         # Save allowlisted students before deleting — these are withdrawal
         # students whose parents still need temporary access.
         al_phones = await db.execute(
@@ -928,7 +1029,13 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     row,
                 )))
 
-        await db.execute("DELETE FROM pi_sheet_students")
+        if partial:
+            for grade in fetched_grades:
+                await db.execute(
+                    "DELETE FROM pi_sheet_students WHERE grade = ?", (grade,)
+                )
+        else:
+            await db.execute("DELETE FROM pi_sheet_students")
 
         for s in unique:
             await db.execute(
@@ -939,7 +1046,14 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 (s["name"], s["grade"], s["father_phone"], s["mother_phone"]),
             )
 
-        await db.execute("DELETE FROM snapshot_access_students")
+        if partial:
+            for grade in fetched_grades:
+                await db.execute(
+                    "DELETE FROM snapshot_access_students WHERE grade = ?",
+                    (grade,),
+                )
+        else:
+            await db.execute("DELETE FROM snapshot_access_students")
         snapshot_keys: set[tuple[str, str]] = set()
         for s in snapshot_students:
             key = (s["name"].upper().strip(), s["grade"])
@@ -990,6 +1104,14 @@ async def fetch_all_pi_sheet_tabs() -> bool:
             f"{with_phones} with phone numbers, "
             f"{len(unique) - with_phones} missing phones"
         )
+        if partial:
+            await _alert_sheet_refresh_problem(
+                f"{len(failed_gids)} of {len(PI_SHEET_GRADE_GIDS)} PI Sheet "
+                f"class tabs could not be read in today's sync. The classes "
+                f"that were read are updated; the remaining classes kept "
+                f"their previously saved students, so no parent lost live "
+                f"snapshot access."
+            )
         return True
     except Exception as e:
         logger.error(f"PI SHEET FULL REFRESH: DB error: {e}")

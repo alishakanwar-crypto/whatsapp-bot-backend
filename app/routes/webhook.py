@@ -3628,27 +3628,59 @@ async def detect_and_handle_snapshot_request(
     if not _is_snapshot_request(message_text, is_admin=is_admin):
         return False
 
+    from app.services.snapshot_audit_service import (
+        OUTCOME_AGENT_UNAVAILABLE,
+        OUTCOME_BLOCKED_UNAUTHORIZED,
+        OUTCOME_CAPTURE_FAILED,
+        OUTCOME_DELIVERED,
+        OUTCOME_DELIVERY_FAILED,
+        OUTCOME_NO_CLASSROOM,
+        OUTCOME_RECOVERED,
+        log_snapshot_request,
+        recover_snapshot_access,
+    )
+
     # ---- STRICT ACCESS CONTROL ----
     # Only admin panel members and parents listed in the PI Sheet may
     # receive camera snapshots.  Everyone else is politely refused.
     if not is_admin and not await _is_pi_sheet_parent(sender):
-        logger.warning(
-            f"BLOCKED snapshot request from unknown number {sender} "
-            f"(not admin, not in PI Sheet): {message_text}"
-        )
-        await send_whatsapp_message(
-            reply_to,
-            "Dear User,\n\n"
-            "We are unable to process your request. "
-            "Access to live campus photos is restricted to registered parents "
-            "and school administrators only.\n\n"
-            "If you believe this is an error, please contact:\n"
-            "School Helpline / Front Desk: 8800935552\n"
-            "Ms. Harpreet Kaur (Administration Incharge): 9599488106\n\n"
-            "Thank you for your cooperation.\n"
-            "Warm regards,\nPP International School"
-        )
-        return True
+        # The snapshot-access table is only a cache of the PI Sheet; if a class
+        # failed to sync, a genuine parent would be refused.  Rebuild their
+        # access from the school's student records before refusing anyone.
+        recovered = await recover_snapshot_access(sender)
+        if recovered:
+            await log_snapshot_request(
+                sender,
+                message_text,
+                OUTCOME_RECOVERED,
+                reason="restored missing snapshot access from student records",
+                student_name=recovered[0]["student_name"],
+                grade=recovered[0]["grade"],
+            )
+        else:
+            logger.warning(
+                f"BLOCKED snapshot request from unknown number {sender} "
+                f"(not admin, not in PI Sheet): {message_text}"
+            )
+            await log_snapshot_request(
+                sender,
+                message_text,
+                OUTCOME_BLOCKED_UNAUTHORIZED,
+                reason="number not found in saved parent data",
+            )
+            await send_whatsapp_message(
+                reply_to,
+                "Dear User,\n\n"
+                "We are unable to process your request. "
+                "Access to live campus photos is restricted to registered "
+                "parents and school administrators only.\n\n"
+                "If you believe this is an error, please contact:\n"
+                "School Helpline / Front Desk: 8800935552\n"
+                "Ms. Harpreet Kaur (Administration Incharge): 9599488106\n\n"
+                "Thank you for your cooperation.\n"
+                "Warm regards,\nPP International School"
+            )
+            return True
 
     from app.routes.agent_ws import (
         is_agent_connected, request_snapshot, wait_for_agent,
@@ -3681,6 +3713,15 @@ async def detect_and_handle_snapshot_request(
         # Determine the classroom for queuing (best-effort extraction)
         _queue_classroom = await _extract_classroom_for_queue(
             message_text, sender, is_admin,
+        )
+
+        await log_snapshot_request(
+            sender,
+            message_text,
+            OUTCOME_AGENT_UNAVAILABLE,
+            reason=f"campus agent offline (consecutive failures: {consecutive})",
+            location=_queue_classroom or "",
+            is_admin=is_admin,
         )
 
         if _queue_classroom:
@@ -3827,6 +3868,12 @@ async def detect_and_handle_snapshot_request(
                 await save_pending_query(sender, reply_to, f"SNAPSHOT:{message_text}")
                 return True
             else:
+                await log_snapshot_request(
+                    sender,
+                    message_text,
+                    OUTCOME_NO_CLASSROOM,
+                    reason="no ward classroom could be determined for this number",
+                )
                 await send_whatsapp_message(
                     reply_to,
                     f"{_greeting(sender)},\n\n"
@@ -4029,10 +4076,25 @@ async def detect_and_handle_snapshot_request(
 
         if sent_count > 0:
             logger.info(f"Sent {sent_count}/{image_count} snapshot(s) for {location} to {sender}")
+            await log_snapshot_request(
+                sender,
+                message_text,
+                OUTCOME_DELIVERED,
+                location=location or "",
+                is_admin=is_admin,
+            )
             return True
 
         # All uploads/sends failed
         record_snapshot_failure()
+        await log_snapshot_request(
+            sender,
+            message_text,
+            OUTCOME_DELIVERY_FAILED,
+            reason="captured but WhatsApp upload/send failed",
+            location=location or "",
+            is_admin=is_admin,
+        )
         logger.warning(f"Failed to upload/send any snapshot image for {location}")
         await send_whatsapp_message(
             reply_to,
@@ -4049,6 +4111,14 @@ async def detect_and_handle_snapshot_request(
 
         error_msg = result.get("error", "Unknown error")
         logger.error(f"Snapshot request failed for {location}: {error_msg}")
+        await log_snapshot_request(
+            sender,
+            message_text,
+            OUTCOME_CAPTURE_FAILED,
+            reason=str(error_msg)[:120],
+            location=location or "",
+            is_admin=is_admin,
+        )
         fail_msg = (
             f"We were unable to capture a photo from {location} at this time. "
             f"The camera may be temporarily unavailable."
