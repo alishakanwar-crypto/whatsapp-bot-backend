@@ -44,6 +44,12 @@ REPLAY_DISCREPANCY_THRESHOLD = int(
 )
 VEHICLE_LONG_DWELL_MIN = int(os.environ.get("GATE_VEHICLE_LONG_DWELL_MIN", "30"))
 
+# Hourly / end-of-day head-count summaries over WhatsApp are off by default
+# (Alisha, 14-08-2026); security alerts are unaffected. Set to "1" to restore.
+GATE_COUNT_REPORTS_ENABLED = (
+    os.environ.get("GATE_COUNT_REPORTS_ENABLED", "0") == "1"
+)
+
 # Anonymous alert template (body-only; NO image/face header). Must be an
 # approved Meta Cloud template with 4 body params: {{1}} type, {{2}} camera,
 # {{3}} time IST, {{4}} detail.
@@ -417,6 +423,8 @@ async def _cpplus_totals(db, date: str, now: datetime) -> dict:
 async def hourly_analytics(hour: int | None = None) -> dict:
     """Deliver an anonymous hourly analytics summary (idempotent per hour)."""
     from app.database import get_db
+    if not GATE_COUNT_REPORTS_ENABLED:
+        return {"status": "disabled"}
     now = datetime.now(IST)
     hour = now.hour if hour is None else hour
     date = now.strftime("%Y-%m-%d")
@@ -442,6 +450,8 @@ async def hourly_analytics(hour: int | None = None) -> dict:
 async def final_analytics() -> dict:
     """Deliver the anonymous end-of-day analytics summary (idempotent)."""
     from app.database import get_db
+    if not GATE_COUNT_REPORTS_ENABLED:
+        return {"status": "disabled"}
     now = datetime.now(IST)
     date = now.strftime("%Y-%m-%d")
 

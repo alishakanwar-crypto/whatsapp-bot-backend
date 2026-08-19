@@ -84,10 +84,11 @@ def _split_parent_vendor(time_str: str) -> str:
 # Deliver the reconciliation report PDF over WhatsApp (Meta Cloud API).
 # Comma-separated numbers in GATE_REPORT_WHATSAPP_PHONES; empty string disables.
 # Requires an approved DOCUMENT-header template (GATE_REPORT_WHATSAPP_TEMPLATE).
+# Head-count reports over WhatsApp are off by default (Alisha, 14-08-2026);
+# set the env var to a comma-separated list to re-enable them.
 GATE_REPORT_WHATSAPP_PHONES = [
     p.strip() for p in os.environ.get(
-        "GATE_REPORT_WHATSAPP_PHONES",
-        "918796105084,919289280410",  # Ali, Charu
+        "GATE_REPORT_WHATSAPP_PHONES", "",
     ).split(",") if p.strip()
 ]
 GATE_REPORT_WHATSAPP_TEMPLATE = os.environ.get(
