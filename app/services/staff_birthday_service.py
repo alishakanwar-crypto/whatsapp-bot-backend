@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 
 from app.database import get_db
 from app.services import whatsapp_service
+from app.services.email_service import send_email_async
+from app.services.staff_email_service import lookup_email
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,27 @@ POSTER_BASE_URL = os.getenv(
     "https://ppis-whatsapp-bot.fly.dev/static/birthday_posters",
 ).rstrip("/")
 ADMIN_PHONE = os.getenv("STAFF_BIRTHDAY_ADMIN_PHONE", "918076455224")
+# Principal Ma'am receives the same mail as proof that the wish went out.
+PRINCIPAL_EMAIL = os.getenv(
+    "STAFF_BIRTHDAY_PRINCIPAL_EMAIL", "deepi.bector@ppischool.in"
+)
+EMAIL_SUBJECT = "Happy Birthday from Team PPIS!"
+EMAIL_BODY = (
+    "Dear {name},\n\n"
+    "Wishing you many happy returns of the day. May the coming year be full "
+    "of peace, health, happiness and prosperity.\n\n"
+    "Best wishes,\nTeam PPIS"
+)
+PRINCIPAL_BODY = (
+    "Respected Ma'am,\n\n"
+    "The birthday wish below was sent today on WhatsApp and email.\n\n"
+    "Staff member: {name}\n"
+    "School email: {email}\n"
+    "WhatsApp: {phone}\n"
+    "Sent at: {stamp}\n\n"
+    "The poster shared with them is attached.\n\n"
+    "Regards,\nPPIS Bot"
+)
 
 _DATA_PATH = Path(__file__).parents[1] / "data" / "staff_birthdays.json"
 _POSTER_DIR = Path(__file__).parents[1] / "static" / "birthday_posters"
@@ -80,6 +103,7 @@ def load_staff() -> list[dict[str, str]]:
                 "phone": _normalize_phone(record.get("phone", "")),
                 "poster": str(record.get("poster", "")).strip(),
                 "designation": str(record.get("designation", "")).strip(),
+                "email": str(record.get("email", "")).strip(),
                 "needs_review": str(record.get("needs_review", "")).strip(),
                 "note": str(record.get("note", "")).strip(),
             }
@@ -114,6 +138,118 @@ def blocking_reason(staff: dict[str, str]) -> str:
     return ""
 
 
+async def resolve_email(staff: dict[str, str]) -> str:
+    """School email for this staff member: record first, then saved PI Sheet."""
+    if staff.get("email"):
+        return staff["email"]
+    try:
+        return await lookup_email(staff["name"])
+    except Exception:
+        logger.exception("Unable to look up school email for %s", staff["name"])
+        return ""
+
+
+async def _claim_email(staff: dict[str, str], wish_date: str, address: str) -> bool:
+    """Reserve today's birthday email; False when it already went out.
+
+    The email is claimed separately from the WhatsApp wish so that a retry of a
+    failed WhatsApp template does not mail the staff member a second time.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO staff_birthday_email_log "
+            "(staff_name, wish_date, email) VALUES (?, ?, ?)",
+            (staff["name"], wish_date, address),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+    finally:
+        await db.close()
+
+
+async def _finish_email(
+    staff: dict[str, str], wish_date: str, address: str, sent: bool
+) -> None:
+    db = await get_db()
+    try:
+        if sent:
+            await db.execute(
+                "UPDATE staff_birthday_email_log SET status = 'sent', email = ?, "
+                "sent_at = ? WHERE staff_name = ? AND wish_date = ?",
+                (address, _timestamp(), staff["name"], wish_date),
+            )
+        else:
+            # Drop the claim so the next run can try the email again.
+            await db.execute(
+                "DELETE FROM staff_birthday_email_log "
+                "WHERE staff_name = ? AND wish_date = ?",
+                (staff["name"], wish_date),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _deliver_email(
+    staff: dict[str, str], wish_date: str, address: str
+) -> str:
+    """Email today's poster once; returns 'sent', 'failed' or 'no address'."""
+    if not address:
+        return "no address"
+    if not await _claim_email(staff, wish_date, address):
+        # Already mailed today (a WhatsApp retry must not mail them again).
+        return "sent"
+    emailed = await _email_wish(staff, address)
+    await _finish_email(staff, wish_date, address, emailed)
+    if not emailed:
+        logger.warning(
+            "Birthday email to %s (%s) did not go out", staff["name"], address
+        )
+    return "sent" if emailed else "failed"
+
+
+async def _email_wish(staff: dict[str, str], address: str) -> bool:
+    """Email the poster to the staff member; False if it could not be sent."""
+    poster = _POSTER_DIR / staff["poster"]
+    try:
+        attachments = [(poster.name, poster.read_bytes())]
+    except OSError:
+        logger.exception("Unable to read poster %s for email", poster)
+        return False
+    try:
+        sent = await send_email_async(
+            address,
+            EMAIL_SUBJECT,
+            EMAIL_BODY.format(name=staff["display_name"]),
+            sender_name="PP International School",
+            attachments=attachments,
+        )
+    except Exception:
+        logger.exception("Birthday email failed for %s", staff["name"])
+        return False
+
+    if PRINCIPAL_EMAIL and PRINCIPAL_EMAIL != address:
+        try:
+            await send_email_async(
+                PRINCIPAL_EMAIL,
+                f"{EMAIL_SUBJECT} — {staff['display_name']}",
+                PRINCIPAL_BODY.format(
+                    name=staff["display_name"],
+                    email=address,
+                    phone=staff["phone"],
+                    stamp=_timestamp(),
+                ),
+                sender_name="PP International School",
+                attachments=attachments,
+            )
+        except Exception:
+            logger.exception(
+                "Birthday proof copy to the principal failed for %s", staff["name"]
+            )
+    return sent
+
+
 async def _claim_wish(staff: dict[str, str], wish_date: str, now: datetime) -> bool:
     """Reserve today's wish for this staff member; False if already claimed."""
     db = await get_db()
@@ -135,15 +271,20 @@ async def _finish_wish(
     sent: bool,
     now: datetime,
     message_id: str,
+    email: str = "",
+    email_status: str = "",
 ) -> None:
     db = await get_db()
     try:
         await db.execute(
             "UPDATE staff_birthday_log SET status = ?, wa_message_id = ?, "
+            "email = ?, email_status = ?, "
             "status_updated_at = ? WHERE staff_name = ? AND wish_date = ?",
             (
                 "sent" if sent else "failed",
                 message_id if sent else "",
+                email,
+                email_status,
                 _timestamp(now),
                 staff["name"],
                 wish_date,
@@ -206,10 +347,12 @@ async def send_birthday_wishes(
         return summary
 
     for staff in birthdays_on(today):
+        address = await resolve_email(staff)
         entry = {
             "name": staff["name"],
             "display_name": staff["display_name"],
             "phone": staff["phone"],
+            "email": address,
             "poster_url": poster_url(staff),
         }
         reason = blocking_reason(staff)
@@ -240,6 +383,9 @@ async def send_birthday_wishes(
             logger.exception("Birthday wish failed for %s", staff["name"])
             sent = False
 
+        email_status = await _deliver_email(staff, wish_date, address)
+        entry["emailed"] = email_status == "sent"
+
         if sent:
             await _finish_wish(
                 staff,
@@ -247,6 +393,8 @@ async def send_birthday_wishes(
                 True,
                 datetime.now(IST),
                 whatsapp_service.last_cloud_template_message_id,
+                email=address,
+                email_status=email_status,
             )
             summary["sent"].append(entry)
             logger.info(

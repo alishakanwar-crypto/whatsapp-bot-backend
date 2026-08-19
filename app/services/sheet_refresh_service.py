@@ -246,6 +246,14 @@ async def fetch_and_update_teacher_data() -> bool:
         # Also update the CLASS TEACHERS section in the system prompt
         await _rebuild_system_prompt_teachers(new_data)
 
+        # Persist the school email addresses so staff notifications (birthday
+        # wishes) survive a sheet outage.
+        from app.services.staff_email_service import sync_staff_emails
+        try:
+            await sync_staff_emails()
+        except Exception:
+            logger.exception("SHEET REFRESH: Unable to save staff school emails")
+
         return True
 
     except Exception as e:

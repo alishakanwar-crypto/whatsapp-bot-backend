@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import logging
@@ -3589,6 +3590,9 @@ CHILD_ABSENT_REPLY = (
 
 # Feature flag — kept OFF until the reply wording is approved by the school.
 _CHILD_ABSENT_REPLY_ENABLED = False
+# A failed capture/delivery is retried this many seconds later, in the same
+# conversation, so the parent is not left waiting for a manual fix.
+_SNAPSHOT_RETRY_DELAY = 3.0
 
 
 def _is_child_absent_complaint(message_text: str) -> bool:
@@ -3637,7 +3641,8 @@ async def detect_and_handle_snapshot_request(
         OUTCOME_NO_CLASSROOM,
         OUTCOME_RECOVERED,
         log_snapshot_request,
-        recover_snapshot_access,
+        mark_resolved,
+        repair_access_now,
     )
 
     # ---- STRICT ACCESS CONTROL ----
@@ -3647,7 +3652,7 @@ async def detect_and_handle_snapshot_request(
         # The snapshot-access table is only a cache of the PI Sheet; if a class
         # failed to sync, a genuine parent would be refused.  Rebuild their
         # access from the school's student records before refusing anyone.
-        recovered = await recover_snapshot_access(sender)
+        recovered = await repair_access_now(sender)
         if recovered:
             await log_snapshot_request(
                 sender,
@@ -3656,6 +3661,10 @@ async def detect_and_handle_snapshot_request(
                 reason="restored missing snapshot access from student records",
                 student_name=recovered[0]["student_name"],
                 grade=recovered[0]["grade"],
+            )
+            # Anything refused earlier today was the same missing data.
+            await mark_resolved(
+                sender, note="auto-repaired: parent access restored"
             )
         else:
             logger.warning(
@@ -3868,21 +3877,36 @@ async def detect_and_handle_snapshot_request(
                 await save_pending_query(sender, reply_to, f"SNAPSHOT:{message_text}")
                 return True
             else:
-                await log_snapshot_request(
-                    sender,
-                    message_text,
-                    OUTCOME_NO_CLASSROOM,
-                    reason="no ward classroom could be determined for this number",
-                )
-                await send_whatsapp_message(
-                    reply_to,
-                    f"{_greeting(sender)},\n\n"
-                    "Please specify the class and section for the classroom photo "
-                    "(e.g., 'Show photo of Grade 3C' or 'Send picture of Nursery 1').\n\n"
-                    "Thank you for your cooperation.\n"
-                    "Warm regards,\nPP International School"
-                )
-                return True
+                # The ward may be missing from the cache rather than unknown —
+                # repair it now so this request itself can be served.
+                if await repair_access_now(sender):
+                    children = await _lookup_snapshot_parent_child_class(sender)
+                if len(children) == 1:
+                    location = _grade_to_camera_key(children[0]["grade"])
+                    logger.info(
+                        f"Repaired classroom {location} for parent {sender} "
+                        f"(child: {children[0]['student_name']})"
+                    )
+                    await mark_resolved(
+                        sender, note="auto-repaired: ward classroom restored"
+                    )
+                if not location:
+                    await log_snapshot_request(
+                        sender,
+                        message_text,
+                        OUTCOME_NO_CLASSROOM,
+                        reason="no ward classroom could be determined for this number",
+                    )
+                    await send_whatsapp_message(
+                        reply_to,
+                        f"{_greeting(sender)},\n\n"
+                        "Please specify the class and section for the classroom "
+                        "photo (e.g., 'Show photo of Grade 3C' or "
+                        "'Send picture of Nursery 1').\n\n"
+                        "Thank you for your cooperation.\n"
+                        "Warm regards,\nPP International School"
+                    )
+                    return True
 
     # --- Handle multi-camera locations (e.g. Reception C1-C4) ---
     # RULE: Only share exactly 2 photos (C1 + C2). Never more.
@@ -3995,16 +4019,30 @@ async def detect_and_handle_snapshot_request(
             img_data.pop("image_base64", None)
             logger.info("Streamed snapshot for %s (%s)", location, desc)
 
-    # Request snapshot from Campus Agent
-    try:
-        result = await request_snapshot(
-            location,
-            timeout=60.0,
-            image_callback=deliver_snapshot_image,
-        )
-    except Exception as exc:
-        logger.error(f"Snapshot request raised exception for {location}: {exc}", exc_info=True)
-        result = {"success": False, "error": str(exc)}
+    # Request snapshot from Campus Agent. A first capture can fail because the
+    # camera stream was still opening, so it is retried immediately rather than
+    # leaving the parent to ask again.
+    async def _capture() -> dict:
+        try:
+            return await request_snapshot(
+                location,
+                timeout=60.0,
+                image_callback=deliver_snapshot_image,
+            )
+        except Exception as exc:
+            logger.error(
+                f"Snapshot request raised exception for {location}: {exc}",
+                exc_info=True,
+            )
+            return {"success": False, "error": str(exc)}
+
+    result = await _capture()
+    if not result.get("success"):
+        logger.warning(f"Retrying snapshot capture for {location} immediately")
+        await asyncio.sleep(_SNAPSHOT_RETRY_DELAY)
+        retry = await _capture()
+        if retry.get("success"):
+            result = retry
 
     if result.get("success"):
         # --- HEALTH: Record success, reset failure counter ---
@@ -4085,17 +4123,39 @@ async def detect_and_handle_snapshot_request(
             )
             return True
 
-        # All uploads/sends failed
+        # Upload/send failed for every image — capture again and deliver
+        # through the streaming callback rather than asking the parent to retry.
+        logger.warning(
+            f"Delivery failed for {location}; recapturing and resending now"
+        )
+        await asyncio.sleep(_SNAPSHOT_RETRY_DELAY)
+        retry_result = await _capture()
+        for img_data in retry_result.get("images", []):
+            if sent_count:
+                break
+            await deliver_snapshot_image(img_data)
+        retry_result.pop("images", None)
+        retry_result.pop("image_base64", None)
+        if sent_count > 0:
+            await log_snapshot_request(
+                sender,
+                message_text,
+                OUTCOME_DELIVERED,
+                reason="delivered on automatic retry",
+                location=location or "",
+                is_admin=is_admin,
+            )
+            return True
+
         record_snapshot_failure()
         await log_snapshot_request(
             sender,
             message_text,
             OUTCOME_DELIVERY_FAILED,
-            reason="captured but WhatsApp upload/send failed",
+            reason="captured but WhatsApp upload/send failed twice",
             location=location or "",
             is_admin=is_admin,
         )
-        logger.warning(f"Failed to upload/send any snapshot image for {location}")
         await send_whatsapp_message(
             reply_to,
             f"{_greeting(sender)},\n\n"

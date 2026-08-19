@@ -1118,11 +1118,11 @@ def start_scheduler() -> None:
 
     scheduler.add_job(
         send_staff_birthday_wishes_sync,
-        trigger=CronTrigger(hour=9, minute=0, timezone=STAFF_BIRTHDAY_IST),
+        trigger=CronTrigger(hour=7, minute=0, timezone=STAFF_BIRTHDAY_IST),
         id="staff_birthday_wishes",
         replace_existing=True,
     )
-    logger.info("Scheduled staff birthday posters at 9:00 AM IST")
+    logger.info("Scheduled staff birthday posters at 7:00 AM IST")
 
     # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
     # for reference only. No job scheduled.
