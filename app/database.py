@@ -715,6 +715,36 @@ async def init_db():
             CREATE UNIQUE INDEX IF NOT EXISTS idx_gate_replay_window
                 ON gate_replay_recount (date, window_start, window_end);
 
+            -- Durable audit of every live snapshot request and its outcome.
+            CREATE TABLE IF NOT EXISTS snapshot_request_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_date TEXT NOT NULL,
+                requested_at_ist TEXT NOT NULL,
+                sender_phone TEXT NOT NULL,
+                message_text TEXT DEFAULT '',
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                student_name TEXT DEFAULT '',
+                grade TEXT DEFAULT '',
+                location TEXT DEFAULT '',
+                outcome TEXT NOT NULL,
+                reason TEXT DEFAULT '',
+                in_pi_sheet_cache INTEGER NOT NULL DEFAULT 0,
+                resolved INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_snapshot_audit_date
+                ON snapshot_request_audit (request_date);
+            CREATE INDEX IF NOT EXISTS idx_snapshot_audit_outcome
+                ON snapshot_request_audit (outcome);
+
+            -- Idempotent ledger for the daily snapshot audit alert.
+            CREATE TABLE IF NOT EXISTS snapshot_audit_report_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL UNIQUE,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             -- ── Performance indexes ─────────────────────────────────
             CREATE INDEX IF NOT EXISTS idx_attendance_person_date
                 ON attendance_records (person_id, date(logged_at));
