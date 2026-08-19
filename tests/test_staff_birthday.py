@@ -249,13 +249,14 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
     async def test_staff_without_a_saved_email_is_only_wished_on_whatsapp(self):
         with sqlite3.connect(self.db_path) as db:
             db.execute("DELETE FROM staff_emails")
+        media = AsyncMock(return_value=True)
         with patch.object(staff_emails, "TEACHER_DATA", []), patch.object(
             birthdays.whatsapp_service,
             "send_cloud_template_message",
             AsyncMock(return_value=True),
         ), patch.object(
             birthdays.whatsapp_service, "send_cloud_text", AsyncMock(return_value=True)
-        ):
+        ), patch.object(birthdays.whatsapp_service, "send_cloud_media", media):
             summary = await birthdays.send_birthday_wishes(now=self.now)
 
         self.email.assert_not_awaited()
@@ -266,6 +267,35 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
                 "WHERE staff_name = 'Harnoor Kaur'"
             ).fetchone()[0]
         self.assertEqual(status, "no address")
+
+    async def test_missing_email_asks_the_marketing_desk_to_mail_it(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("DELETE FROM staff_emails")
+        media = AsyncMock(return_value=True)
+        with patch.object(staff_emails, "TEACHER_DATA", []), patch.object(
+            birthdays.whatsapp_service,
+            "send_cloud_template_message",
+            AsyncMock(return_value=True),
+        ), patch.object(
+            birthdays.whatsapp_service, "send_cloud_text", AsyncMock(return_value=True)
+        ), patch.object(birthdays.whatsapp_service, "send_cloud_media", media):
+            await birthdays.send_birthday_wishes(now=self.now)
+            await birthdays.send_birthday_wishes(now=self.now)
+
+        # Asked once, with the poster, and never repeated on the same day.
+        media.assert_awaited_once()
+        self.assertEqual(media.await_args.args[0], birthdays.MANUAL_EMAIL_PHONE)
+        self.assertEqual(
+            media.await_args.kwargs["media_url"],
+            "https://example.test/birthday_posters/harnoor_kaur.jpg",
+        )
+        self.assertIn("Ms. Harnoor Kaur", media.await_args.kwargs["caption"])
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT status, email FROM staff_birthday_email_log "
+                "WHERE staff_name = 'Harnoor Kaur'"
+            ).fetchone()
+        self.assertEqual(row, ("manual alert", ""))
 
     async def test_email_delivery_is_not_repeated_when_whatsapp_fails(self):
         send = AsyncMock(side_effect=[False, True])

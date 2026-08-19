@@ -4130,7 +4130,14 @@ async def detect_and_handle_snapshot_request(
         )
         await asyncio.sleep(_SNAPSHOT_RETRY_DELAY)
         retry_result = await _capture()
-        for img_data in retry_result.get("images", []):
+        retry_images = retry_result.get("images", [])
+        if not retry_images and retry_result.get("image_base64"):
+            retry_images = [{
+                "image_base64": retry_result["image_base64"],
+                "description": retry_result.get("description", ""),
+                "filename": retry_result.get("filename", "snapshot.jpg"),
+            }]
+        for img_data in retry_images:
             if sent_count:
                 break
             await deliver_snapshot_image(img_data)

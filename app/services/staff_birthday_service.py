@@ -34,6 +34,19 @@ ADMIN_PHONE = os.getenv("STAFF_BIRTHDAY_ADMIN_PHONE", "918076455224")
 PRINCIPAL_EMAIL = os.getenv(
     "STAFF_BIRTHDAY_PRINCIPAL_EMAIL", "deepi.bector@ppischool.in"
 )
+# Staff without a verified school email are mailed by hand, so the poster and
+# the reminder go to the marketing desk instead.
+MANUAL_EMAIL_PHONE = os.getenv(
+    "STAFF_BIRTHDAY_MANUAL_EMAIL_PHONE", "917503842238"
+)
+MANUAL_EMAIL_ALERT = (
+    "Birthday poster to be mailed manually today ({stamp}).\n\n"
+    "Staff member: {name}\n"
+    "WhatsApp wish: sent by the bot\n"
+    "School email: not on record\n\n"
+    "Please mail this poster to them and copy Principal Ma'am "
+    "({principal}).\n{poster}"
+)
 EMAIL_SUBJECT = "Happy Birthday from Team PPIS!"
 EMAIL_BODY = (
     "Dear {name},\n\n"
@@ -169,15 +182,19 @@ async def _claim_email(staff: dict[str, str], wish_date: str, address: str) -> b
 
 
 async def _finish_email(
-    staff: dict[str, str], wish_date: str, address: str, sent: bool
+    staff: dict[str, str],
+    wish_date: str,
+    address: str,
+    sent: bool,
+    status: str = "sent",
 ) -> None:
     db = await get_db()
     try:
         if sent:
             await db.execute(
-                "UPDATE staff_birthday_email_log SET status = 'sent', email = ?, "
+                "UPDATE staff_birthday_email_log SET status = ?, email = ?, "
                 "sent_at = ? WHERE staff_name = ? AND wish_date = ?",
-                (address, _timestamp(), staff["name"], wish_date),
+                (status, address, _timestamp(), staff["name"], wish_date),
             )
         else:
             # Drop the claim so the next run can try the email again.
@@ -196,6 +213,7 @@ async def _deliver_email(
 ) -> str:
     """Email today's poster once; returns 'sent', 'failed' or 'no address'."""
     if not address:
+        await _alert_manual_email(staff, wish_date)
         return "no address"
     if not await _claim_email(staff, wish_date, address):
         # Already mailed today (a WhatsApp retry must not mail them again).
@@ -207,6 +225,37 @@ async def _deliver_email(
             "Birthday email to %s (%s) did not go out", staff["name"], address
         )
     return "sent" if emailed else "failed"
+
+
+async def _alert_manual_email(staff: dict[str, str], wish_date: str) -> None:
+    """Ask the marketing desk to mail the poster when no address is on record."""
+    if not MANUAL_EMAIL_PHONE:
+        return
+    if not await _claim_email(staff, wish_date, ""):
+        return
+
+    poster = poster_url(staff)
+    message = MANUAL_EMAIL_ALERT.format(
+        stamp=_timestamp(),
+        name=staff["display_name"],
+        principal=PRINCIPAL_EMAIL,
+        poster=poster,
+    )
+    try:
+        alerted = await whatsapp_service.send_cloud_media(
+            MANUAL_EMAIL_PHONE, "image", media_url=poster, caption=message
+        )
+        if not alerted:
+            alerted = await whatsapp_service.send_cloud_text(
+                MANUAL_EMAIL_PHONE, message
+            )
+    except Exception:
+        logger.exception(
+            "Unable to ask for a manual birthday mail for %s", staff["name"]
+        )
+        alerted = False
+
+    await _finish_email(staff, wish_date, "", alerted, status="manual alert")
 
 
 async def _email_wish(staff: dict[str, str], address: str) -> bool:
