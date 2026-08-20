@@ -85,7 +85,8 @@ def _split_parent_vendor(time_str: str) -> str:
 # Comma-separated numbers in GATE_REPORT_WHATSAPP_PHONES; empty string disables.
 # Requires an approved DOCUMENT-header template (GATE_REPORT_WHATSAPP_TEMPLATE).
 # Head-count reports over WhatsApp are off by default (Alisha, 14-08-2026);
-# set the env var to a comma-separated list to re-enable them.
+# set the env var to a comma-separated list to re-enable them. Security alerts
+# use GATE_ALERT_WHATSAPP_PHONES and are unaffected by this list.
 GATE_REPORT_WHATSAPP_PHONES = [
     p.strip() for p in os.environ.get(
         "GATE_REPORT_WHATSAPP_PHONES", "",
@@ -1365,6 +1366,8 @@ async def _finish_c1_alert(
 
 
 async def _send_c1_intelligence_alerts(events: list[dict]) -> int:
+    from app.services.gate_analytics_service import get_gate_report_recipients
+
     sent_count = 0
     for event in events:
         alert_type = event["event_type"].replace("_", " ").upper()
@@ -1375,7 +1378,7 @@ async def _send_c1_intelligence_alerts(events: list[dict]) -> int:
             ).strftime("%d-%m-%Y %H:%M:%S IST")
         except ValueError:
             alert_time = event["timestamp"]
-        for recipient in GATE_REPORT_WHATSAPP_PHONES:
+        for recipient in get_gate_report_recipients():
             claimed_at = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
             if not await _claim_c1_alert(event["event_id"], recipient, claimed_at):
                 continue
