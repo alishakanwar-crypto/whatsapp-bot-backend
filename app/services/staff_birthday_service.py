@@ -415,6 +415,9 @@ async def notify_upcoming_blocked(now: datetime | None = None) -> dict:
     wish_date = tomorrow.strftime("%Y-%m-%d")
     summary: dict = {"date": wish_date, "notified": [], "already_notified": []}
 
+    if not STAFF_BIRTHDAY_ENABLED:
+        return summary
+
     blocked = [
         (staff, blocking_reason(staff))
         for staff in birthdays_on(tomorrow)

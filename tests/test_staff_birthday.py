@@ -363,6 +363,17 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
             sorted(retried["notified"]), ["Mridul Pilani", "Shreya Sikka"]
         )
 
+    async def test_no_notice_while_birthday_wishes_are_disabled(self):
+        alert = AsyncMock(return_value=True)
+        eve = datetime(2026, 2, 19, 18, 0, tzinfo=IST)
+        with patch.object(birthdays, "STAFF_BIRTHDAY_ENABLED", False), patch.object(
+            birthdays.whatsapp_service, "send_cloud_text", alert
+        ):
+            summary = await birthdays.notify_upcoming_blocked(now=eve)
+
+        alert.assert_not_awaited()
+        self.assertEqual(summary["notified"], [])
+
     async def test_no_notice_when_nothing_needs_attention_tomorrow(self):
         alert = AsyncMock(return_value=True)
         quiet = datetime(2026, 2, 22, 18, 0, tzinfo=IST)  # 23-02: no birthdays
