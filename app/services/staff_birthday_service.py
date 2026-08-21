@@ -373,6 +373,115 @@ async def _notify_admin(wish_date: str, skipped: list[dict[str, str]]) -> None:
         logger.exception("Unable to alert admin about skipped birthday wishes")
 
 
+async def _claim_advance_notice(
+    staff: dict[str, str], wish_date: str, reason: str, now: datetime
+) -> bool:
+    """Reserve tomorrow's advance notice for this staff member (once only)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO staff_birthday_advance_log "
+            "(staff_name, wish_date, reason, sent_at) VALUES (?, ?, ?, ?)",
+            (staff["name"], wish_date, reason, _timestamp(now)),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+    finally:
+        await db.close()
+
+
+async def _release_advance_notice(staff: dict[str, str], wish_date: str) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM staff_birthday_advance_log "
+            "WHERE staff_name = ? AND wish_date = ?",
+            (staff["name"], wish_date),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def notify_upcoming_blocked(now: datetime | None = None) -> dict:
+    """Warn the marketing desk a day ahead about tomorrow's unsendable wishes.
+
+    Anything the bot cannot post by itself tomorrow — conflicting or missing
+    date, shared/absent WhatsApp number, no poster on file — is listed so the
+    details can be fixed, or the wish sent by hand, before the morning run.
+    """
+    current = (now or datetime.now(IST)).astimezone(IST)
+    tomorrow = date.fromordinal(current.date().toordinal() + 1)
+    wish_date = tomorrow.strftime("%Y-%m-%d")
+    summary: dict = {"date": wish_date, "notified": [], "already_notified": []}
+
+    blocked = [
+        (staff, blocking_reason(staff))
+        for staff in birthdays_on(tomorrow)
+    ]
+    blocked = [(staff, reason) for staff, reason in blocked if reason]
+    if not blocked or not MANUAL_EMAIL_PHONE:
+        return summary
+
+    pending = []
+    for staff, reason in blocked:
+        if await _claim_advance_notice(staff, wish_date, reason, current):
+            pending.append((staff, reason))
+        else:
+            summary["already_notified"].append(staff["name"])
+    if not pending:
+        return summary
+
+    lines = [
+        (
+            f"Birthday tomorrow ({tomorrow.strftime('%d-%m-%Y')}) — the bot "
+            "cannot send these automatically:"
+        ),
+        "",
+    ]
+    for staff, reason in pending:
+        lines.append(f"- {staff['display_name']}: {reason}")
+        if poster_url(staff):
+            lines.append(f"  Poster: {poster_url(staff)}")
+    lines += [
+        "",
+        (
+            "Please correct the details today, or wish them by hand tomorrow "
+            f"and copy Principal Ma'am ({PRINCIPAL_EMAIL})."
+        ),
+    ]
+    try:
+        sent = await whatsapp_service.send_cloud_text(
+            MANUAL_EMAIL_PHONE, "\n".join(lines)
+        )
+    except Exception:
+        logger.exception("Advance birthday notice failed")
+        sent = False
+    if not sent:
+        for staff, _ in pending:
+            await _release_advance_notice(staff, wish_date)
+        return summary
+
+    summary["notified"] = [staff["name"] for staff, _ in pending]
+    logger.info(
+        "Advance birthday notice for %s: %d staff need attention",
+        wish_date,
+        len(pending),
+    )
+    return summary
+
+
+def notify_upcoming_blocked_sync() -> None:
+    """Scheduler entrypoint: warn about tomorrow's unsendable wishes."""
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(notify_upcoming_blocked())
+    except Exception:
+        logger.exception("Advance birthday notice run failed")
+    finally:
+        loop.close()
+
+
 async def send_birthday_wishes(
     now: datetime | None = None, dry_run: bool = False
 ) -> dict:

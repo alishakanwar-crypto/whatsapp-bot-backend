@@ -40,6 +40,23 @@ async def birthdays_upcoming(days: int = Query(30, ge=1, le=366)) -> dict:
     }
 
 
+@router.post("/advance-notice")
+async def advance_notice(
+    on: str = Query("", description="Day before, as YYYY-MM-DD (IST)"),
+) -> dict:
+    """Warn the marketing desk about tomorrow's unsendable wishes (idempotent)."""
+    now = None
+    if on:
+        try:
+            parsed = date.fromisoformat(on)
+        except ValueError:
+            return {"error": f"Invalid date {on!r}, expected YYYY-MM-DD"}
+        now = datetime.combine(
+            parsed, time(18, 0), tzinfo=staff_birthday_service.IST
+        )
+    return await staff_birthday_service.notify_upcoming_blocked(now=now)
+
+
 @router.post("/send")
 async def send_birthday_wishes(
     dry_run: bool = Query(False),

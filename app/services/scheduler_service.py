@@ -30,6 +30,7 @@ from app.services.sci_spectrum_service import (
 )
 from app.services.staff_birthday_service import (
     IST as STAFF_BIRTHDAY_IST,
+    notify_upcoming_blocked_sync as notify_staff_birthday_blocked_sync,
     send_birthday_wishes_sync as send_staff_birthday_wishes_sync,
 )
 from app.services.route_duty_service import (
@@ -1132,6 +1133,16 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled staff birthday posters at 7:00 AM IST")
+
+    scheduler.add_job(
+        notify_staff_birthday_blocked_sync,
+        trigger=CronTrigger(hour=18, minute=0, timezone=STAFF_BIRTHDAY_IST),
+        id="staff_birthday_advance_notice",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled day-before staff birthday review notice at 6:00 PM IST"
+    )
 
     # One-time Teacher CW/HW Reminder (29 Jun 2026) — already sent, retained
     # for reference only. No job scheduled.

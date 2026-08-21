@@ -69,13 +69,16 @@ _ALERT_LABELS = {
 def get_gate_report_recipients() -> list[str]:
     """Approved recipients for the anonymous gate alerts / analytics.
 
-    Per user directive these go to **Alisha only** (``918796105084``), kept
-    independent of the shared head-count list so restricting alert recipients
-    does not touch the existing report. Override via
-    ``GATE_ALERT_WHATSAPP_PHONES`` (comma-separated); empty → empty list →
-    fail-safe (nothing is sent).
+    Per user directive (Alisha, 20-08-2026) these go to Alisha, Charu
+    Chaudhary and Poonam (reception), kept independent of the shared
+    head-count list so restricting alert recipients does not touch the
+    existing report. Override via ``GATE_ALERT_WHATSAPP_PHONES``
+    (comma-separated); empty → empty list → fail-safe (nothing is sent).
     """
-    raw = os.environ.get("GATE_ALERT_WHATSAPP_PHONES", "918796105084")  # Alisha only
+    raw = os.environ.get(
+        "GATE_ALERT_WHATSAPP_PHONES",
+        "918796105084,919289280410,919718305474",  # Alisha, Charu, Poonam
+    )
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
