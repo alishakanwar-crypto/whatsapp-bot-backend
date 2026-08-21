@@ -44,6 +44,15 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
                     sent_at TEXT NOT NULL DEFAULT '',
                     UNIQUE(staff_name, wish_date)
                 );
+                CREATE TABLE staff_birthday_advance_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    staff_name TEXT NOT NULL,
+                    wish_date TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'claimed',
+                    sent_at TEXT NOT NULL DEFAULT '',
+                    UNIQUE(staff_name, wish_date)
+                );
                 CREATE TABLE staff_emails (
                     staff_name TEXT PRIMARY KEY,
                     email TEXT NOT NULL,
@@ -311,6 +320,68 @@ class StaffBirthdayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e["name"] for e in second["sent"]], ["Harnoor Kaur"])
         # One wish email plus one proof copy — the retry must not mail again.
         self.assertEqual(self.email.await_count, 2)
+
+    async def test_day_before_notice_lists_only_unsendable_staff(self):
+        alert = AsyncMock(return_value=True)
+        eve = datetime(2026, 2, 19, 18, 0, tzinfo=IST)
+        with patch.object(birthdays.whatsapp_service, "send_cloud_text", alert):
+            summary = await birthdays.notify_upcoming_blocked(now=eve)
+
+        self.assertEqual(
+            sorted(summary["notified"]), ["Mridul Pilani", "Shreya Sikka"]
+        )
+        alert.assert_awaited_once()
+        to, body = alert.await_args.args
+        self.assertEqual(to, birthdays.MANUAL_EMAIL_PHONE)
+        self.assertIn("20-02-2026", body)
+        self.assertIn("number is shared with Ritika Dhamija", body)
+        self.assertIn("no birthday poster available", body)
+        self.assertNotIn("Harnoor", body)
+
+    async def test_day_before_notice_is_sent_once_per_birthday(self):
+        alert = AsyncMock(return_value=True)
+        eve = datetime(2026, 2, 19, 18, 0, tzinfo=IST)
+        with patch.object(birthdays.whatsapp_service, "send_cloud_text", alert):
+            await birthdays.notify_upcoming_blocked(now=eve)
+            again = await birthdays.notify_upcoming_blocked(now=eve)
+
+        self.assertEqual(alert.await_count, 1)
+        self.assertEqual(again["notified"], [])
+        self.assertEqual(
+            sorted(again["already_notified"]), ["Mridul Pilani", "Shreya Sikka"]
+        )
+
+    async def test_day_before_notice_is_retried_after_a_failed_send(self):
+        alert = AsyncMock(side_effect=[False, True])
+        eve = datetime(2026, 2, 19, 18, 0, tzinfo=IST)
+        with patch.object(birthdays.whatsapp_service, "send_cloud_text", alert):
+            failed = await birthdays.notify_upcoming_blocked(now=eve)
+            retried = await birthdays.notify_upcoming_blocked(now=eve)
+
+        self.assertEqual(failed["notified"], [])
+        self.assertEqual(
+            sorted(retried["notified"]), ["Mridul Pilani", "Shreya Sikka"]
+        )
+
+    async def test_no_notice_while_birthday_wishes_are_disabled(self):
+        alert = AsyncMock(return_value=True)
+        eve = datetime(2026, 2, 19, 18, 0, tzinfo=IST)
+        with patch.object(birthdays, "STAFF_BIRTHDAY_ENABLED", False), patch.object(
+            birthdays.whatsapp_service, "send_cloud_text", alert
+        ):
+            summary = await birthdays.notify_upcoming_blocked(now=eve)
+
+        alert.assert_not_awaited()
+        self.assertEqual(summary["notified"], [])
+
+    async def test_no_notice_when_nothing_needs_attention_tomorrow(self):
+        alert = AsyncMock(return_value=True)
+        quiet = datetime(2026, 2, 22, 18, 0, tzinfo=IST)  # 23-02: no birthdays
+        with patch.object(birthdays.whatsapp_service, "send_cloud_text", alert):
+            summary = await birthdays.notify_upcoming_blocked(now=quiet)
+
+        alert.assert_not_awaited()
+        self.assertEqual(summary["notified"], [])
 
     def test_upcoming_lists_birthdays_in_calendar_order(self):
         entries = birthdays.upcoming(days=2, now=self.now)
