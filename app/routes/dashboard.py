@@ -1,9 +1,11 @@
 """Dashboard API routes for the PPIS School Command Center web app."""
 
 import io
+import json
 import logging
 import os
 from datetime import datetime, timedelta, date, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -111,10 +113,12 @@ async def attendance_history(
         await db.close()
 
 
+IST = ZoneInfo("Asia/Kolkata")
+
 MINIMUM_CONFIDENCE = 0.30  # Backend rejects anything below 30%
 ATTENDANCE_WINDOW_START = 7  # 7:00 AM IST
-ATTENDANCE_WINDOW_END_HOUR = 9  # 9:00 AM IST
-ATTENDANCE_WINDOW_END_MIN = 0  # Matches student phase end
+ATTENDANCE_WINDOW_END_HOUR = 11  # 11:00 AM IST
+ATTENDANCE_WINDOW_END_MIN = 0  # Matches the agent's student phase end
 
 
 def _attendance_notif_name(person_id: str, name: str) -> str:
@@ -1911,7 +1915,7 @@ async def attendance_monitoring():
                 "entry_validation": "required",
                 "anti_spoofing": "enabled",
                 "quality_filtering": "sharpness + brightness",
-                "time_window_student": "8:00-9:00 AM",
+                "time_window_student": "7:30-11:00 AM",
                 "time_window_teacher": "7:00-7:45 AM",
             },
             "alerts": _generate_monitoring_alerts(
@@ -2091,3 +2095,60 @@ async def reset_grade_hash(grade: str):
     await db.commit()
     deleted = result.rowcount
     return {"grade": grade, "hash_reset": deleted > 0, "rows_deleted": deleted}
+
+
+@router.post("/attendance/engine-status",
+             dependencies=[Depends(verify_dashboard_secret)])
+async def report_engine_status(request: Request):
+    """Record what the campus recognition engine is doing right now.
+
+    Nothing else tells us whether every classroom is actually being scanned:
+    the cloud only ever sees a student who was already recognised, so a
+    stalled engine and an empty school look identical. The agent posts its
+    scan counters here so the gap is visible without reaching the campus PC.
+    """
+    body = await request.json()
+    payload = {
+        "reported_at": datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST"),
+        "phase": body.get("phase", ""),
+        "cycle_count": body.get("cycle_count", 0),
+        "total_cameras": body.get("total_cameras", 0),
+        "cameras_scanned": body.get("cameras_scanned", 0),
+        "classroom_cameras": body.get("classroom_cameras", 0),
+        "faces_loaded": body.get("faces_loaded", 0),
+        "grades_with_faces": body.get("grades_with_faces", 0),
+        "faces_detected_total": body.get("faces_detected_total", 0),
+        "attendance_marked_today": body.get("attendance_marked_today", 0),
+        "errors": body.get("errors", 0),
+        "recognizer": body.get("recognizer", ""),
+        "failsafe": body.get("failsafe", ""),
+    }
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("attendance_engine_status", json.dumps(payload)),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"status": "ok"}
+
+
+@router.get("/attendance/engine-status")
+async def get_engine_status():
+    """Show the recognition engine's last reported scan counters."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT value FROM settings WHERE key = 'attendance_engine_status'"
+        )
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row:
+        return {"reported": False,
+                "note": "Campus agent has not reported engine status yet"}
+    status = json.loads(row[0])
+    status["reported"] = True
+    return status

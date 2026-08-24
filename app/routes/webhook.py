@@ -3386,9 +3386,57 @@ async def _lookup_snapshot_parent_child_class(sender_phone: str) -> list[dict]:
             )
             if not matches_snapshot:
                 results.append(result)
+
+        await _add_siblings_sharing_a_household_number(
+            db, results, snapshot_names
+        )
         return results
     finally:
         await db.close()
+
+
+async def _add_siblings_sharing_a_household_number(
+    db, results: list[dict], snapshot_names: set
+) -> None:
+    """Include a sibling whose record carries the family's other number.
+
+    A parent often appears on one child's row only (the other row lists the
+    father's number, or an old one), so a two-child family looks like a
+    one-child family and only that class is ever shown.  Any student sharing a
+    number with an already-matched ward belongs to the same household.
+    """
+    household_numbers = {
+        phone[-10:]
+        for child in list(results)
+        for phone in child.get("parent_phones", [])
+        if len(phone) >= 10
+    }
+    for last10 in household_numbers:
+        try:
+            cursor = await db.execute(
+                "SELECT student_name, grade, father_mobile, mother_mobile "
+                "FROM snapshot_access_students "
+                "WHERE father_mobile LIKE ? OR mother_mobile LIKE ?",
+                (f"%{last10}%", f"%{last10}%"),
+            )
+        except Exception:
+            return
+        for row in await cursor.fetchall():
+            normalized_name = row[0].upper().strip()
+            if normalized_name in snapshot_names:
+                continue
+            parent_phones = []
+            for raw in (row[2] or "", row[3] or ""):
+                for segment in raw.split(","):
+                    digits = re.sub(r"\D", "", segment)
+                    if len(digits) >= 10:
+                        parent_phones.append(f"91{digits[-10:]}")
+            results.append({
+                "student_name": row[0],
+                "grade": row[1],
+                "parent_phones": parent_phones,
+            })
+            snapshot_names.add(normalized_name)
 
 
 def _grade_to_camera_key(grade: str) -> str:
@@ -3616,8 +3664,47 @@ async def try_handle_child_absent_complaint(
     return True
 
 
+# A family is shown at most this many classrooms for one request, so a
+# mis-linked number can never turn into a flood of photos.
+_MAX_WARD_CLASSROOMS = 3
+
+
+async def _send_all_ward_classrooms(
+    sender: str, message_text: str, reply_to: str, children: list[dict],
+) -> bool:
+    """Capture every classroom this number has a ward in.
+
+    Siblings sit in different classes, so asking the parent which class they
+    meant only delays them; both classrooms are what they want to see.
+    """
+    wards: list[tuple[str, str]] = []
+    for child in children:
+        camera_key = _grade_to_camera_key(child["grade"])
+        if camera_key not in {key for key, _ in wards}:
+            wards.append((camera_key, child["student_name"]))
+    wards = wards[:_MAX_WARD_CLASSROOMS]
+
+    if len(wards) > 1:
+        ward_list = "\n".join(f"- {name} ({key})" for key, name in wards)
+        await send_whatsapp_message(
+            reply_to,
+            f"{_greeting(sender)},\n\n"
+            "You have wards in more than one class, so we are capturing a "
+            "live photo of each:\n"
+            f"{ward_list}\n\n"
+            "Please wait a moment..."
+        )
+
+    for camera_key, _name in wards:
+        await detect_and_handle_snapshot_request(
+            sender, message_text, reply_to, forced_location=camera_key,
+        )
+    return True
+
+
 async def detect_and_handle_snapshot_request(
-    sender: str, message_text: str, reply_to: str
+    sender: str, message_text: str, reply_to: str,
+    forced_location: str | None = None,
 ) -> bool:
     """Detect if a parent/admin is requesting a camera snapshot and handle it.
 
@@ -3629,7 +3716,9 @@ async def detect_and_handle_snapshot_request(
     """
     is_admin = _is_admin_panel(sender)
 
-    if not _is_snapshot_request(message_text, is_admin=is_admin):
+    if not forced_location and not _is_snapshot_request(
+        message_text, is_admin=is_admin
+    ):
         return False
 
     from app.services.snapshot_audit_service import (
@@ -3782,7 +3871,10 @@ async def detect_and_handle_snapshot_request(
     location = None
     multi_locations: list[str] = []  # For multi-camera areas like Reception
 
-    if is_admin:
+    if forced_location:
+        # One classroom of a multi-ward family, already authorised by caller.
+        location = forced_location
+    elif is_admin:
         # Admin panel: check for multi-camera areas first (e.g. Reception -> C1,C2,C3,C4)
         multi_locations = _find_all_matching_locations(message_text)
         # Also try to extract a single specific location
@@ -3795,21 +3887,9 @@ async def detect_and_handle_snapshot_request(
                 location = _grade_to_camera_key(children[0]["grade"])
                 logger.info(f"Admin {sender} auto-detected as parent of {children[0]['student_name']} ({location})")
             elif len(children) > 1:
-                child_list = "\n".join(
-                    f"- {c['student_name']} ({c['grade']})" for c in children
+                return await _send_all_ward_classrooms(
+                    sender, message_text, reply_to, children,
                 )
-                await send_whatsapp_message(
-                    reply_to,
-                    "Dear Admin,\n\n"
-                    "We found multiple wards registered to your number:\n"
-                    f"{child_list}\n\n"
-                    "Please specify the class/section or location "
-                    "(e.g., 'Show photo of Grade 3C' or 'Show photo of Library').\n\n"
-                    "Thank you.\n"
-                    "Warm regards,\nPP International School"
-                )
-                await save_pending_query(sender, reply_to, f"SNAPSHOT:{message_text}")
-                return True
             else:
                 # Not a parent either — ask for location
                 await send_whatsapp_message(
@@ -3861,21 +3941,9 @@ async def detect_and_handle_snapshot_request(
                 location = _grade_to_camera_key(children[0]["grade"])
                 logger.info(f"Auto-detected classroom {location} for parent {sender} (child: {children[0]['student_name']})")
             elif len(children) > 1:
-                child_list = "\n".join(
-                    f"- {c['student_name']} ({c['grade']})" for c in children
+                return await _send_all_ward_classrooms(
+                    sender, message_text, reply_to, children,
                 )
-                await send_whatsapp_message(
-                    reply_to,
-                    f"{_greeting(sender)},\n\n"
-                    "We found multiple wards registered to your number:\n"
-                    f"{child_list}\n\n"
-                    "Please specify the class and section "
-                    "(e.g., 'Show photo of Grade 3C') so we can capture the correct classroom.\n\n"
-                    "Thank you for your cooperation.\n"
-                    "Warm regards,\nPP International School"
-                )
-                await save_pending_query(sender, reply_to, f"SNAPSHOT:{message_text}")
-                return True
             else:
                 # The ward may be missing from the cache rather than unknown —
                 # repair it now so this request itself can be served.
