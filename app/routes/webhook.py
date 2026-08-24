@@ -3809,7 +3809,7 @@ async def detect_and_handle_snapshot_request(
         )
 
         # Determine the classroom for queuing (best-effort extraction)
-        _queue_classroom = await _extract_classroom_for_queue(
+        _queue_classroom = forced_location or await _extract_classroom_for_queue(
             message_text, sender, is_admin,
         )
 

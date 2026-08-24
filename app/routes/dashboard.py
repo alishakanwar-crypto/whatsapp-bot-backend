@@ -166,13 +166,18 @@ async def report_attendance(request: Request):
     except Exception:
         pass
 
-    # Validate attendance time window (7:00 AM - 9:00 AM IST)
+    # Validate attendance time window (ATTENDANCE_WINDOW_* constants, IST)
     window_start = now_ist.replace(hour=ATTENDANCE_WINDOW_START, minute=0, second=0, microsecond=0)
     window_end = now_ist.replace(hour=ATTENDANCE_WINDOW_END_HOUR, minute=ATTENDANCE_WINDOW_END_MIN, second=0, microsecond=0)
     if not (window_start <= now_ist <= window_end):
         return {
             "status": "blocked",
-            "reason": f"Outside attendance window (7:00-9:00 AM IST, current: {now_ist.strftime('%I:%M %p')})",
+            "reason": (
+                f"Outside attendance window "
+                f"({window_start.strftime('%-I:%M')}-"
+                f"{window_end.strftime('%-I:%M %p')} IST, "
+                f"current: {now_ist.strftime('%I:%M %p')})"
+            ),
             "inserted": 0,
         }
 
