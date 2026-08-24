@@ -680,6 +680,54 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
+async def apply_manual_students(db) -> int:
+    """Restore students admitted before they reach the PI Sheet.
+
+    The sheet is the source of truth, so every refresh rewrites the student
+    tables from it — a child added by hand would silently lose the bot, live
+    snapshots and attendance messages on the next sync. Their record is kept
+    in ``manual_students`` and re-applied here, and the parents also get a
+    standing snapshot grant, which no refresh touches.
+    """
+    cursor = await db.execute(
+        "SELECT student_name, grade, father_name, mother_name, "
+        "father_mobile, mother_mobile FROM manual_students"
+    )
+    rows = await cursor.fetchall()
+    for name, grade, father, mother, fp, mp in rows:
+        existing = await db.execute(
+            "SELECT 1 FROM pi_sheet_students "
+            "WHERE UPPER(TRIM(student_name)) = ? AND grade = ?",
+            (" ".join(name.upper().split()), grade),
+        )
+        if await existing.fetchone() is None:
+            await db.execute(
+                "INSERT INTO pi_sheet_students "
+                "(student_name, grade, father_name, mother_name, "
+                "father_mobile, mother_mobile, address, transport) "
+                "VALUES (?, ?, ?, ?, ?, ?, '', '')",
+                (name, grade, father, mother, fp, mp),
+            )
+        await db.execute(
+            "INSERT OR REPLACE INTO snapshot_access_students "
+            "(student_name, grade, father_mobile, mother_mobile) "
+            "VALUES (?, ?, ?, ?)",
+            (name, grade, fp, mp),
+        )
+        for phone in (fp, mp):
+            digits = _re.sub(r"\D", "", phone or "")
+            if len(digits) < 10:
+                continue
+            await db.execute(
+                "INSERT OR IGNORE INTO snapshot_access_grants "
+                "(student_name, grade, phone) VALUES (?, ?, ?)",
+                (name, grade, f"91{digits[-10:]}"),
+            )
+    if rows:
+        logger.info(f"MANUAL STUDENTS: re-applied {len(rows)} record(s)")
+    return len(rows)
+
+
 async def _alert_sheet_refresh_problem(detail: str) -> None:
     """WhatsApp the admins when the PI Sheet refresh could not rebuild fully."""
     from app.services.whatsapp_service import send_whatsapp_force
@@ -1097,6 +1145,8 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 f"PI SHEET FULL REFRESH: re-added {len(seen_names)} "
                 f"allowlisted student entries"
             )
+
+        await apply_manual_students(db)
 
         await db.commit()
 
