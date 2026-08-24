@@ -688,50 +688,46 @@ async def api_send_whatsapp(request: Request):
     # Extract student name from template params for audit logging
     _student_name = template_params[0] if template_params else ""
 
-    # --- Filter: only allow attendance for eligible students ---
-    # During summer: only summer camp students + Grade 9-12 get notifications.
-    # Teacher attendance (ppis_teacher_present) is always allowed.
+    # --- Filter: attendance goes to known parents of any grade ---
+    # Every class is scanned, so the only thing that may not be notified is a
+    # number we cannot tie to a child; unknown numbers stay blocked.
     if is_student_attendance and phone:
         _phone_digits = "".join(c for c in phone.split(",")[0] if c.isdigit())
         if len(_phone_digits) == 10:
             _phone_digits = "91" + _phone_digits
+        _last10 = _phone_digits[-10:]
         try:
             _adb = await get_db()
             try:
-                # Check if phone belongs to a Grade 9-12 student (PI Sheet)
-                _grade_cur = await _adb.execute(
-                    "SELECT grade FROM pi_sheet_students "
-                    "WHERE (father_mobile LIKE ? OR mother_mobile LIKE ?) "
-                    "LIMIT 1",
-                    (f"%{_phone_digits[-10:]}%", f"%{_phone_digits[-10:]}%"),
-                )
-                _grade_row = await _grade_cur.fetchone()
-                _is_eligible = False
-                if _grade_row:
-                    import re as _re
-                    _g = _grade_row[0] or ""
-                    if _re.match(r"Grade\s*(9|10|11|12)", _g, _re.IGNORECASE):
-                        _is_eligible = True
+                _is_known_parent = False
+                for _sql, _params in (
+                    ("SELECT 1 FROM pi_sheet_students "
+                     "WHERE father_mobile LIKE ? OR mother_mobile LIKE ? "
+                     "LIMIT 1", (f"%{_last10}%", f"%{_last10}%")),
+                    ("SELECT 1 FROM snapshot_access_students "
+                     "WHERE father_mobile LIKE ? OR mother_mobile LIKE ? "
+                     "LIMIT 1", (f"%{_last10}%", f"%{_last10}%")),
+                    ("SELECT 1 FROM snapshot_access_grants "
+                     "WHERE phone LIKE ? LIMIT 1", (f"%{_last10}%",)),
+                    ("SELECT 1 FROM summer_camp_students "
+                     "WHERE contact_no LIKE ? LIMIT 1", (f"%{_last10}%",)),
+                ):
+                    try:
+                        _cur = await _adb.execute(_sql, _params)
+                    except Exception:
+                        continue  # table may not exist on older databases
+                    if await _cur.fetchone():
+                        _is_known_parent = True
+                        break
 
-                if not _is_eligible:
-                    # Check if phone belongs to a summer camp student
-                    _camp_cur = await _adb.execute(
-                        "SELECT id FROM summer_camp_students "
-                        "WHERE contact_no LIKE ? LIMIT 1",
-                        (f"%{_phone_digits[-10:]}%",),
-                    )
-                    _camp_row = await _camp_cur.fetchone()
-                    if _camp_row:
-                        _is_eligible = True
-
-                if not _is_eligible:
+                if not _is_known_parent:
                     await _log_attendance_audit(
                         phone, _student_name, "blocked",
-                        "Not in eligible list (summer camp or Grade 9-12)"
+                        "Number is not a known parent contact"
                     )
                     return {
                         "status": "blocked",
-                        "reason": "Student not in eligible attendance list",
+                        "reason": "Number is not a known parent contact",
                     }
             finally:
                 await _adb.close()
