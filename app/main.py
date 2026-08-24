@@ -445,6 +445,71 @@ async def debug_add_student(request: Request):
         await db.close()
 
 
+@app.post("/debug/manual-student")
+async def debug_manual_student(request: Request):
+    """Enable the bot for a student admitted before the PI Sheet lists them."""
+    _check_debug_auth(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    grade = body.get("grade", "").strip()
+    if not name or not grade:
+        return {"error": "name and grade required"}
+    from app.database import get_db
+    from app.services.sheet_refresh_service import apply_manual_students
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO manual_students "
+            "(student_name, grade, father_name, mother_name, "
+            "father_mobile, mother_mobile, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                name,
+                grade,
+                body.get("father_name", "").strip(),
+                body.get("mother_name", "").strip(),
+                body.get("father_mobile", "").strip(),
+                body.get("mother_mobile", "").strip(),
+                body.get("note", "").strip(),
+            ),
+        )
+        applied = await apply_manual_students(db)
+        await db.commit()
+        return {"status": "ok", "name": name, "grade": grade, "applied": applied}
+    finally:
+        await db.close()
+
+
+@app.get("/debug/manual-student")
+async def debug_manual_student_list(request: Request):
+    """List the manually enabled students."""
+    _check_debug_auth(request)
+    from app.database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT student_name, grade, father_name, mother_name, "
+            "father_mobile, mother_mobile, note FROM manual_students "
+            "ORDER BY grade, student_name"
+        )
+        return {
+            "students": [
+                {
+                    "student_name": row[0],
+                    "grade": row[1],
+                    "father_name": row[2],
+                    "mother_name": row[3],
+                    "father_mobile": row[4],
+                    "mother_mobile": row[5],
+                    "note": row[6],
+                }
+                for row in await cursor.fetchall()
+            ]
+        }
+    finally:
+        await db.close()
+
+
 @app.post("/api/send-face-reminder")
 async def send_face_photo_reminder(request: Request, background_tasks: BackgroundTasks):
     """Send WhatsApp reminder to parents who haven't registered face photos."""

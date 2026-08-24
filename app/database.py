@@ -193,6 +193,19 @@ async def init_db():
                 UNIQUE(student_name, grade)
             );
 
+            CREATE TABLE IF NOT EXISTS manual_students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_name TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                father_name TEXT DEFAULT '',
+                mother_name TEXT DEFAULT '',
+                father_mobile TEXT DEFAULT '',
+                mother_mobile TEXT DEFAULT '',
+                note TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_name, grade)
+            );
+
             CREATE TABLE IF NOT EXISTS snapshot_access_grants (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_name TEXT NOT NULL,
