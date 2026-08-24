@@ -82,7 +82,7 @@ async def attendance_today():
         ]
 
         return {
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "present_today": present_today,
             "registered_faces": registered,
             "total_students": total_students,
@@ -197,7 +197,7 @@ async def report_attendance(request: Request):
             confidence = rec.get("confidence", 0)
             notified = 1 if rec.get("notification_sent") else 0
             phones = rec.get("parent_phones", "")
-            logged_at = rec.get("logged_at", datetime.now().isoformat())
+            logged_at = rec.get("logged_at", datetime.now(IST).isoformat())
 
             # Confidence floor: reject low-confidence matches at backend level
             if confidence < MINIMUM_CONFIDENCE:
@@ -1132,7 +1132,7 @@ async def report_camera_status(request: Request):
             error_code = cam.get("error_code", "")
             failures = cam.get("consecutive_failures", 0)
 
-            now = datetime.now().isoformat()
+            now = datetime.now(IST).isoformat()
             last_success = now if status == "online" else None
             last_failure = now if status != "online" else None
 
@@ -1428,7 +1428,7 @@ async def get_absent_students(grade: str | None = None):
                 absent.append({"person_id": r[0], "name": r[1], "grade": g})
 
         return {
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "total_absent": len(absent),
             "students": sorted(absent, key=lambda x: (x["grade"], x["name"])),
         }
@@ -1900,7 +1900,7 @@ async def attendance_monitoring():
         role_row = await cursor.fetchone()
 
         return {
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "total_records": total_records,
             "teachers_present": role_row[0] or 0,
             "students_present": role_row[1] or 0,
@@ -1909,7 +1909,7 @@ async def attendance_monitoring():
             "notification_stats": notification_stats,
             "duplicate_detections": duplicates,
             "system_checks": {
-                "multi_frame_verification": "3 sightings required",
+                "multi_frame_verification": "2 sightings required",
                 "confidence_threshold_student": "40%",
                 "confidence_threshold_teacher": "45%",
                 "entry_validation": "required",
@@ -2035,7 +2035,8 @@ async def send_review_copies(payload: dict):
     db = await get_db()
     rows = await db.execute_fetchall(
         "SELECT DISTINCT grade, period, content FROM homework_delivery_logs "
-        "WHERE date(created_at) = date('now') AND status = 'delivered' "
+        "WHERE date(created_at) = date('now', '+5 hours', '+30 minutes') "
+        "AND status = 'delivered' "
         "ORDER BY period, grade"
     )
 
