@@ -21,12 +21,16 @@ import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
+
+IST = ZoneInfo("Asia/Kolkata")
 
 router = APIRouter()
 
@@ -137,7 +141,27 @@ def get_health_state() -> dict:
         "uptime_seconds": round(uptime_seconds, 1),
         "admin_alerted": _health_state["admin_alerted"],
         "pending_requests": len(_pending_requests),
+        "recorders_on_fallback": _health_state.get("recorders_on_fallback", []),
+        "recorders_reported_at_ist": _health_state.get(
+            "recorders_reported_at_ist", ""
+        ),
     }
+
+
+def _record_recorder_health(data: dict) -> None:
+    """Remember which recorders the agent is currently bypassing ISAPI on."""
+    health = data.get("dvr_health")
+    if health is None:
+        return
+    _health_state["recorders_on_fallback"] = health
+    _health_state["recorders_reported_at_ist"] = datetime.now(IST).strftime(
+        "%d-%m-%Y %H:%M:%S IST"
+    )
+    if health:
+        logger.warning(
+            "Recorders on snapshot fallback: %s",
+            ", ".join(f"{r.get('ip')} ({r.get('reason')})" for r in health),
+        )
 
 
 def record_snapshot_success() -> None:
@@ -489,6 +513,7 @@ async def agent_websocket(websocket: WebSocket):
                     f"Agent hello: {data.get('dvr_count', 0)} DVRs, "
                     f"{data.get('camera_count', 0)} camera mappings"
                 )
+                _record_recorder_health(data)
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
@@ -526,7 +551,7 @@ async def agent_websocket(websocket: WebSocket):
                     logger.warning(f"Snapshot response for unknown/expired request: {request_id}")
 
             elif msg_type == "pong":
-                pass  # Keep-alive response
+                _record_recorder_health(data)
 
             elif msg_type == "test_result":
                 logger.info(f"DVR test result: {data}")
