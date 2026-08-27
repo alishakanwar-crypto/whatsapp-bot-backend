@@ -5069,6 +5069,9 @@ async def _finish_event_id_report(
 async def send_event_id_headcount_report(
     *, final: bool = False, now: datetime | None = None,
 ) -> int:
+    if not final and not GATE_INTERIM_REPORTS_ENABLED:
+        logger.info("[GATE] Interim C1 head-count reports are disabled; skipping")
+        return 0
     current = now or datetime.now(IST)
     if current.tzinfo is None:
         current = current.replace(tzinfo=IST)

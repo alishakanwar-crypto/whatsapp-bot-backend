@@ -32,6 +32,19 @@ class DailyHeadcountReportOnlyTests(unittest.IsolatedAsyncioTestCase):
         open_db.assert_not_awaited()
         send.assert_not_awaited()
 
+    async def test_interim_report_triggered_by_a_recount_is_withheld(self):
+        get_db = AsyncMock()
+
+        with (
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", False),
+            patch.object(gate, "GATE_REPORT_WHATSAPP_PHONES", ["918882127171"]),
+            patch.object(gate, "_get_db", get_db),
+        ):
+            sent = await gate.send_event_id_headcount_report(final=False)
+
+        self.assertEqual(sent, 0)
+        get_db.assert_not_awaited()
+
     def test_only_the_five_pm_report_is_scheduled_with_recipients(self):
         jobs: list[str] = []
 
