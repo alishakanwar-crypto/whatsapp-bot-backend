@@ -77,7 +77,7 @@ def get_gate_report_recipients() -> list[str]:
     """
     raw = os.environ.get(
         "GATE_ALERT_WHATSAPP_PHONES",
-        "918796105084,919289280410,919718305474",  # Alisha, Charu, Poonam
+        "918796105084,918882127171,919718305474",  # Alisha, Charu, Poonam
     )
     return [p.strip() for p in raw.split(",") if p.strip()]
 
