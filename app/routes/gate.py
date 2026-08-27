@@ -92,6 +92,12 @@ GATE_REPORT_WHATSAPP_PHONES = [
         "GATE_REPORT_WHATSAPP_PHONES", "",
     ).split(",") if p.strip()
 ]
+# Only the 5 PM full-day report is wanted (Alisha, 27-08-2026); the two-hourly
+# interim reports and the hourly verified corrections stay off unless this is
+# set to "1".
+GATE_INTERIM_REPORTS_ENABLED = (
+    os.environ.get("GATE_INTERIM_REPORTS_ENABLED", "0") == "1"
+)
 GATE_REPORT_WHATSAPP_TEMPLATE = os.environ.get(
     "GATE_REPORT_WHATSAPP_TEMPLATE", "ppis_cpplus_hourly_head_count_report_v2"
 )
@@ -5304,6 +5310,8 @@ async def _release_cpplus_correction_claims(
 
 async def _send_verified_cpplus_correction(recount: dict) -> None:
     """Send one verified-only report per recipient for a completed recount hour."""
+    if not GATE_INTERIM_REPORTS_ENABLED:
+        return
     if recount["source"] not in {
         "camera_native_counter",
         "camera_sd_recording",

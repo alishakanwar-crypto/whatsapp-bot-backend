@@ -529,6 +529,41 @@ def _send_daily_message_report_sync() -> None:
         loop.close()
 
 
+def _schedule_gate_headcount_reports(scheduler) -> None:
+    """Register the C1 head-count report jobs.
+
+    Only the 6:00 AM-5:00 PM report at 17:00 IST runs by default; the
+    two-hourly interim reports need GATE_INTERIM_REPORTS_ENABLED=1.
+    """
+    from app.routes import gate
+
+    if not gate.GATE_REPORT_WHATSAPP_PHONES:
+        logger.info("C1 head-count WhatsApp reports are disabled; no jobs scheduled")
+        return
+
+    if gate.GATE_INTERIM_REPORTS_ENABLED:
+        scheduler.add_job(
+            gate.send_event_id_headcount_report_sync,
+            trigger=CronTrigger(
+                hour="8,10,12,14,16", minute=0, second=0, timezone=SHOWCASE_IST,
+            ),
+            id="gate_event_id_two_hour_report",
+            replace_existing=True,
+        )
+    scheduler.add_job(
+        gate.send_final_event_id_headcount_report_sync,
+        trigger=CronTrigger(hour=17, minute=0, second=0, timezone=SHOWCASE_IST),
+        id="gate_event_id_final_report",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled the C1 event-ID 6:00 AM-5:00 PM head-count report at "
+        "5:00 PM IST for %d recipient(s) (two-hourly interim reports %s)",
+        len(gate.GATE_REPORT_WHATSAPP_PHONES),
+        "on" if gate.GATE_INTERIM_REPORTS_ENABLED else "off",
+    )
+
+
 def start_scheduler() -> None:
     """Start the scheduler with default reminders."""
     for reminder in DEFAULT_REMINDERS:
@@ -767,35 +802,8 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled TrueFace poller silence check at 8/9/10 AM IST (Mon-Sat)")
 
-    # --- C1 Event-ID Head Count Reports (two-hour intervals + final) ---
-    from app.routes.gate import (
-        GATE_REPORT_WHATSAPP_PHONES,
-        send_event_id_headcount_report_sync,
-        send_final_event_id_headcount_report_sync,
-    )
-    if GATE_REPORT_WHATSAPP_PHONES:
-        scheduler.add_job(
-            send_event_id_headcount_report_sync,
-            trigger=CronTrigger(
-                hour="8,10,12,14,16", minute=0, second=0, timezone=SHOWCASE_IST,
-            ),
-            id="gate_event_id_two_hour_report",
-            replace_existing=True,
-        )
-        scheduler.add_job(
-            send_final_event_id_headcount_report_sync,
-            trigger=CronTrigger(
-                hour=17, minute=0, second=0, timezone=SHOWCASE_IST,
-            ),
-            id="gate_event_id_final_report",
-            replace_existing=True,
-        )
-        logger.info(
-            "Scheduled C1 event-ID reports every two hours from 6:00 AM "
-            "through 4:00 PM IST, with the final 6:00 AM-5:00 PM report at 5:00 PM"
-        )
-    else:
-        logger.info("C1 head-count WhatsApp reports are disabled; no jobs scheduled")
+    # --- C1 Event-ID Head Count Reports (final 5 PM report; interim optional) ---
+    _schedule_gate_headcount_reports(scheduler)
 
     # --- C1 Anonymous Gate Analytics ---
     # Hourly analytics 07:00–17:00 IST, final analytics at 17:15 IST, and a
