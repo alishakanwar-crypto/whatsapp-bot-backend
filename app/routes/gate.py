@@ -667,7 +667,7 @@ def _build_all_source_attendance(
 CPPLUS_SNAPSHOT_PHONES = [
     p.strip() for p in os.environ.get(
         "CPPLUS_SNAPSHOT_PHONES",
-        "918796105084,919289280410",  # Ali, Charu
+        "918796105084,918882127171",  # Ali, Charu
     ).split(",") if p.strip()
 ]
 CPPLUS_SNAPSHOT_TEMPLATE = os.environ.get(
