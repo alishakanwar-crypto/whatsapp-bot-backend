@@ -1086,6 +1086,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.object(gate.asyncio, "create_task") as create_task,
         ):
             result = await gate.receive_cpplus_hourly_recount(request)
@@ -1117,6 +1118,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.object(gate.asyncio, "create_task") as create_task,
             patch.dict(os.environ, {"CPPLUS_NATIVE_COUNTER_TRUSTED": "1"}),
         ):
@@ -1142,6 +1144,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.dict(os.environ, {"CPPLUS_NATIVE_COUNTER_TRUSTED": "0"}),
             self.assertRaises(gate.HTTPException) as raised,
         ):
@@ -1187,6 +1190,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 gate, "_headcount_delivery_window_open", return_value=True,
             ),
             patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.object(
                 gate,
                 "GATE_REPORT_WHATSAPP_PHONES",
@@ -1273,6 +1277,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 gate, "_headcount_delivery_window_open", return_value=True,
             ),
             patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.object(gate, "GATE_REPORT_WHATSAPP_PHONES", ["phone-a"]),
             patch.object(gate, "_generate_cpplus_head_count_pdf", return_value=b"PDF"),
             patch.object(
@@ -1308,6 +1313,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 gate, "_headcount_delivery_window_open", return_value=True,
             ),
             patch.object(gate, "_get_db", new=open_db),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.object(
                 gate,
                 "GATE_REPORT_WHATSAPP_PHONES",
