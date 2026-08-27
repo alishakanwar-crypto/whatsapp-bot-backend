@@ -273,6 +273,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 gate, "_get_cpplus_native_hourly_counts",
                 AsyncMock(return_value={6: 0, 7: 0, 8: 0, 9: 0}),
             ),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.object(gate, "_claim_event_id_report", claim),
             patch.object(gate, "_finish_event_id_report", finish),
             patch.object(gate, "GATE_REPORT_WHATSAPP_PHONES", ("919999995224",)),
@@ -313,6 +314,7 @@ class CPPlusVerifiedCorrectionTests(unittest.IsolatedAsyncioTestCase):
                 "_get_cpplus_native_hourly_counts",
                 AsyncMock(return_value={6: 58, 7: 127, 8: 49}),
             ),
+            patch.object(gate, "GATE_INTERIM_REPORTS_ENABLED", True),
             patch.object(gate, "_claim_event_id_report", claim),
             patch(
                 "app.services.whatsapp_service.upload_media_bytes_cloud",
