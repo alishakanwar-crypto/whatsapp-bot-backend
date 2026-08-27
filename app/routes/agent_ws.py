@@ -54,6 +54,14 @@ _QUEUE_TTL = 120  # discard queued requests older than 2 minutes
 
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
 
+# A dead campus link looks identical to a healthy one until something is sent
+# over it, so the socket is pinged and dropped when the agent stops answering.
+# Every parent request that arrives during that blind window waits for its full
+# timeout and is only then retried, which is what makes a photo take minutes.
+_AGENT_PING_INTERVAL_SECONDS = 15.0
+_AGENT_SILENCE_LIMIT_SECONDS = 40.0
+_agent_last_message_at: dict[int, float] = {}
+
 # ---------------------------------------------------------------------------
 # Always-Active Health Monitoring
 # ---------------------------------------------------------------------------
@@ -91,6 +99,44 @@ async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
 
 def is_agent_connected() -> bool:
     return _agent_ws is not None
+
+
+def _note_agent_message(websocket: WebSocket) -> None:
+    _agent_last_message_at[id(websocket)] = time.time()
+
+
+def _agent_silence_seconds(websocket: WebSocket) -> float:
+    last = _agent_last_message_at.get(id(websocket), 0.0)
+    return time.time() - last if last else 0.0
+
+
+async def _keep_agent_link_honest(websocket: WebSocket) -> None:
+    """Ping the agent and drop the socket once it stops answering.
+
+    Closing it makes the agent reconnect within seconds and lets the
+    disconnect handler retry the requests in flight straight away.
+    """
+    while True:
+        await asyncio.sleep(_AGENT_PING_INTERVAL_SECONDS)
+        if websocket not in _agent_websockets:
+            return
+        silence = _agent_silence_seconds(websocket)
+        if silence > _AGENT_SILENCE_LIMIT_SECONDS:
+            logger.warning(
+                "Campus agent silent for %.0fs — closing the dead link so it "
+                "reconnects and pending photos are retried",
+                silence,
+            )
+            try:
+                await websocket.close(code=1011, reason="agent link silent")
+            except Exception as exc:  # already gone
+                logger.debug("Closing silent agent link failed: %s", exc)
+            return
+        try:
+            await websocket.send_json({"type": "ping"})
+        except Exception as exc:
+            logger.info("Agent ping failed, link is gone: %s", exc)
+            return
 
 
 async def wait_for_agent(max_wait: float = 30.0) -> bool:
@@ -131,6 +177,11 @@ def get_health_state() -> dict:
         if _health_state["last_connected_at"] > 0
         else -1
     )
+    disconnected_seconds = (
+        now - _health_state["last_disconnected_at"]
+        if not connected and _health_state["last_disconnected_at"] > 0
+        else 0.0
+    )
     return {
         "connected": connected,
         "consecutive_failures": _health_state["consecutive_failures"],
@@ -138,6 +189,7 @@ def get_health_state() -> dict:
         "total_snapshots_failed": _health_state["total_snapshots_failed"],
         "last_snapshot_at": _health_state["last_snapshot_at"],
         "last_connected_seconds_ago": round(last_connected_ago, 1),
+        "disconnected_seconds": round(disconnected_seconds, 1),
         "uptime_seconds": round(uptime_seconds, 1),
         "admin_alerted": _health_state["admin_alerted"],
         "pending_requests": len(_pending_requests),
@@ -492,6 +544,8 @@ async def agent_websocket(websocket: WebSocket):
     _health_state["consecutive_failures"] = 0  # reset on fresh connection
     _health_state["admin_alerted"] = False
     logger.info("Campus agent connected via WebSocket")
+    _note_agent_message(websocket)
+    keepalive = asyncio.create_task(_keep_agent_link_honest(websocket))
 
     # Drain any queued snapshot requests from while agent was offline
     asyncio.create_task(_drain_queued_snapshots())
@@ -500,6 +554,7 @@ async def agent_websocket(websocket: WebSocket):
         while True:
             # Use receive_text() + json.loads() to handle large messages
             raw_text = await websocket.receive_text()
+            _note_agent_message(websocket)
             try:
                 data = json.loads(raw_text)
             except json.JSONDecodeError:
@@ -583,6 +638,8 @@ async def agent_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Agent WebSocket error: {e}")
     finally:
+        keepalive.cancel()
+        _agent_last_message_at.pop(id(websocket), None)
         if websocket in _agent_websockets:
             _agent_websockets.remove(websocket)
         if _agent_ws is websocket:

@@ -113,12 +113,12 @@ def _health_monitor_sync() -> None:
         else:
             logger.warning(
                 "Health monitor: agent=DISCONNECTED  consecutive_failures=%d  "
-                "last_connected_ago=%.0fs",
+                "offline_for=%.0fs",
                 health["consecutive_failures"],
-                health["last_connected_seconds_ago"],
+                health.get("disconnected_seconds", 0.0),
             )
             # If disconnected for >5 minutes and we haven't already alerted
-            last_ago = health["last_connected_seconds_ago"]
+            last_ago = health.get("disconnected_seconds", 0.0)
             if last_ago > 300 and not _health_monitor_alert_sent:
                 _health_monitor_alert_sent = True
                 logger.error(
