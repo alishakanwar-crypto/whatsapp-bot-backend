@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import logging
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Request, Response
@@ -3668,6 +3669,15 @@ async def try_handle_child_absent_complaint(
 # mis-linked number can never turn into a flood of photos.
 _MAX_WARD_CLASSROOMS = 3
 
+_background_sends: set[asyncio.Task] = set()
+
+
+def _send_without_waiting(coro) -> None:
+    """Send a message alongside the work it describes, not before it."""
+    task = asyncio.create_task(coro)
+    _background_sends.add(task)
+    task.add_done_callback(_background_sends.discard)
+
 
 async def _send_all_ward_classrooms(
     sender: str, message_text: str, reply_to: str, children: list[dict],
@@ -3686,25 +3696,47 @@ async def _send_all_ward_classrooms(
 
     if len(wards) > 1:
         ward_list = "\n".join(f"- {name} ({key})" for key, name in wards)
-        await send_whatsapp_message(
-            reply_to,
-            f"{_greeting(sender)},\n\n"
-            "You have wards in more than one class, so we are capturing a "
-            "live photo of each:\n"
-            f"{ward_list}\n\n"
-            "Please wait a moment..."
+        _send_without_waiting(
+            send_whatsapp_message(
+                reply_to,
+                f"{_greeting(sender)},\n\n"
+                "You have wards in more than one class, so we are capturing a "
+                "live photo of each:\n"
+                f"{ward_list}\n\n"
+                "Please wait a moment..."
+            )
         )
 
-    for camera_key, _name in wards:
-        await detect_and_handle_snapshot_request(
-            sender, message_text, reply_to, forced_location=camera_key,
-        )
+    # Every classroom is captured at the same time; asking the recorders one
+    # after the other made a two-child family wait twice as long as a one-child
+    # family for the same photos.
+    announce_each = len(wards) == 1
+    results = await asyncio.gather(
+        *(
+            detect_and_handle_snapshot_request(
+                sender,
+                message_text,
+                reply_to,
+                forced_location=camera_key,
+                announce=announce_each,
+            )
+            for camera_key, _name in wards
+        ),
+        return_exceptions=True,
+    )
+    for (camera_key, _name), outcome in zip(wards, results):
+        if isinstance(outcome, BaseException):
+            logger.error(
+                "Ward classroom %s failed for %s: %s",
+                camera_key, sender, outcome, exc_info=outcome,
+            )
     return True
 
 
 async def detect_and_handle_snapshot_request(
     sender: str, message_text: str, reply_to: str,
     forced_location: str | None = None,
+    announce: bool = True,
 ) -> bool:
     """Detect if a parent/admin is requesting a camera snapshot and handle it.
 
@@ -4044,17 +4076,24 @@ async def detect_and_handle_snapshot_request(
         )
         return True
 
-    # Send "processing" message
-    label = f"{location} camera" if is_admin else f"{location} classroom camera"
-    await send_whatsapp_message(
-        reply_to,
-        f"{_greeting(sender)},\n\n"
-        f"Capturing live photo(s) from the {label}. "
-        f"Please wait a moment..."
-    )
+    # Send "processing" message. It goes out while the cameras are already
+    # being asked, so telling the parent we are working costs them no time.
+    if announce:
+        label = f"{location} camera" if is_admin else f"{location} classroom camera"
+        _send_without_waiting(
+            send_whatsapp_message(
+                reply_to,
+                f"{_greeting(sender)},\n\n"
+                f"Capturing live photo(s) from the {label}. "
+                f"Please wait a moment..."
+            )
+        )
 
     sent_count = 0
     delivered_images: set[str] = set()
+    # Timed so a slow request can be blamed on the right stage instead of
+    # guessed at: capture on campus versus handing the photo to WhatsApp.
+    request_started = time.monotonic()
 
     async def deliver_snapshot_image(img_data: dict) -> None:
         nonlocal sent_count
@@ -4064,7 +4103,15 @@ async def detect_and_handle_snapshot_request(
         if not image_b64 or image_key in delivered_images:
             return
 
-        logger.info("Streaming first available snapshot for %s (%s)", location, desc)
+        upload_started = time.monotonic()
+        logger.info(
+            "Streaming first available snapshot for %s (%s) %.1fs after the "
+            "request at %s",
+            location,
+            desc,
+            upload_started - request_started,
+            datetime.now(SHOWCASE_IST).strftime("%d-%m-%Y %H:%M:%S IST"),
+        )
         media_id = await upload_base64_image_cloud(image_b64)
         if not media_id:
             return
@@ -4085,7 +4132,14 @@ async def detect_and_handle_snapshot_request(
             sent_count += 1
             img_data["_delivered"] = True
             img_data.pop("image_base64", None)
-            logger.info("Streamed snapshot for %s (%s)", location, desc)
+            logger.info(
+                "Streamed snapshot for %s (%s): WhatsApp took %.1fs, "
+                "%.1fs since the request",
+                location,
+                desc,
+                time.monotonic() - upload_started,
+                time.monotonic() - request_started,
+            )
 
     # Request snapshot from Campus Agent. A first capture can fail because the
     # camera stream was still opening, so it is retried immediately rather than

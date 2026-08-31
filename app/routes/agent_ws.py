@@ -45,6 +45,10 @@ _pending_request_websockets: dict[str, WebSocket] = {}
 _pending_images: dict[str, list] = {}
 SnapshotImageCallback = Callable[[dict], Awaitable[None]]
 _pending_image_callbacks: dict[str, SnapshotImageCallback] = {}
+# Delivering a photo to WhatsApp takes a couple of seconds, and the agent link
+# carries every family's request, so a photo is handed to WhatsApp on its own
+# task instead of holding up the images arriving behind it.
+_pending_image_deliveries: dict[str, list[asyncio.Task]] = {}
 
 # Queued snapshot requests — filled when agent is offline, drained on reconnect
 # Each entry: {"classroom": str, "sender": str, "reply_to": str, "queued_at": float}
@@ -461,6 +465,9 @@ async def request_snapshot(
                     "Timeout but collected %d images before timeout",
                     len(collected),
                 )
+                # Do not report on images still being handed to WhatsApp, or
+                # the caller sends them a second time.
+                await _await_image_deliveries(request_id)
                 return {
                     "success": True,
                     "classroom": classroom,
@@ -479,6 +486,7 @@ async def request_snapshot(
             _pending_request_websockets.pop(request_id, None)
             _pending_images.pop(request_id, None)
             _pending_image_callbacks.pop(request_id, None)
+            _pending_image_deliveries.pop(request_id, None)
 
     return {"success": False, "error": last_error}
 
@@ -510,15 +518,69 @@ async def _store_snapshot_image(data: dict) -> None:
     _pending_images[request_id].append(image)
     callback = _pending_image_callbacks.get(request_id)
     if callback is not None:
-        try:
-            await callback(image)
-        except Exception as exc:
-            logger.error(
-                "Snapshot image callback failed for %s: %s",
-                request_id,
-                exc,
-                exc_info=True,
-            )
+        _start_image_delivery(request_id, callback, image)
+
+
+def _start_image_delivery(
+    request_id: str, callback: SnapshotImageCallback, image: dict
+) -> None:
+    """Hand one image to WhatsApp without blocking the campus link.
+
+    Images of the same request stay in order (C1 before C2) by waiting on the
+    delivery started before them.
+    """
+    deliveries = _pending_image_deliveries.setdefault(request_id, [])
+    previous = deliveries[-1] if deliveries else None
+    deliveries.append(
+        asyncio.create_task(_deliver_image(request_id, previous, callback, image))
+    )
+
+
+async def _deliver_image(
+    request_id: str,
+    previous: asyncio.Task | None,
+    callback: SnapshotImageCallback,
+    image: dict,
+) -> None:
+    if previous is not None:
+        await asyncio.wait([previous])
+    try:
+        await callback(image)
+    except Exception as exc:
+        logger.error(
+            "Snapshot image callback failed for %s: %s",
+            request_id,
+            exc,
+            exc_info=True,
+        )
+
+
+async def _complete_snapshot_request(request_id: str, classroom: str) -> None:
+    """Finish a request once its streamed photos have reached the parent.
+
+    Run off the campus link so the next family's images keep arriving while
+    WhatsApp is still accepting this one's.
+    """
+    await _await_image_deliveries(request_id)
+    collected = _pending_images.get(request_id, [])
+    future = _pending_requests.get(request_id)
+    if future and not future.done():
+        future.set_result({
+            "success": True,
+            "classroom": classroom,
+            "image_count": len(collected),
+            "images": collected,
+        })
+
+
+async def _await_image_deliveries(request_id: str) -> None:
+    """Wait until every streamed image of this request has been sent."""
+    while True:
+        deliveries = list(_pending_image_deliveries.get(request_id, []))
+        pending = [task for task in deliveries if not task.done()]
+        if not pending:
+            return
+        await asyncio.wait(pending)
 
 
 # ---------------------------------------------------------------------------
@@ -583,14 +645,9 @@ async def agent_websocket(websocket: WebSocket):
                     f"Snapshot complete for {request_id}: "
                     f"expected={image_count}, received={len(collected)}"
                 )
-                future = _pending_requests.get(request_id)
-                if future and not future.done():
-                    future.set_result({
-                        "success": True,
-                        "classroom": classroom,
-                        "image_count": len(collected),
-                        "images": collected,
-                    })
+                asyncio.create_task(
+                    _complete_snapshot_request(request_id, classroom)
+                )
 
             # --- v1 protocol: legacy single message with all images ---
             elif msg_type == "snapshot_response":
