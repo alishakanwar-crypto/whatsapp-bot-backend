@@ -201,7 +201,19 @@ def get_health_state() -> dict:
         "recorders_reported_at_ist": _health_state.get(
             "recorders_reported_at_ist", ""
         ),
+        "agent_code_commit": _health_state.get("agent_code_commit", ""),
+        "agent_started_at_ist": _health_state.get("agent_started_at_ist", ""),
     }
+
+
+def _record_agent_version(data: dict) -> None:
+    """Remember which commit the connected agent is actually running.
+
+    A restart that leaves the old process alive keeps serving pre-pull code, so
+    this is the only way to tell a bad fix from a fix that never took effect.
+    """
+    _health_state["agent_code_commit"] = data.get("code_commit", "")
+    _health_state["agent_started_at_ist"] = data.get("started_at_ist", "")
 
 
 def _record_recorder_health(data: dict) -> None:
@@ -629,9 +641,14 @@ async def agent_websocket(websocket: WebSocket):
 
             if msg_type == "agent_hello":
                 logger.info(
-                    f"Agent hello: {data.get('dvr_count', 0)} DVRs, "
-                    f"{data.get('camera_count', 0)} camera mappings"
+                    "Agent hello: %s DVRs, %s camera mappings, code %s, "
+                    "process started %s",
+                    data.get("dvr_count", 0),
+                    data.get("camera_count", 0),
+                    data.get("code_commit") or "unknown",
+                    data.get("started_at_ist") or "unknown",
                 )
+                _record_agent_version(data)
                 _record_recorder_health(data)
 
             # --- v2 protocol: individual images ---
