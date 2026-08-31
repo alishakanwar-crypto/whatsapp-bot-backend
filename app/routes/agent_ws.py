@@ -497,11 +497,13 @@ async def _store_snapshot_image(data: dict) -> None:
     total = data.get("image_total", 1)
     desc = data.get("description", "")
     logger.info(
-        "Received snapshot_image %d/%d for %s (%d bytes, %s)",
+        "Received snapshot_image %d/%d for %s (%d bytes, %dx%d, %s)",
         idx + 1,
         total,
         request_id,
         data.get("size_bytes", 0),
+        data.get("width", 0),
+        data.get("height", 0),
         desc,
     )
     if request_id not in _pending_images:
