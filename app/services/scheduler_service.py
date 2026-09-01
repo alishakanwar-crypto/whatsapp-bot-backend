@@ -719,6 +719,42 @@ def start_scheduler() -> None:
     )
     logger.info("Scheduled health monitor every 60 seconds")
 
+    # --- Campus Watch ---
+    # Every camera fault this term was reported by a parent first, because
+    # nothing captured a photo unless somebody asked for one. These checks
+    # prove the campus PC and every recorder on their own and alert on change.
+    from app.services.campus_watch_service import (
+        IST as CAMPUS_WATCH_IST,
+        check_campus_link_sync,
+        morning_readiness_sync,
+        sweep_cameras_sync,
+    )
+
+    scheduler.add_job(
+        check_campus_link_sync,
+        trigger=IntervalTrigger(minutes=5),
+        id="campus_watch_link",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        sweep_cameras_sync,
+        trigger=IntervalTrigger(minutes=30),
+        id="campus_watch_cameras",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        morning_readiness_sync,
+        trigger=CronTrigger(
+            hour=7, minute=15, second=0, timezone=CAMPUS_WATCH_IST
+        ),
+        id="campus_watch_morning",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled campus watch: link every 5 min, cameras every 30 min, "
+        "morning readiness 07:15 IST"
+    )
+
     # --- Meal Monitoring ---
     # Loads enabled state from settings table. Use the control panel to toggle.
     import sqlite3 as _sqlite3

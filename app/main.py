@@ -74,6 +74,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info(f"STARTUP: Auto-created {created} missing homework docs")
     except Exception as e:
         logger.error(f"STARTUP: homework doc creation check failed: {e}", exc_info=True)
+    # Scheduled campus checks run on scheduler threads but talk to the campus
+    # agent over its WebSocket, which lives on this loop.
+    from app.services.campus_watch_service import remember_event_loop
+    remember_event_loop()
     start_scheduler()
     yield
     stop_scheduler()
