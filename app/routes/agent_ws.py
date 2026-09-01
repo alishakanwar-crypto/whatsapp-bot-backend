@@ -604,7 +604,7 @@ async def _store_snapshot_image(data: dict) -> None:
     logger.info(
         "Received snapshot_image %d/%d for %s (%d bytes, %dx%d, %s) "
         "capture=%.2fs slot_wait=%.2fs recorder=%s ch%s attempts=%s "
-        "door=%s door_timeouts=%s rtsp=%s",
+        "door=%s door_timeouts=%s rtsp=%s outcome=%s exception=%s",
         idx + 1,
         total,
         request_id,
@@ -620,6 +620,8 @@ async def _store_snapshot_image(data: dict) -> None:
         capture.get("door", "-"),
         capture.get("door_timeouts", 0),
         capture.get("rtsp", False),
+        capture.get("outcome", "-"),
+        capture.get("exception") or "-",
     )
     if request_id not in _pending_images:
         return
