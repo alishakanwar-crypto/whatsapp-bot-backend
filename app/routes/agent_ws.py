@@ -83,6 +83,16 @@ _health_state: dict = {
 # Threshold: only alert admin after this many consecutive snapshot failures
 _ALERT_THRESHOLD = 5
 
+# A recorder that refuses our login can only be unlocked at school, so the
+# people who can walk up to it are told once per incident.
+_RECORDER_ALERT_NUMBERS = [
+    number.strip()
+    for number in os.environ.get(
+        "RECORDER_ALERT_NUMBERS", "919971166562,919599488106"
+    ).split(",")
+    if number.strip()
+]
+
 # ---------------------------------------------------------------------------
 # Fallback proxy: when the agent isn't connected locally, proxy snapshot
 # requests to the app where the agent IS connected.  This handles the
@@ -230,6 +240,88 @@ def _record_recorder_health(data: dict) -> None:
             "Recorders on snapshot fallback: %s",
             ", ".join(f"{r.get('ip')} ({r.get('reason')})" for r in health),
         )
+    try:
+        asyncio.get_running_loop().create_task(
+            _alert_refused_recorders(health)
+        )
+    except RuntimeError:
+        # Called outside the event loop, so there is nothing to alert over.
+        pass
+
+
+async def _classrooms_on_recorder(ip: str) -> list[str]:
+    """Classrooms whose cameras live on this recorder, so an alert can say who
+    is affected instead of only naming an IP."""
+    from app.database import get_db
+
+    db = None
+    try:
+        db = await get_db()
+        # dvr_index is the recorder's position in the configured list, which is
+        # what the agent is given, so the ip has to be resolved through it.
+        cursor = await db.execute("SELECT ip FROM agent_dvrs ORDER BY id")
+        ips = [row["ip"] for row in await cursor.fetchall()]
+        if ip not in ips:
+            return []
+        cursor = await db.execute(
+            "SELECT location FROM agent_camera_mapping WHERE dvr_index = ? "
+            "ORDER BY location",
+            (ips.index(ip),),
+        )
+        return [row["location"] for row in await cursor.fetchall()]
+    except Exception as exc:
+        logger.warning("Could not list classrooms on %s: %s", ip, exc)
+        return []
+    finally:
+        if db is not None:
+            await db.close()
+
+
+async def _alert_refused_recorders(health: list) -> None:
+    """Tell the admins when a recorder stops accepting our login.
+
+    A locked recorder blocks every classroom on it until someone unlocks it at
+    school, and nothing on the campus PC can fix that — so it must not wait for
+    parents to report that photos stopped arriving.
+    """
+    refused = {
+        str(entry.get("ip"))
+        for entry in health or []
+        if entry.get("reason") == "credentials refused"
+    }
+    alerted: set[str] = _health_state.setdefault("recorders_alerted", set())
+    recovered = alerted - refused
+    if recovered:
+        alerted.difference_update(recovered)
+    new = refused - alerted
+    if not new:
+        return
+    alerted.update(new)
+    from app.services.whatsapp_service import send_whatsapp_force
+
+    when = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
+    for ip in sorted(new):
+        classrooms = await _classrooms_on_recorder(ip)
+        rooms = ", ".join(classrooms) if classrooms else "unknown"
+        message = (
+            "PPIS Bot — Recorder Login Refused\n\n"
+            f"Recorder {ip} is rejecting the bot's login as of {when}, so live "
+            f"photos cannot be captured for {len(classrooms)} classroom(s): "
+            f"{rooms}.\n\n"
+            "This is usually the recorder's admin account locked after failed "
+            "logins, or a changed password. Please unlock or reboot it at "
+            "school (or share the new password).\n\n"
+            "The bot has paused its login attempts so the lockout can clear, "
+            "and will resume automatically once the recorder accepts us again."
+        )
+        for admin_phone in _RECORDER_ALERT_NUMBERS:
+            try:
+                await send_whatsapp_force(admin_phone, message)
+            except Exception as exc:
+                logger.warning(
+                    "Could not alert %s about recorder %s: %s",
+                    admin_phone, ip, exc,
+                )
 
 
 def record_snapshot_success() -> None:
