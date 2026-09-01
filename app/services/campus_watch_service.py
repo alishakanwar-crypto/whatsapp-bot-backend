@@ -53,13 +53,19 @@ PROBE_TIMEOUT_SECONDS = float(
     os.environ.get("CAMPUS_WATCH_PROBE_TIMEOUT_SECONDS", "45")
 )
 
-# Last result per recorder, so the sweep can be read from the dashboard and an
-# alert is sent on the change rather than on every sweep.
-_recorder_state: dict[str, dict] = {}
+# Last result per recorder camera, so the sweep can be read from the dashboard
+# and an alert is sent on the change rather than on every sweep. Keyed by
+# camera, not recorder: consecutive sweeps test different classrooms, so a
+# healthy room must not announce a broken room's recovery.
+_recorder_state: dict[tuple[str, str], dict] = {}
 # Which classroom on each recorder to probe next, so the whole campus is
 # covered over the day without capturing 128 cameras every sweep.
 _next_classroom_index: dict[str, int] = {}
 _link_alert_sent = False
+# When we first saw the link down ourselves. The connection state only knows
+# about a disconnect it witnessed, so a deploy while the campus PC is off would
+# otherwise look like zero downtime forever and never alert.
+_link_down_since: float | None = None
 # The scheduler runs jobs on worker threads, but a probe has to travel over the
 # campus WebSocket, which only exists on the app's own event loop.
 _app_loop: asyncio.AbstractEventLoop | None = None
@@ -82,9 +88,11 @@ def _run_on_app_loop(coro, timeout: float) -> None:
 def watch_state() -> dict:
     """What the last sweep found, for /api/agent/health and troubleshooting."""
     return {
-        "recorders": {
-            ip: dict(state) for ip, state in sorted(_recorder_state.items())
+        "cameras": {
+            f"{ip} {classroom}": dict(state)
+            for (ip, classroom), state in sorted(_recorder_state.items())
         },
+        "link_alert_sent": _link_alert_sent,
         "alerting_numbers": len(CAMPUS_WATCH_NUMBERS),
     }
 
@@ -116,14 +124,24 @@ async def is_working_day(day: date | None = None) -> bool:
             await db.close()
 
 
-async def _alert(message: str) -> None:
+async def _alert(message: str) -> bool:
+    """WhatsApp the admins. False if nobody was actually reached.
+
+    The caller records an incident as reported only on a true, otherwise a
+    failed send would silence the whole incident.
+    """
     from app.services.whatsapp_service import send_whatsapp_force
 
+    delivered = False
     for number in CAMPUS_WATCH_NUMBERS:
         try:
-            await send_whatsapp_force(number, message)
+            if await send_whatsapp_force(number, message):
+                delivered = True
         except Exception as exc:
             logger.warning("CAMPUS WATCH: could not alert %s: %s", number, exc)
+    if not delivered:
+        logger.error("CAMPUS WATCH: alert reached nobody: %s", message)
+    return delivered
 
 
 def _now_ist() -> str:
@@ -135,28 +153,37 @@ def _now_ist() -> str:
 # ---------------------------------------------------------------------------
 async def check_campus_link() -> None:
     """Alert when the campus PC's link is down, and when it comes back."""
-    global _link_alert_sent
+    global _link_alert_sent, _link_down_since
     from app.routes.agent_ws import get_health_state
 
     health = get_health_state()
     if health["connected"]:
+        _link_down_since = None
         if _link_alert_sent:
-            _link_alert_sent = False
-            await _alert(
+            delivered = await _alert(
                 "PPIS Bot — Campus PC Back Online\n\n"
                 f"The campus agent reconnected at {_now_ist()} "
                 f"(running commit {health.get('agent_code_commit') or 'unknown'}"
                 f", started {health.get('agent_started_at_ist') or 'unknown'})."
                 "\n\nLive photos are working again."
             )
+            if delivered:
+                _link_alert_sent = False
         return
+    if _link_down_since is None:
+        _link_down_since = time.monotonic()
     if not within_school_hours() or not await is_working_day():
         return
-    down_for = health.get("disconnected_seconds", 0.0)
+    # The connection state only counts a disconnect it witnessed, so after a
+    # deploy while the campus PC is off it reports no downtime at all — our own
+    # first sighting of the outage is what makes the alert fire either way.
+    down_for = max(
+        float(health.get("disconnected_seconds") or 0.0),
+        time.monotonic() - _link_down_since,
+    )
     if down_for < LINK_DOWN_ALERT_SECONDS or _link_alert_sent:
         return
-    _link_alert_sent = True
-    await _alert(
+    _link_alert_sent = await _alert(
         "PPIS Bot — Campus PC Offline\n\n"
         f"The campus agent has not been connected for {down_for / 60:.0f} "
         f"minutes as of {_now_ist()}, so no live photo can be captured and "
@@ -270,10 +297,27 @@ async def sweep_cameras(alert: bool = True) -> list[dict]:
         )
         finding = {**probe, "ip": ip, "verdict": verdict, "at_ist": _now_ist()}
         findings.append(finding)
-        previous = _recorder_state.get(ip, {}).get("verdict", "ok")
-        _recorder_state[ip] = finding
-        if alert and verdict != previous:
-            await _report_change(ip, previous, finding, rooms.get(ip, []))
+        key = (ip, probe["classroom"])
+        seen = _recorder_state.get(key, {})
+        previous = seen.get("verdict", "ok")
+        _recorder_state[key] = finding
+        if not alert:
+            continue
+        # A recorder's rooms fail together, and each sweep tests a different
+        # one, so one incident per recorder is announced and recovery waits
+        # until no room on it is still bad.
+        elsewhere_bad = any(
+            state["verdict"] != "ok"
+            for (state_ip, room), state in _recorder_state.items()
+            if state_ip == ip and room != probe["classroom"]
+        )
+        changed = verdict != previous or not seen.get("reported", True)
+        if elsewhere_bad or not changed:
+            finding["reported"] = True
+            continue
+        finding["reported"] = await _report_change(
+            ip, previous, finding, rooms.get(ip, [])
+        )
     logger.info(
         "CAMPUS WATCH: %s",
         "; ".join(
@@ -286,19 +330,22 @@ async def sweep_cameras(alert: bool = True) -> list[dict]:
 
 async def _report_change(
     ip: str, previous: str, finding: dict, classrooms: list[str]
-) -> None:
-    """Tell the admins when a recorder changes state, once per change."""
+) -> bool:
+    """Tell the admins when a camera changes state, once per change.
+
+    Returns whether the message actually reached anybody, so an undelivered
+    alert is retried on the next sweep instead of silencing the incident.
+    """
     rooms = f"{len(classrooms)} classroom(s)"
     if finding["verdict"] == "ok":
-        await _alert(
+        return await _alert(
             "PPIS Bot — Cameras Recovered\n\n"
             f"Recorder {ip} is capturing again as of {finding['at_ist']} "
             f"({finding['classroom']} in {finding['seconds']}s), so {rooms} "
             "can send live photos."
         )
-        return
     if finding["verdict"] == "slow":
-        await _alert(
+        return await _alert(
             "PPIS Bot — Cameras Slow\n\n"
             f"Recorder {ip} took {finding['seconds']}s to capture "
             f"{finding['classroom']} at {finding['at_ist']} — parents on "
@@ -306,8 +353,7 @@ async def _report_change(
             "Usually the recorder is busy or the network to it is congested; "
             "no action needed if the next check is normal."
         )
-        return
-    await _alert(
+    return await _alert(
         "PPIS Bot — Cameras Not Capturing\n\n"
         f"Recorder {ip} could not capture {finding['classroom']} at "
         f"{finding['at_ist']} ({finding['error']}), so live photos for {rooms} "
@@ -362,7 +408,12 @@ async def morning_readiness() -> str:
             "classroom(s) blocked until it is unlocked or its password is "
             "updated."
         )
-    if all(f["verdict"] == "ok" for f in findings) and not held:
+    if not findings:
+        lines.append(
+            "Cameras: COULD NOT BE CHECKED — no camera mapping was readable, "
+            "so no classroom was proved this morning."
+        )
+    elif all(f["verdict"] == "ok" for f in findings) and not held:
         lines += ["", "Everything is ready for the day."]
     message = "\n".join(lines)
     await _alert(message)
