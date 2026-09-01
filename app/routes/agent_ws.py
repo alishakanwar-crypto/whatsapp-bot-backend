@@ -508,8 +508,11 @@ async def _store_snapshot_image(data: dict) -> None:
     idx = data.get("image_index", 0)
     total = data.get("image_total", 1)
     desc = data.get("description", "")
+    capture = data.get("capture") or {}
     logger.info(
-        "Received snapshot_image %d/%d for %s (%d bytes, %dx%d, %s)",
+        "Received snapshot_image %d/%d for %s (%d bytes, %dx%d, %s) "
+        "capture=%.2fs slot_wait=%.2fs recorder=%s ch%s attempts=%s "
+        "door=%s door_timeouts=%s rtsp=%s",
         idx + 1,
         total,
         request_id,
@@ -517,6 +520,14 @@ async def _store_snapshot_image(data: dict) -> None:
         data.get("width", 0),
         data.get("height", 0),
         desc,
+        capture.get("seconds", 0.0),
+        capture.get("slot_wait_seconds", 0.0),
+        capture.get("recorder", "-"),
+        capture.get("channel", "-"),
+        capture.get("attempt_seconds", []),
+        capture.get("door", "-"),
+        capture.get("door_timeouts", 0),
+        capture.get("rtsp", False),
     )
     if request_id not in _pending_images:
         return
