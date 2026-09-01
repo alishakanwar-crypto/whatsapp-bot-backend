@@ -870,7 +870,9 @@ async def agent_health():
     Returns connection state, failure counts, uptime, and alert status.
     Used by the health monitor and admin dashboard.
     """
-    return get_health_state()
+    from app.services.campus_watch_service import watch_state
+
+    return {**get_health_state(), "campus_watch": watch_state()}
 
 
 async def push_camera_mapping(mapping: dict) -> dict:
