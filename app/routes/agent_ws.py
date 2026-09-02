@@ -39,7 +39,8 @@ _URL_WITH_CREDENTIALS = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]+@")
 _URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
 # git@github.com:school/agent.git — the form git errors quote for SSH remotes.
 _SSH_REMOTE = re.compile(r"(?i)\b[\w.-]+@[\w.-]+:[^\s'\"]+")
-_LOCAL_PATH = re.compile(r"(?i)[a-z]:\\\S+|(?:^|(?<=[\s'\"(]))/\S+")
+# Matched anywhere, since git writes paths as 'cwd=/opt/ppis/agent' too.
+_LOCAL_PATH = re.compile(r"(?i)[a-z]:\\[^\s'\"]*|/[\w.-]+(?:/[\w.-]*)+")
 
 # ---------------------------------------------------------------------------
 # Agent connection state
