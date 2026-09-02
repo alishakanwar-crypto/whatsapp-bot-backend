@@ -82,6 +82,15 @@ class AgentAutoUpdateHealthTests(unittest.TestCase):
         self.assertNotIn("/opt/ppis", reported)
         self.assertIn("not found", reported)
 
+    def test_a_path_written_without_a_space_before_it_is_removed(self):
+        agent_ws._record_auto_update({
+            "auto_update": {"last_error": "fatal: cwd=/opt/ppis/agent missing"}
+        })
+
+        reported = agent_ws.get_health_state()["agent_auto_update"]["last_error"]
+        self.assertNotIn("/opt/ppis", reported)
+        self.assertIn("missing", reported)
+
     def test_a_later_check_replaces_the_previous_one(self):
         agent_ws._record_auto_update({"auto_update": {"last_error": "boom"}})
         agent_ws._record_auto_update({
