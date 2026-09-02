@@ -213,6 +213,7 @@ def get_health_state() -> dict:
         ),
         "agent_code_commit": _health_state.get("agent_code_commit", ""),
         "agent_started_at_ist": _health_state.get("agent_started_at_ist", ""),
+        "agent_auto_update": _health_state.get("agent_auto_update", {}),
     }
 
 
@@ -224,6 +225,30 @@ def _record_agent_version(data: dict) -> None:
     """
     _health_state["agent_code_commit"] = data.get("code_commit", "")
     _health_state["agent_started_at_ist"] = data.get("started_at_ist", "")
+
+
+def _record_auto_update(data: dict) -> None:
+    """Remember whether the campus PC can still see merged fixes.
+
+    A campus PC that cannot reach GitHub looks identical to one that is up to
+    date, which is how fixes sat merged for hours while the agent reported
+    itself healthy.
+    """
+    state = data.get("auto_update")
+    if not isinstance(state, dict):
+        return
+    _health_state["agent_auto_update"] = state
+    if state.get("last_error"):
+        logger.warning(
+            "Campus agent cannot check for merged fixes: %s",
+            state["last_error"],
+        )
+    elif not state.get("wrapper", True) or not state.get("enabled", True):
+        logger.warning(
+            "Campus agent will not pick up merged fixes by itself "
+            "(enabled=%s, wrapper=%s)",
+            state.get("enabled"), state.get("wrapper"),
+        )
 
 
 def _record_recorder_health(data: dict) -> None:
@@ -755,6 +780,7 @@ async def agent_websocket(websocket: WebSocket):
                 )
                 _record_agent_version(data)
                 _record_recorder_health(data)
+                _record_auto_update(data)
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
@@ -788,6 +814,7 @@ async def agent_websocket(websocket: WebSocket):
 
             elif msg_type == "pong":
                 _record_recorder_health(data)
+                _record_auto_update(data)
 
             elif msg_type == "test_result":
                 logger.info(f"DVR test result: {data}")
