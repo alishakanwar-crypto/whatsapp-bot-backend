@@ -37,7 +37,9 @@ router = APIRouter()
 
 _URL_WITH_CREDENTIALS = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]+@")
 _URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
-_LOCAL_PATH = re.compile(r"(?i)[a-z]:\\\S+|/(?:home|Users)/\S+")
+# git@github.com:school/agent.git — the form git errors quote for SSH remotes.
+_SSH_REMOTE = re.compile(r"(?i)\b[\w.-]+@[\w.-]+:[^\s'\"]+")
+_LOCAL_PATH = re.compile(r"(?i)[a-z]:\\\S+|(?:^|(?<=[\s'\"(]))/\S+")
 
 # ---------------------------------------------------------------------------
 # Agent connection state
@@ -239,6 +241,7 @@ def _scrub_update_error(text: str) -> str:
     """
     text = _URL.sub("<remote>", text)
     text = _URL_WITH_CREDENTIALS.sub("<remote>", text)
+    text = _SSH_REMOTE.sub("<remote>", text)
     text = _LOCAL_PATH.sub("<path>", text)
     return text[:200]
 

@@ -67,6 +67,21 @@ class AgentAutoUpdateHealthTests(unittest.TestCase):
         self.assertNotIn("C:\\ppis", reported)
         self.assertIn("unable to access", reported)
 
+    def test_an_ssh_remote_and_any_unix_path_are_removed_too(self):
+        agent_ws._record_auto_update({
+            "auto_update": {
+                "last_error": (
+                    "fatal: 'git@github.com:school/agent.git' not found; "
+                    "cwd /opt/ppis/agent"
+                )
+            }
+        })
+
+        reported = agent_ws.get_health_state()["agent_auto_update"]["last_error"]
+        self.assertNotIn("github.com", reported)
+        self.assertNotIn("/opt/ppis", reported)
+        self.assertIn("not found", reported)
+
     def test_a_later_check_replaces_the_previous_one(self):
         agent_ws._record_auto_update({"auto_update": {"last_error": "boom"}})
         agent_ws._record_auto_update({
