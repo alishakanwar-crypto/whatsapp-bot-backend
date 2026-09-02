@@ -44,6 +44,29 @@ class AgentAutoUpdateHealthTests(unittest.TestCase):
 
         self.assertEqual(agent_ws.get_health_state()["agent_auto_update"], {})
 
+    def test_a_new_agent_that_says_nothing_drops_the_old_report(self):
+        agent_ws._record_auto_update({"auto_update": {"last_error": "boom"}})
+        agent_ws._record_auto_update({}, hello=True)
+
+        self.assertEqual(agent_ws.get_health_state()["agent_auto_update"], {})
+
+    def test_a_git_error_reaches_health_without_urls_or_paths(self):
+        agent_ws._record_auto_update({
+            "auto_update": {
+                "last_error": (
+                    "fatal: unable to access "
+                    "'https://token123@github.com/school/agent.git': "
+                    "cwd C:\\ppis\\ppis-campus-agent"
+                )
+            }
+        })
+
+        reported = agent_ws.get_health_state()["agent_auto_update"]["last_error"]
+        self.assertNotIn("token123", reported)
+        self.assertNotIn("github.com", reported)
+        self.assertNotIn("C:\\ppis", reported)
+        self.assertIn("unable to access", reported)
+
     def test_a_later_check_replaces_the_previous_one(self):
         agent_ws._record_auto_update({"auto_update": {"last_error": "boom"}})
         agent_ws._record_auto_update({
