@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -33,6 +34,10 @@ logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
 router = APIRouter()
+
+_URL_WITH_CREDENTIALS = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]+@")
+_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://\S+")
+_LOCAL_PATH = re.compile(r"(?i)[a-z]:\\\S+|/(?:home|Users)/\S+")
 
 # ---------------------------------------------------------------------------
 # Agent connection state
@@ -227,7 +232,18 @@ def _record_agent_version(data: dict) -> None:
     _health_state["agent_started_at_ist"] = data.get("started_at_ist", "")
 
 
-def _record_auto_update(data: dict) -> None:
+def _scrub_update_error(text: str) -> str:
+    """Git failures quote whatever they were talking to, and agent health is a
+    public endpoint, so remote URLs, embedded credentials and campus PC paths
+    are removed before the message is kept.
+    """
+    text = _URL.sub("<remote>", text)
+    text = _URL_WITH_CREDENTIALS.sub("<remote>", text)
+    text = _LOCAL_PATH.sub("<path>", text)
+    return text[:200]
+
+
+def _record_auto_update(data: dict, hello: bool = False) -> None:
     """Remember whether the campus PC can still see merged fixes.
 
     A campus PC that cannot reach GitHub looks identical to one that is up to
@@ -236,7 +252,14 @@ def _record_auto_update(data: dict) -> None:
     """
     state = data.get("auto_update")
     if not isinstance(state, dict):
+        # A newly connected agent that says nothing must not be described by
+        # the process it replaced.
+        if hello:
+            _health_state["agent_auto_update"] = {}
         return
+    state = dict(state)
+    if state.get("last_error"):
+        state["last_error"] = _scrub_update_error(str(state["last_error"]))
     _health_state["agent_auto_update"] = state
     if state.get("last_error"):
         logger.warning(
@@ -780,7 +803,7 @@ async def agent_websocket(websocket: WebSocket):
                 )
                 _record_agent_version(data)
                 _record_recorder_health(data)
-                _record_auto_update(data)
+                _record_auto_update(data, hello=True)
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
