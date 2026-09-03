@@ -508,6 +508,8 @@ HOLIDAY LIST:
 
 IMPORTANT INSTRUCTIONS:
 - If a parent asks about something not covered here, say you will forward the query to the Class Teacher.
+- TEACHERS: only class teachers are on record (ask "who is the class teacher of Grade 5A"). If asked who teaches a particular subject to a child, or about a teacher you have no record of, say you do not have that information and the school office will get back to the parent with the answer. Do not invent names.
+- FACULTY: never give exact figures about the faculty (number of teachers, years of experience, salaries, qualifications of a named teacher). Describe the faculty only in general terms.
 - Always be polite, concise, and helpful.
 - For fee-related queries, direct parents to the school office: 011-45161066
 - For medical emergencies, the school has a medical room with Max Healthcare partnership.
@@ -5734,6 +5736,8 @@ async def receive_cloud_api_message(request: Request):
                     message_text = transcribed_text
                     voice_note_transcript = transcribed_text
                     voice_note_msg_floor = await _latest_message_id()
+                    # A transcribed voice note is a text question, not a file to forward.
+                    media_info = None
                 else:
                     logger.warning(f"Could not transcribe voice message from {sender}")
                     await send_whatsapp_message(
