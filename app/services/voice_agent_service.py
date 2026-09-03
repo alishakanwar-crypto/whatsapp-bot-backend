@@ -62,7 +62,9 @@ SCHOOL_FACTS = """Facts about the school you may state confidently:
   40 seats (30 general, 10 EWS/DG); registration fee Rs 25; forms at the school office or www.ppi.school.
 - Contact: front desk / helpline 8800935552; Administration Incharge Ms. Harpreet Kaur 9599488106;
   email info@ppischool.in; website www.ppi.school.
-- Fee amounts, due dates, exam dates, holiday lists, results and anything about a particular
+- Fees: paid quarterly; the last date for payment is the 10th of the first month of each quarter
+  (April, July, October, January). Online payment at www.ppi.school or at the school office.
+- Fee amounts, exam dates, holiday lists, results and anything about a particular
   student or teacher: you do NOT know these. Never guess them.
 """
 
@@ -109,7 +111,8 @@ Extract the details as JSON with exactly these keys:
 parent_name, child_name, child_class, phone, query, category, urgency, language.
 category is one of: fees, admission, transport, attendance, academics, complaint, leave, other.
 urgency is one of: low, normal, high.
-Use "not given" for anything missing. query should be a clear one or two sentence summary in English.
+language is the language the parent spoke: English, Hindi or Hinglish (judge from the transcript).
+Use "not given" for anything else missing. query should be a clear one or two sentence summary in English.
 Return only the JSON object."""
 
 
