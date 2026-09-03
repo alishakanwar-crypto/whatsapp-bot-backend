@@ -730,8 +730,15 @@ async def generate_response(
         else:
             greeting = "Good Night"
 
-        is_sunday = day_name == "Sunday"
-        school_status = "TODAY IS SUNDAY — THE SCHOOL IS CLOSED. It is a holiday." if is_sunday else f"Today is {day_name} — the school is OPEN (working day)."
+        if day_name == "Sunday":
+            school_status = "TODAY IS SUNDAY — THE SCHOOL IS CLOSED. It is a holiday."
+        elif day_name == "Saturday":
+            school_status = (
+                "TODAY IS SATURDAY — regular classes are OFF. Only one Saturday a month is a club day; "
+                "if unsure whether today is the club Saturday, say the office will confirm."
+            )
+        else:
+            school_status = f"Today is {day_name} — the school is OPEN (working day)."
 
         datetime_context = (
             f"\n\n== CURRENT DATE & TIME (IST) ==\n"
@@ -740,7 +747,7 @@ async def generate_response(
             f"Appropriate greeting: {greeting}\n"
             f"{school_status}\n"
             f"IMPORTANT: If anyone asks whether school is open today, check the day above. "
-            f"Sunday is ALWAYS a holiday. Monday to Saturday are working days.\n"
+            f"Sunday is ALWAYS a holiday. Saturdays are off except one club Saturday a month. Monday to Friday are working days.\n"
         )
 
         # Activity contacts are already in the comprehensive system prompt — no need to inject separately
