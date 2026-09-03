@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PP International School - Voice Assistant</title>
+<style>
+  body { margin:0; font-family: Arial, sans-serif; background:#f3f6fa; color:#1d2b3a; }
+  .wrap { max-width:520px; margin:0 auto; padding:20px 16px 40px; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+  header img { height:48px; }
+  header h1 { font-size:18px; margin:0; }
+  header p { margin:2px 0 0; font-size:13px; color:#5a6b7d; }
+  #log { background:#fff; border-radius:12px; padding:12px; min-height:260px; max-height:55vh; overflow-y:auto; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .msg { margin:8px 0; display:flex; }
+  .msg span { padding:9px 12px; border-radius:14px; max-width:82%; line-height:1.4; font-size:15px; }
+  .bot span { background:#e8eef7; }
+  .me { justify-content:flex-end; }
+  .me span { background:#1f6feb; color:#fff; }
+  .status { text-align:center; font-size:13px; color:#5a6b7d; margin:12px 0; min-height:18px; }
+  .controls { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  #talk { width:110px; height:110px; border-radius:50%; border:none; background:#1f6feb; color:#fff; font-size:16px; cursor:pointer; box-shadow:0 4px 14px rgba(31,111,235,.35); touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+  #talk.rec { background:#d33; animation:pulse 1s infinite; }
+  #talk:disabled { background:#9db3d1; cursor:default; animation:none; }
+  @keyframes pulse { 0%{transform:scale(1)} 50%{transform:scale(1.06)} 100%{transform:scale(1)} }
+  .row { display:flex; gap:8px; width:100%; }
+  .row input { flex:1; padding:10px; border:1px solid #c9d3df; border-radius:8px; font-size:15px; }
+  .row button, #end { padding:10px 14px; border:1px solid #c9d3df; background:#fff; border-radius:8px; cursor:pointer; font-size:14px; }
+  #end { color:#a33; }
+  .hint { font-size:12px; color:#7a8a9b; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/static/ppis_logo.jpg" alt="PPIS">
+    <div>
+      <h1>PP International School</h1>
+      <p>Voice assistant for parents. Speak in English or Hindi.</p>
+    </div>
+  </header>
+
+  <div id="log"></div>
+  <div class="status" id="status">Press Start to begin.</div>
+
+  <div class="controls">
+    <button id="talk">Start</button>
+    <div class="row">
+      <input id="text" placeholder="Or type your message here" disabled>
+      <button id="send" disabled>Send</button>
+    </div>
+    <button id="end" disabled>End conversation</button>
+    <div class="hint">Your query is emailed to the school office when the conversation ends.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var sessionId = "";
+  var started = false, recording = false, busy = false, finished = false, ending = false;
+  var recorder = null;
+  var player = new Audio();
+  var log = document.getElementById("log");
+  var status = document.getElementById("status");
+  var talk = document.getElementById("talk");
+  var text = document.getElementById("text");
+  var send = document.getElementById("send");
+  var end = document.getElementById("end");
+
+  function add(who, msg) {
+    var d = document.createElement("div");
+    d.className = "msg " + who;
+    var s = document.createElement("span");
+    s.textContent = msg;
+    d.appendChild(s);
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function setBusy(b) {
+    busy = b;
+    talk.disabled = b || finished;
+    send.disabled = b || finished;
+    text.disabled = b || finished;
+  }
+
+  function play(b64) {
+    return new Promise(function (resolve) {
+      if (!b64) { resolve(); return; }
+      player.src = "data:audio/mpeg;base64," + b64;
+      player.onended = resolve;
+      player.onerror = resolve;
+      player.play().catch(resolve);
+    });
+  }
+
+  async function handle(resp) {
+    var data = await resp.json();
+    if (!resp.ok) { status.textContent = data.error || "Something went wrong."; return false; }
+    sessionId = data.session_id || sessionId;
+    if (data.transcript) add("me", data.transcript);
+    add("bot", data.reply);
+    status.textContent = "Speaking...";
+    await play(data.audio_b64);
+    if (data.done) {
+      finished = true;
+      status.textContent = "Thank you. Your query has been sent to the school office.";
+      talk.textContent = "Done";
+      end.disabled = true;
+    } else {
+      status.textContent = "Tap Talk and speak, or type below.";
+      talk.textContent = "Talk";
+    }
+    return true;
+  }
+
+  async function start() {
+    setBusy(true);
+    status.textContent = "Connecting...";
+    try {
+      var r = await fetch("/api/voice-agent/start", { method: "POST" });
+      started = true;
+      end.disabled = false;
+      await handle(r);
+    } catch (e) {
+      status.textContent = "Could not connect. Please try again.";
+    }
+    setBusy(false);
+  }
+
+  async function sendTurn(form) {
+    setBusy(true);
+    status.textContent = "Thinking...";
+    form.append("session_id", sessionId);
+    try {
+      var r = await fetch("/api/voice-agent/turn", { method: "POST", body: form });
+      if (r.status === 404 && sessionId) {
+        // Server restarted and lost the session: start a fresh one and resend this turn.
+        var s = await fetch("/api/voice-agent/start", { method: "POST" });
+        if (s.ok) {
+          sessionId = (await s.json()).session_id;
+          form.set("session_id", sessionId);
+          r = await fetch("/api/voice-agent/turn", { method: "POST", body: form });
+        }
+      }
+      await handle(r);
+    } catch (e) {
+      status.textContent = "Network error. Please try again.";
+    }
+    setBusy(false);
+  }
+
+  async function beginRecording() {
+    if (busy || recording || finished) return;
+    setBusy(true);
+    var myStream;
+    try {
+      myStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      setBusy(false);
+      status.textContent = "Microphone permission is needed. You can type instead.";
+      return;
+    }
+    if (finished) { myStream.getTracks().forEach(function (t) { t.stop(); }); setBusy(false); return; }
+    var myChunks = [];
+    var mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+    var rec = mime ? new MediaRecorder(myStream, { mimeType: mime }) : new MediaRecorder(myStream);
+    rec.ondataavailable = function (e) { if (e.data.size) myChunks.push(e.data); };
+    rec.onstop = function () {
+      myStream.getTracks().forEach(function (t) { t.stop(); });
+      if (finished || ending) return;
+      setBusy(false);
+      var blob = new Blob(myChunks, { type: rec.mimeType || "audio/webm" });
+      if (blob.size < 1000) { status.textContent = "I could not hear anything. Tap Talk, speak, then tap Stop."; return; }
+      var ext = (rec.mimeType || "").indexOf("mp4") >= 0 ? "m4a" : "webm";
+      var form = new FormData();
+      form.append("audio", blob, "voice." + ext);
+      sendTurn(form);
+    };
+    recorder = rec;
+    rec.start();
+    recording = true;
+    setBusy(false);
+    talk.classList.add("rec");
+    talk.textContent = "Stop";
+    status.textContent = "Listening... tap Stop when finished.";
+  }
+
+  function stopRecording() {
+    if (!recording) return;
+    recording = false;
+    talk.classList.remove("rec");
+    talk.textContent = "Talk";
+    setBusy(true);
+    recorder.stop();
+  }
+
+  talk.addEventListener("click", function (e) {
+    e.preventDefault();
+    if (!started) { start(); return; }
+    if (recording) stopRecording(); else beginRecording();
+  });
+  talk.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+  function sendText() {
+    var v = text.value.trim();
+    if (!v || busy || finished) return;
+    text.value = "";
+    var form = new FormData();
+    form.append("text", v);
+    sendTurn(form);
+  }
+  send.addEventListener("click", sendText);
+  text.addEventListener("keydown", function (e) { if (e.key === "Enter") sendText(); });
+
+  function endNow(keepalive) {
+    if (!sessionId || finished) return Promise.resolve(null);
+    var form = new FormData();
+    form.append("session_id", sessionId);
+    return fetch("/api/voice-agent/end", { method: "POST", body: form, keepalive: !!keepalive })
+      .then(function (r) {
+        if (r.ok) return r.json();
+        if (r.status === 404) return { status: "expired" };
+        return null;
+      })
+      .catch(function () { return null; });
+  }
+  function discardRecording() {
+    if (!recording) return;
+    recording = false;
+    talk.classList.remove("rec");
+    talk.textContent = "Talk";
+    recorder.stop();
+  }
+
+  end.addEventListener("click", function () {
+    if (finished || ending) return;
+    if (busy && !recording) return;
+    ending = true;
+    discardRecording();
+    setBusy(true);
+    status.textContent = "Sending your details to the school office...";
+    endNow(false).then(function (res) {
+      if (!res) {
+        ending = false;
+        setBusy(false);
+        status.textContent = "Could not reach the school server. Please press End again.";
+        return;
+      }
+      finished = true;
+      setBusy(false);
+      end.disabled = true;
+      talk.textContent = "Done";
+      if (res.status === "expired") {
+        status.textContent = "This conversation expired before it could be sent. Please reload the page and tell us again.";
+      } else if (res.status === "nothing_to_send") {
+        status.textContent = "Conversation ended.";
+      } else {
+        status.textContent = "Conversation ended. Your details are being sent to the school office.";
+      }
+    });
+  });
+  window.addEventListener("pagehide", function () { ending = true; discardRecording(); endNow(true); });
+})();
+</script>
+</body>
+</html>
