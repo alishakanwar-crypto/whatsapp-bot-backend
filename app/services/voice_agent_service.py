@@ -37,6 +37,7 @@ ADMIN_EMAIL = os.getenv("VOICE_AGENT_ADMIN_EMAIL", "info@ppischool.in")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
 SARVAM_TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "priya")
+SARVAM_MAX_CHARS = 1500
 _DEVANAGARI = re.compile(r"[\u0900-\u097F]")
 TTS_MODEL = os.getenv("VOICE_AGENT_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("VOICE_AGENT_TTS_VOICE", "coral")
@@ -154,8 +155,8 @@ def _purge_sessions() -> None:
     stale = [k for k, s in _sessions.items() if now - s.updated_at > SESSION_TTL_SECONDS]
     for k in stale:
         _sessions.pop(k, None)
-    if len(_sessions) > MAX_SESSIONS:
-        for k in sorted(_sessions, key=lambda k: _sessions[k].updated_at)[: len(_sessions) - MAX_SESSIONS]:
+    if len(_sessions) >= MAX_SESSIONS:
+        for k in sorted(_sessions, key=lambda k: _sessions[k].updated_at)[: len(_sessions) - MAX_SESSIONS + 1]:
             _sessions.pop(k, None)
 
 
@@ -197,9 +198,14 @@ async def agent_reply(session: VoiceSession, user_text: str) -> tuple[str, bool]
 
 
 async def _sarvam_tts(text: str, response_format: str) -> bytes | None:
-    """Sarvam AI Bulbul TTS: Indian female voice for English, Hindi and Hinglish."""
+    """Sarvam AI Bulbul TTS: Indian female voice for English, Hindi and Hinglish.
+
+    Sarvam accepts at most SARVAM_MAX_CHARS per request; longer text returns None so the caller falls back.
+    """
+    if len(text) > SARVAM_MAX_CHARS:
+        return None
     payload = {
-        "text": text[:1500],
+        "text": text,
         "target_language_code": "hi-IN" if _DEVANAGARI.search(text) else "en-IN",
         "speaker": SARVAM_TTS_SPEAKER,
         "model": SARVAM_TTS_MODEL,
