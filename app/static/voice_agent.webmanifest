@@ -1,0 +1,13 @@
+{
+  "name": "PPIS Voice Assistant",
+  "short_name": "PPIS Voice",
+  "start_url": "/voice-agent",
+  "scope": "/voice-agent",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#cc2028",
+  "icons": [
+    { "src": "/static/voice_agent_icon_192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/voice_agent_icon_512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
