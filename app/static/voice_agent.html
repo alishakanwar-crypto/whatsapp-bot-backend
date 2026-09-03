@@ -19,7 +19,7 @@
   .me span { background:#1f6feb; color:#fff; }
   .status { text-align:center; font-size:13px; color:#5a6b7d; margin:12px 0; min-height:18px; }
   .controls { display:flex; flex-direction:column; align-items:center; gap:12px; }
-  #talk { width:110px; height:110px; border-radius:50%; border:none; background:#1f6feb; color:#fff; font-size:16px; cursor:pointer; box-shadow:0 4px 14px rgba(31,111,235,.35); }
+  #talk { width:110px; height:110px; border-radius:50%; border:none; background:#1f6feb; color:#fff; font-size:16px; cursor:pointer; box-shadow:0 4px 14px rgba(31,111,235,.35); touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   #talk.rec { background:#d33; animation:pulse 1s infinite; }
   #talk:disabled { background:#9db3d1; cursor:default; animation:none; }
   @keyframes pulse { 0%{transform:scale(1)} 50%{transform:scale(1.06)} 100%{transform:scale(1)} }
@@ -96,7 +96,7 @@
 
   async function handle(resp) {
     var data = await resp.json();
-    if (!resp.ok) { status.textContent = data.error || "Something went wrong."; return; }
+    if (!resp.ok) { status.textContent = data.error || "Something went wrong."; return false; }
     sessionId = data.session_id || sessionId;
     if (data.transcript) add("me", data.transcript);
     add("bot", data.reply);
@@ -108,9 +108,10 @@
       talk.textContent = "Done";
       end.disabled = true;
     } else {
-      status.textContent = "Press and hold Talk, or type below.";
+      status.textContent = "Tap Talk and speak, or type below.";
       talk.textContent = "Talk";
     }
+    return true;
   }
 
   async function start() {
@@ -133,6 +134,15 @@
     form.append("session_id", sessionId);
     try {
       var r = await fetch("/api/voice-agent/turn", { method: "POST", body: form });
+      if (r.status === 404 && sessionId) {
+        // Server restarted and lost the session: start a fresh one and resend this turn.
+        var s = await fetch("/api/voice-agent/start", { method: "POST" });
+        if (s.ok) {
+          sessionId = (await s.json()).session_id;
+          form.set("session_id", sessionId);
+          r = await fetch("/api/voice-agent/turn", { method: "POST", body: form });
+        }
+      }
       await handle(r);
     } catch (e) {
       status.textContent = "Network error. Please try again.";
@@ -155,7 +165,7 @@
     recorder.onstop = function () {
       stream.getTracks().forEach(function (t) { t.stop(); });
       var blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      if (blob.size < 1000) { status.textContent = "Too short. Hold the button while you speak."; return; }
+      if (blob.size < 1000) { status.textContent = "I could not hear anything. Tap Talk, speak, then tap Stop."; return; }
       var ext = (recorder.mimeType || "").indexOf("mp4") >= 0 ? "m4a" : "webm";
       var form = new FormData();
       form.append("audio", blob, "voice." + ext);
@@ -164,8 +174,8 @@
     recorder.start();
     recording = true;
     talk.classList.add("rec");
-    talk.textContent = "Release";
-    status.textContent = "Listening...";
+    talk.textContent = "Stop";
+    status.textContent = "Listening... tap Stop when finished.";
   }
 
   function stopRecording() {
@@ -176,14 +186,12 @@
     recorder.stop();
   }
 
-  talk.addEventListener("pointerdown", function (e) {
+  talk.addEventListener("click", function (e) {
     e.preventDefault();
     if (!started) { start(); return; }
-    beginRecording();
+    if (recording) stopRecording(); else beginRecording();
   });
-  talk.addEventListener("pointerup", stopRecording);
-  talk.addEventListener("pointerleave", stopRecording);
-  talk.addEventListener("pointercancel", stopRecording);
+  talk.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
   function sendText() {
     var v = text.value.trim();
