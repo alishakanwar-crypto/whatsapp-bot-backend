@@ -6848,7 +6848,11 @@ async def _finish_voice_note(
     the admin by email. Handler branches that return early do not set `reply_text`;
     in that case the reply is recovered from the last outgoing message saved for the sender.
     """
-    from app.services.voice_agent_service import synthesize_speech, whatsapp_voice_note_to_admin
+    from app.services.voice_agent_service import (
+        synthesize_speech,
+        to_spoken_english,
+        whatsapp_voice_note_to_admin,
+    )
     from app.services.whatsapp_service import send_cloud_media, upload_media_bytes_cloud
 
     if not reply_text:
@@ -6858,7 +6862,7 @@ async def _finish_voice_note(
             logger.warning(f"Voice note: could not recover reply for {sender}: {e}")
     sent_audio = False
     if reply_text:
-        spoken = re.sub(r"[*_~`]", "", reply_text)
+        spoken = await to_spoken_english(reply_text)
         audio = await synthesize_speech(spoken, response_format="mp3")
         if audio:
             media_id = await upload_media_bytes_cloud(audio, "audio/mpeg", "reply.mp3")
