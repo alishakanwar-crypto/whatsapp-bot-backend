@@ -706,7 +706,7 @@ async def try_handle_pending_query(
     If so, look up the class teacher and email them the original query.
     Returns True if handled."""
     pending = await get_pending_query(sender)
-    if not pending:
+    if not pending or pending["original_query"].startswith(_CT_PENDING_PREFIX):
         return False
 
     # Try to match the message to a class/grade
@@ -6514,6 +6514,16 @@ async def receive_cloud_api_message(request: Request):
         if dm_handled:
             return {"status": "ok"}
 
+        # Follow-up to "which child?" for a class-teacher question
+        _ct_followup = await try_answer_pending_class_teacher(sender, message_text)
+        if _ct_followup:
+            if voice_note_transcript:
+                voice_reply_text = _ct_followup
+            else:
+                await send_whatsapp_message(reply_to, _ct_followup)
+            await save_message(bot_phone, sender, _ct_followup, "whatsapp", "outgoing")
+            return {"status": "ok"}
+
         # Check if sender has a pending query
         pending_handled = await try_handle_pending_query(sender, message_text, reply_to)
         if pending_handled:
@@ -6636,7 +6646,9 @@ async def receive_cloud_api_message(request: Request):
         # --- "Who is my child's class teacher?" is a question, not a forwarding request ---
         if _is_class_teacher_question(message_text):
             _ct_reply = await _answer_class_teacher_question(sender, message_text)
-            if not _ct_reply:
+            if _ct_reply == _CT_ASK_WHICH_CHILD:
+                await save_pending_query(sender, reply_to, _CT_PENDING_PREFIX + message_text)
+            elif not _ct_reply:
                 _ct_reply = _VOICE_NOTE_UNKNOWN_REPLY
                 voice_note_escalate = True
             if voice_note_transcript:
@@ -6726,7 +6738,9 @@ async def receive_cloud_api_message(request: Request):
         # --- "Who teaches <subject> to my child?" answered from the subject-teacher map ---
         if _is_subject_teacher_question(message_text):
             _st_reply = await _answer_subject_teacher_question(sender, message_text)
-            if not _st_reply:
+            if _st_reply == _CT_ASK_WHICH_CHILD:
+                await save_pending_query(sender, reply_to, _CT_PENDING_PREFIX + message_text)
+            elif not _st_reply:
                 _st_reply = _VOICE_NOTE_UNKNOWN_REPLY
                 await save_pending_query(sender, reply_to, message_text)
                 voice_note_escalate = True
@@ -6881,12 +6895,39 @@ def _is_class_teacher_question(text: str) -> bool:
     return bool(_CLASS_TEACHER_Q.search(text.lower()))
 
 
+_CT_PENDING_PREFIX = "CT_WHICH_CHILD:"
+_CT_ASK_WHICH_CHILD = "Which child are you asking about? Please tell me the child's name and class."
+
+
+async def try_answer_pending_class_teacher(sender: str, text: str) -> str:
+    """Answer the reply to "which child?" after a teacher question. "" if none pending."""
+    pending = await get_pending_query(sender)
+    if not pending or not pending["original_query"].startswith(_CT_PENDING_PREFIX):
+        return ""
+    await delete_pending_query(sender)
+    original = pending["original_query"][len(_CT_PENDING_PREFIX):]
+    combined = f"{original} {text}"
+    if _is_subject_teacher_question(original):
+        reply = await _answer_subject_teacher_question(sender, combined)
+    else:
+        reply = await _answer_class_teacher_question(sender, combined)
+    if reply == _CT_ASK_WHICH_CHILD:
+        return ""
+    return reply or _VOICE_NOTE_UNKNOWN_REPLY
+
+
 async def _answer_class_teacher_question(sender: str, text: str) -> str:
-    """Name the class teacher for the grade in the message or the sender's child. Name only."""
+    """Name the class teacher for the grade in the message or the sender's child. Name only.
+
+    Returns _CT_ASK_WHICH_CHILD when the parent has several children and named none.
+    """
     entry = find_teacher_by_grade(text)
     if entry:
         return f"The class teacher of {entry['grade']} is {entry['teacher'].split('/')[0].strip()}."
-    children = _children_named_in(await _lookup_parent_child_class(sender), text)
+    all_children = await _lookup_parent_child_class(sender)
+    children = _children_named_in(all_children, text)
+    if len(children) > 1:
+        return _CT_ASK_WHICH_CHILD
     parts = []
     for child in children:
         entry = find_teacher_by_grade(child.get("grade", ""))
@@ -6899,8 +6940,13 @@ async def _answer_class_teacher_question(sender: str, text: str) -> str:
 
 
 def _children_named_in(children: list, text: str) -> list:
-    """If the message names one of the parent's children, keep only that child."""
+    """If the message names one of the parent's children (or their class), keep only that child."""
     low = text.lower()
+    entry = find_teacher_by_grade(text)
+    if entry:
+        by_grade = [c for c in children if c.get("grade", "").lower() == entry["grade"].lower()]
+        if by_grade:
+            return by_grade
     named = [
         c for c in children
         if any(
@@ -6926,6 +6972,8 @@ async def _answer_subject_teacher_question(sender: str, text: str) -> str:
     children = _children_named_in(await _lookup_parent_child_class(sender), text)
     if not children:
         return ""
+    if len(children) > 1:
+        return _CT_ASK_WHICH_CHILD
     low = text.lower()
     for child in children:
         grade = child.get("grade", "")
