@@ -57,8 +57,8 @@
 <script>
 (function () {
   var sessionId = "";
-  var started = false, recording = false, busy = false, finished = false;
-  var recorder = null, chunks = [], stream = null;
+  var started = false, recording = false, busy = false, finished = false, ending = false;
+  var recorder = null;
   var player = new Audio();
   var log = document.getElementById("log");
   var status = document.getElementById("status");
@@ -152,27 +152,35 @@
 
   async function beginRecording() {
     if (busy || recording || finished) return;
+    setBusy(true);
+    var myStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      myStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
+      setBusy(false);
       status.textContent = "Microphone permission is needed. You can type instead.";
       return;
     }
-    chunks = [];
+    if (finished) { myStream.getTracks().forEach(function (t) { t.stop(); }); setBusy(false); return; }
+    var myChunks = [];
     var mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-    recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-    recorder.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
-    recorder.onstop = function () {
-      stream.getTracks().forEach(function (t) { t.stop(); });
-      var blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    var rec = mime ? new MediaRecorder(myStream, { mimeType: mime }) : new MediaRecorder(myStream);
+    rec.ondataavailable = function (e) { if (e.data.size) myChunks.push(e.data); };
+    rec.onstop = function () {
+      myStream.getTracks().forEach(function (t) { t.stop(); });
+      if (finished || ending) return;
+      setBusy(false);
+      var blob = new Blob(myChunks, { type: rec.mimeType || "audio/webm" });
       if (blob.size < 1000) { status.textContent = "I could not hear anything. Tap Talk, speak, then tap Stop."; return; }
-      var ext = (recorder.mimeType || "").indexOf("mp4") >= 0 ? "m4a" : "webm";
+      var ext = (rec.mimeType || "").indexOf("mp4") >= 0 ? "m4a" : "webm";
       var form = new FormData();
       form.append("audio", blob, "voice." + ext);
       sendTurn(form);
     };
-    recorder.start();
+    recorder = rec;
+    rec.start();
     recording = true;
+    setBusy(false);
     talk.classList.add("rec");
     talk.textContent = "Stop";
     status.textContent = "Listening... tap Stop when finished.";
@@ -183,6 +191,7 @@
     recording = false;
     talk.classList.remove("rec");
     talk.textContent = "Talk";
+    setBusy(true);
     recorder.stop();
   }
 
@@ -216,12 +225,24 @@
       })
       .catch(function () { return null; });
   }
+  function discardRecording() {
+    if (!recording) return;
+    recording = false;
+    talk.classList.remove("rec");
+    talk.textContent = "Talk";
+    recorder.stop();
+  }
+
   end.addEventListener("click", function () {
-    if (busy || finished) return;
+    if (finished || ending) return;
+    if (busy && !recording) return;
+    ending = true;
+    discardRecording();
     setBusy(true);
     status.textContent = "Sending your details to the school office...";
     endNow(false).then(function (res) {
       if (!res) {
+        ending = false;
         setBusy(false);
         status.textContent = "Could not reach the school server. Please press End again.";
         return;
@@ -239,7 +260,7 @@
       }
     });
   });
-  window.addEventListener("pagehide", function () { endNow(true); });
+  window.addEventListener("pagehide", function () { ending = true; discardRecording(); endNow(true); });
 })();
 </script>
 </body>

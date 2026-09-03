@@ -74,11 +74,12 @@ async def voice_agent_start(request: Request):
     if _rate_limited(request):
         return _too_many()
     session = va.new_session(channel="web")
-    session.history.append({"role": "assistant", "content": va.GREETING})
+    greeting = va.greeting()
+    session.history.append({"role": "assistant", "content": greeting})
     return {
         "session_id": session.session_id,
-        "reply": va.GREETING,
-        "audio_b64": await _speak(va.GREETING),
+        "reply": greeting,
+        "audio_b64": await _speak(greeting),
         "done": False,
     }
 
