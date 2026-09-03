@@ -82,7 +82,7 @@ def test_web_turn_and_end_endpoints(monkeypatch):
         assert client.get("/voice-agent").status_code == 200
         start = client.post("/api/voice-agent/start").json()
         sid = start["session_id"]
-        assert start["reply"] == va.GREETING and start["audio_b64"]
+        assert start["reply"].startswith("Good ") and start["audio_b64"]
 
         turn = client.post("/api/voice-agent/turn", data={"session_id": sid, "text": "Hello, I am Rita"}).json()
         assert turn["transcript"] == "Hello, I am Rita"

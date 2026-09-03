@@ -101,10 +101,18 @@ Rules:
 - If the parent says goodbye or that there is nothing else, also end your reply with {marker}
 """
 
-GREETING = (
-    "Namaste, this is the PP International School assistant. "
-    "Please tell me your name and your child's name and class, and how we can help you."
-)
+def greeting() -> str:
+    hour = datetime.now(IST).hour
+    if hour < 12:
+        salute = "Good morning"
+    elif hour < 17:
+        salute = "Good afternoon"
+    else:
+        salute = "Good evening"
+    return (
+        f"{salute}, this is the PP International School assistant. "
+        "Please tell me your name and your child's name and class, and how we can help you."
+    )
 
 SUMMARY_PROMPT = """You are given a transcript of a conversation between a school voice assistant and a parent.
 Extract the details as JSON with exactly these keys:
