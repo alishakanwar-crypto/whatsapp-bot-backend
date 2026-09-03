@@ -123,9 +123,11 @@ async def agent_reply(session: VoiceSession, user_text: str) -> tuple[str, bool]
     prompt = VOICE_AGENT_PROMPT.format(marker=DONE_MARKER)
     if session.contact:
         prompt += f"\nThe parent's phone number is already known: {session.contact}. Do not ask for it."
-    raw = await generate_response(user_text, prompt, session.history)
-    reply, done = _strip_marker(raw)
+    prior = list(session.history)
     session.history.append({"role": "user", "content": user_text})
+    session.updated_at = time.time()
+    raw = await generate_response(user_text, prompt, prior)
+    reply, done = _strip_marker(raw)
     session.history.append({"role": "assistant", "content": reply})
     session.updated_at = time.time()
     if done:

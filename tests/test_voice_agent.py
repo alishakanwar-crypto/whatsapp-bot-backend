@@ -118,6 +118,22 @@ def test_email_admin_retries_and_stays_resendable(monkeypatch):
     assert session.emailed is False and session.emailing is False
 
 
+def test_user_turn_recorded_before_model_call(monkeypatch):
+    seen = {}
+
+    async def fake_generate(user_message, system_prompt, history=None):
+        seen["history_len"] = len(history)
+        seen["session_history"] = list(session.history)
+        return "Noted."
+
+    monkeypatch.setattr(va, "generate_response", fake_generate)
+    session = va.new_session("web")
+    asyncio.run(va.agent_reply(session, "Fees kab tak bharni hai?"))
+    assert seen["history_len"] == 0
+    assert seen["session_history"] == [{"role": "user", "content": "Fees kab tak bharni hai?"}]
+    assert session.history[-1] == {"role": "assistant", "content": "Noted."}
+
+
 def test_turn_rejects_oversized_audio(monkeypatch):
     from app.main import app
     from app.routes import voice_agent as route

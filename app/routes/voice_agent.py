@@ -18,6 +18,7 @@ router = APIRouter()
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
 RATE_LIMIT_WINDOW = 10 * 60
 RATE_LIMIT_MAX = 60
+GLOBAL_RATE_LIMIT_MAX = int(os.getenv("VOICE_AGENT_GLOBAL_RATE_LIMIT", "1500"))
 _PAGE_PATH = os.path.join(os.path.dirname(__file__), "..", "static", "voice_agent.html")
 
 _hits: dict[str, deque[float]] = defaultdict(deque)
@@ -29,9 +30,13 @@ def _rate_limited(request: Request) -> bool:
     q = _hits[ip]
     while q and now - q[0] > RATE_LIMIT_WINDOW:
         q.popleft()
-    if len(q) >= RATE_LIMIT_MAX:
+    g = _hits["*"]
+    while g and now - g[0] > RATE_LIMIT_WINDOW:
+        g.popleft()
+    if len(q) >= RATE_LIMIT_MAX or len(g) >= GLOBAL_RATE_LIMIT_MAX:
         return True
     q.append(now)
+    g.append(now)
     if len(_hits) > 5000:
         for k in [k for k, v in _hits.items() if not v or now - v[-1] > RATE_LIMIT_WINDOW]:
             _hits.pop(k, None)
