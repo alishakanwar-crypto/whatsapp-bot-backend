@@ -90,5 +90,42 @@ def test_web_turn_and_end_endpoints(monkeypatch):
         assert turn["done"] is False
 
         end = client.post("/api/voice-agent/end", data={"session_id": sid}).json()
-        assert end["status"] == "ok"
+        assert end["status"] == "queued"
+        assert client.post("/api/voice-agent/end", data={"session_id": "nope"}).status_code == 404
     assert emailed == [sid]
+
+
+def test_email_admin_retries_and_stays_resendable(monkeypatch):
+    attempts = []
+
+    async def fake_summary(history):
+        return {k: "not given" for k in va.SUMMARY_KEYS}
+
+    async def failing_send(to, subject, body, sender_name="PPIS Bot", attachments=None):
+        attempts.append(1)
+        return False
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(va, "summarise_conversation", fake_summary)
+    monkeypatch.setattr(va, "send_email_async", failing_send)
+    monkeypatch.setattr(va.asyncio, "sleep", no_sleep)
+    session = va.new_session("web")
+    session.history = [{"role": "user", "content": "hi"}]
+    assert asyncio.run(va.email_admin(session)) is False
+    assert len(attempts) == 1 + len(va.EMAIL_RETRY_DELAYS)
+    assert session.emailed is False and session.emailing is False
+
+
+def test_turn_rejects_oversized_audio(monkeypatch):
+    from app.main import app
+    from app.routes import voice_agent as route
+
+    monkeypatch.setattr(route, "MAX_AUDIO_BYTES", 1024)
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/voice-agent/turn",
+            files={"audio": ("v.webm", b"x" * 4096, "audio/webm")},
+        )
+    assert r.status_code == 413

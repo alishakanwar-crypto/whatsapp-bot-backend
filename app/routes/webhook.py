@@ -5233,6 +5233,7 @@ async def receive_cloud_api_message(request: Request):
     # --- Voice message transcription (Cloud API) ---
     voice_note_transcript = ""
     voice_reply_text = ""
+    voice_note_msg_floor = 0
     if media_info and media_info.get("type") == "audioMessage":
         cloud_media_id = media_info.get("cloud_media_id", "")
         if cloud_media_id:
@@ -5250,6 +5251,7 @@ async def receive_cloud_api_message(request: Request):
                     logger.info(f"Voice transcription for {sender}: {transcribed_text[:100]}")
                     message_text = transcribed_text
                     voice_note_transcript = transcribed_text
+                    voice_note_msg_floor = await _latest_message_id()
                     await send_whatsapp_message(
                         reply_to,
                         f"Voice message received:\n{transcribed_text}\n\nProcessing your query..."
@@ -5835,15 +5837,53 @@ async def receive_cloud_api_message(request: Request):
         await resume_after_bot_reply()
         if voice_note_transcript:
             _asyncio.ensure_future(
-                _finish_voice_note(reply_to, sender, voice_note_transcript, voice_reply_text)
+                _finish_voice_note(
+                    reply_to, sender, voice_note_transcript, voice_reply_text, voice_note_msg_floor
+                )
             )
 
 
-async def _finish_voice_note(reply_to: str, sender: str, transcript: str, reply_text: str) -> None:
-    """After a WhatsApp voice note: speak the bot's reply back and mail the admin."""
+async def _latest_message_id() -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COALESCE(MAX(id), 0) FROM messages")
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        await db.close()
+
+
+async def _last_outgoing_after(receiver: str, after_id: int) -> str:
+    """Text of the most recent bot message saved for `receiver` after row `after_id`."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT content FROM messages WHERE receiver = ? AND direction = 'outgoing' AND id > ? "
+            "ORDER BY id DESC LIMIT 1",
+            (receiver, after_id),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else ""
+    finally:
+        await db.close()
+
+
+async def _finish_voice_note(
+    reply_to: str, sender: str, transcript: str, reply_text: str, msg_floor: int = 0
+) -> None:
+    """After a WhatsApp voice note: speak the bot's reply back and mail the admin.
+
+    Handler branches that return early do not set `reply_text`; in that case the
+    reply is recovered from the last outgoing message saved for the sender.
+    """
     from app.services.voice_agent_service import synthesize_speech, whatsapp_voice_note_to_admin
     from app.services.whatsapp_service import send_cloud_media, upload_media_bytes_cloud
 
+    if not reply_text:
+        try:
+            reply_text = await _last_outgoing_after(sender, msg_floor)
+        except Exception as e:
+            logger.warning(f"Voice note: could not recover reply for {sender}: {e}")
     if reply_text:
         spoken = re.sub(r"[*_~`]", "", reply_text)
         audio = await synthesize_speech(spoken, response_format="mp3")

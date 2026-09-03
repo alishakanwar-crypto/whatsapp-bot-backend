@@ -35,7 +35,9 @@ TTS_MODEL = os.getenv("VOICE_AGENT_TTS_MODEL", "tts-1")
 TTS_VOICE = os.getenv("VOICE_AGENT_TTS_VOICE", "nova")
 SESSION_TTL_SECONDS = 30 * 60
 MAX_SESSIONS = 500
+EMAIL_RETRY_DELAYS = (5, 30, 120)
 DONE_MARKER = "[[DONE]]"
+SUMMARY_KEYS = ["parent_name", "child_name", "child_class", "phone", "query", "category", "urgency", "language"]
 
 VOICE_AGENT_PROMPT = """You are the telephone-style voice assistant of PP International School (PPIS).
 A parent is speaking to you. Your job is to note down their query for the school office.
@@ -80,6 +82,7 @@ class VoiceSession:
     updated_at: float = field(default_factory=time.time)
     done: bool = False
     emailed: bool = False
+    emailing: bool = False
 
 
 _sessions: dict[str, VoiceSession] = {}
@@ -157,7 +160,7 @@ def _transcript_text(history: list[dict[str, str]]) -> str:
 
 
 async def summarise_conversation(history: list[dict[str, str]]) -> dict[str, str]:
-    keys = ["parent_name", "child_name", "child_class", "phone", "query", "category", "urgency", "language"]
+    keys = SUMMARY_KEYS
     summary = {k: "not given" for k in keys}
     ai_client = get_client()
     transcript = _transcript_text(history)
@@ -213,17 +216,28 @@ def build_admin_email(session: VoiceSession, summary: dict[str, str]) -> tuple[s
 
 
 async def email_admin(session: VoiceSession) -> bool:
-    """Summarise the session and mail it to the admin. Runs once per session."""
-    if session.emailed or not session.history:
+    """Summarise the session and mail it to the admin, retrying on SMTP failure.
+
+    Sends at most one email per session; concurrent callers are no-ops.
+    """
+    if session.emailed or session.emailing or not session.history:
         return False
-    session.emailed = True
-    summary = await summarise_conversation(session.history)
-    subject, body = build_admin_email(session, summary)
-    ok = await send_email_async(ADMIN_EMAIL, subject, body, sender_name="PPIS Voice Agent")
-    if not ok:
-        session.emailed = False
-        logger.error(f"Voice agent: admin email failed for session {session.session_id}")
-    return ok
+    session.emailing = True
+    try:
+        summary = await summarise_conversation(session.history)
+        subject, body = build_admin_email(session, summary)
+        for attempt, delay in enumerate((0,) + EMAIL_RETRY_DELAYS):
+            if delay:
+                await asyncio.sleep(delay)
+            if await send_email_async(ADMIN_EMAIL, subject, body, sender_name="PPIS Voice Agent"):
+                session.emailed = True
+                return True
+            logger.error(
+                f"Voice agent: admin email attempt {attempt + 1} failed for session {session.session_id}"
+            )
+        return False
+    finally:
+        session.emailing = False
 
 
 def email_admin_in_background(session: VoiceSession) -> None:

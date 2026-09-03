@@ -197,18 +197,31 @@
   text.addEventListener("keydown", function (e) { if (e.key === "Enter") sendText(); });
 
   function endNow(keepalive) {
-    if (!sessionId || finished) return;
+    if (!sessionId || finished) return Promise.resolve(null);
     var form = new FormData();
     form.append("session_id", sessionId);
-    fetch("/api/voice-agent/end", { method: "POST", body: form, keepalive: !!keepalive }).catch(function () {});
+    return fetch("/api/voice-agent/end", { method: "POST", body: form, keepalive: !!keepalive })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
   }
   end.addEventListener("click", function () {
-    endNow(false);
-    finished = true;
-    setBusy(false);
-    end.disabled = true;
-    talk.textContent = "Done";
-    status.textContent = "Conversation ended. Your details have been sent to the school office.";
+    if (busy || finished) return;
+    setBusy(true);
+    status.textContent = "Sending your details to the school office...";
+    endNow(false).then(function (res) {
+      if (!res) {
+        setBusy(false);
+        status.textContent = "Could not reach the school server. Please press End again.";
+        return;
+      }
+      finished = true;
+      setBusy(false);
+      end.disabled = true;
+      talk.textContent = "Done";
+      status.textContent = res.status === "nothing_to_send"
+        ? "Conversation ended."
+        : "Conversation ended. Your details are being sent to the school office.";
+    });
   });
   window.addEventListener("pagehide", function () { endNow(true); });
 })();
