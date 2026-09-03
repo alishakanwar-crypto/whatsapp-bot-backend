@@ -5718,6 +5718,7 @@ async def receive_cloud_api_message(request: Request):
     voice_note_transcript = ""
     voice_reply_text = ""
     voice_note_msg_floor = 0
+    voice_note_escalate = False
     if media_info and media_info.get("type") == "audioMessage":
         cloud_media_id = media_info.get("cloud_media_id", "")
         if cloud_media_id:
@@ -6706,6 +6707,20 @@ async def receive_cloud_api_message(request: Request):
                     await send_whatsapp_message(reply_to, ask_grade)
                     return {"status": "ok"}
 
+        # --- "Who teaches <subject> to my child?" answered from the subject-teacher map ---
+        if _is_subject_teacher_question(message_text):
+            _st_reply = await _answer_subject_teacher_question(sender, message_text)
+            if not _st_reply:
+                _st_reply = _VOICE_NOTE_UNKNOWN_REPLY
+                await save_pending_query(sender, reply_to, message_text)
+                voice_note_escalate = True
+            if voice_note_transcript:
+                voice_reply_text = _st_reply
+            else:
+                await send_whatsapp_message(reply_to, _st_reply)
+            await save_message(bot_phone, sender, _st_reply, "whatsapp", "outgoing")
+            return {"status": "ok"}
+
         # --- GPT answers first (with school knowledge), teacher fallback if unknown ---
         system_prompt = await get_system_prompt()
         history = await get_conversation_history(sender)
@@ -6723,6 +6738,14 @@ async def receive_cloud_api_message(request: Request):
 
         # If GPT couldn't answer → ask parent for confirmation before forwarding
         if _is_unknown_response(ai_response):
+            if voice_note_transcript:
+                # Voice notes are never forwarded to a class teacher: the office is
+                # mailed the question and the parent hears a short English reply.
+                await save_pending_query(sender, reply_to, message_text)
+                voice_reply_text = _VOICE_NOTE_UNKNOWN_REPLY
+                voice_note_escalate = True
+                await save_message(bot_phone, sender, voice_reply_text, "whatsapp", "outgoing")
+                return {"status": "ok"}
             _parent_children = await _lookup_parent_child_class(sender)
             if _parent_children:
                 child = _parent_children[0]
@@ -6787,12 +6810,8 @@ async def receive_cloud_api_message(request: Request):
                     "to the class teacher via WhatsApp and email?"
                     + escalation_contacts
                 )
-            if voice_note_transcript:
-                voice_reply_text = ask_class_msg
-                esc_wa_id = ""
-            else:
-                await send_whatsapp_message(reply_to, ask_class_msg)
-                esc_wa_id = getattr(send_whatsapp_message, "last_wa_id", "") or ""
+            await send_whatsapp_message(reply_to, ask_class_msg)
+            esc_wa_id = getattr(send_whatsapp_message, "last_wa_id", "") or ""
             await save_message(bot_phone, sender, ask_class_msg, "whatsapp", "outgoing", wa_message_id=esc_wa_id)
             return {"status": "ok"}
 
@@ -6813,9 +6832,62 @@ async def receive_cloud_api_message(request: Request):
         if voice_note_transcript:
             asyncio.ensure_future(
                 _finish_voice_note(
-                    reply_to, sender, voice_note_transcript, voice_reply_text, voice_note_msg_floor
+                    reply_to, sender, voice_note_transcript, voice_reply_text,
+                    voice_note_msg_floor, email_admin=voice_note_escalate,
                 )
             )
+
+
+_VOICE_NOTE_UNKNOWN_REPLY = (
+    "I don't have that information with me right now. "
+    "I have passed your question to the school office and they will get back to you."
+)
+
+_SUBJECT_TEACHER_Q = re.compile(
+    r"\b(who\s+(is\s+)?teach(es|ing)?|kaun\s+(padha|sikha)|(subject\s+)?teacher\s+(for|of)|"
+    r"(maths?|mathematics|english|hindi|science|physics|chemistry|biology|sst|social|"
+    r"computer|sanskrit|french|german|evs|gk|art|music|dance|pe|sports|economics|accounts|"
+    r"business|history|geography|political|psychology)\s+(teacher|ma'?am|sir|padhata|padhati))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_subject_teacher_question(text: str) -> bool:
+    low = text.lower()
+    if "class teacher" in low or "ct of" in low:
+        return False
+    return bool(_SUBJECT_TEACHER_Q.search(low))
+
+
+async def _answer_subject_teacher_question(sender: str, text: str) -> str:
+    """Name the subject teacher for the sender's child from the verified subject map.
+
+    Returns "" when the parent, subject or teacher is not on record.
+    """
+    children = await _lookup_parent_child_class(sender)
+    if not children:
+        return ""
+    low = text.lower()
+    for child in children:
+        grade = child.get("grade", "")
+        for subject in get_subjects_for_grade(grade):
+            s_low = subject.lower()
+            aliases = {s_low}
+            if s_low == "maths":
+                aliases |= {"math", "mathematics"}
+            elif s_low == "sst":
+                aliases |= {"social science", "social studies"}
+            elif s_low == "pe":
+                aliases |= {"physical education", "sports"}
+            elif s_low == "fine arts":
+                aliases |= {"art", "drawing"}
+            if any(re.search(rf"\b{re.escape(a)}\b", low) for a in aliases):
+                teacher = find_subject_teacher(grade, subject)
+                name = (teacher or {}).get("name", "").strip()
+                if name:
+                    return f"{subject} for {child.get('student_name', 'your child')} ({grade}) is taught by {name}."
+                return ""
+    return ""
 
 
 async def _latest_message_id() -> int:
@@ -6844,12 +6916,14 @@ async def _last_outgoing_after(receiver: str, after_id: int) -> str:
 
 
 async def _finish_voice_note(
-    reply_to: str, sender: str, transcript: str, reply_text: str, msg_floor: int = 0
+    reply_to: str, sender: str, transcript: str, reply_text: str, msg_floor: int = 0,
+    email_admin: bool = False,
 ) -> None:
-    """After a WhatsApp voice note: speak the bot's reply back and mail the admin.
+    """After a WhatsApp voice note: speak the bot's reply back; mail the admin if unresolved.
 
-    The parent gets the reply as a voice note only; the transcript and reply go to
-    the admin by email. Handler branches that return early do not set `reply_text`;
+    The parent gets the reply as a voice note only. The transcript and reply go to the
+    admin by email only when `email_admin` is set (the bot could not answer) or when
+    no reply could be found. Handler branches that return early do not set `reply_text`;
     in that case the reply is recovered from the last outgoing message saved for the sender.
     """
     from app.services.voice_agent_service import (
@@ -6874,7 +6948,8 @@ async def _finish_voice_note(
                 sent_audio = await send_cloud_media(reply_to, "audio", media_id=media_id)
         if not sent_audio:
             await send_whatsapp_message(reply_to, reply_text)
-    await whatsapp_voice_note_to_admin(sender, transcript, reply_text or "(no reply sent)")
+    if email_admin or not reply_text:
+        await whatsapp_voice_note_to_admin(sender, transcript, reply_text or "(no reply sent)")
 
 
 @router.post("/webhook/send-notification-email")
