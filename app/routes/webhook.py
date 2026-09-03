@@ -1,3 +1,4 @@
+import asyncio as _asyncio
 import re
 import logging
 from fastapi import APIRouter, Request, Response
@@ -5230,6 +5231,8 @@ async def receive_cloud_api_message(request: Request):
                 return {"status": "ok"}
 
     # --- Voice message transcription (Cloud API) ---
+    voice_note_transcript = ""
+    voice_reply_text = ""
     if media_info and media_info.get("type") == "audioMessage":
         cloud_media_id = media_info.get("cloud_media_id", "")
         if cloud_media_id:
@@ -5246,6 +5249,7 @@ async def receive_cloud_api_message(request: Request):
                 if transcribed_text:
                     logger.info(f"Voice transcription for {sender}: {transcribed_text[:100]}")
                     message_text = transcribed_text
+                    voice_note_transcript = transcribed_text
                     await send_whatsapp_message(
                         reply_to,
                         f"Voice message received:\n{transcribed_text}\n\nProcessing your query..."
@@ -5815,11 +5819,13 @@ async def receive_cloud_api_message(request: Request):
             await send_whatsapp_message(reply_to, ask_class_msg)
             esc_wa_id = getattr(send_whatsapp_message, "last_wa_id", "") or ""
             await save_message(bot_phone, sender, ask_class_msg, "whatsapp", "outgoing", wa_message_id=esc_wa_id)
+            voice_reply_text = ask_class_msg
             return {"status": "ok"}
 
         await send_whatsapp_message(reply_to, ai_response)
         sent_wa_id = getattr(send_whatsapp_message, "last_wa_id", "") or ""
         await save_message(bot_phone, sender, ai_response, "whatsapp", "outgoing", wa_message_id=sent_wa_id)
+        voice_reply_text = ai_response
 
         # Forward to teachers if mentioned
         await forward_to_teachers_and_confirm(sender, message_text, reply_to, media_info)
@@ -5827,6 +5833,25 @@ async def receive_cloud_api_message(request: Request):
         return {"status": "ok"}
     finally:
         await resume_after_bot_reply()
+        if voice_note_transcript:
+            _asyncio.ensure_future(
+                _finish_voice_note(reply_to, sender, voice_note_transcript, voice_reply_text)
+            )
+
+
+async def _finish_voice_note(reply_to: str, sender: str, transcript: str, reply_text: str) -> None:
+    """After a WhatsApp voice note: speak the bot's reply back and mail the admin."""
+    from app.services.voice_agent_service import synthesize_speech, whatsapp_voice_note_to_admin
+    from app.services.whatsapp_service import send_cloud_media, upload_media_bytes_cloud
+
+    if reply_text:
+        spoken = re.sub(r"[*_~`]", "", reply_text)
+        audio = await synthesize_speech(spoken, response_format="mp3")
+        if audio:
+            media_id = await upload_media_bytes_cloud(audio, "audio/mpeg", "reply.mp3")
+            if media_id:
+                await send_cloud_media(reply_to, "audio", media_id=media_id)
+    await whatsapp_voice_note_to_admin(sender, transcript, reply_text or "(no reply sent)")
 
 
 @router.post("/webhook/send-notification-email")
