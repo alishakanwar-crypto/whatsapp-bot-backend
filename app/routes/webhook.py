@@ -6904,7 +6904,6 @@ async def try_answer_pending_class_teacher(sender: str, text: str) -> str:
     pending = await get_pending_query(sender)
     if not pending or not pending["original_query"].startswith(_CT_PENDING_PREFIX):
         return ""
-    await delete_pending_query(sender)
     original = pending["original_query"][len(_CT_PENDING_PREFIX):]
     combined = f"{original} {text}"
     if _is_subject_teacher_question(original):
@@ -6912,7 +6911,8 @@ async def try_answer_pending_class_teacher(sender: str, text: str) -> str:
     else:
         reply = await _answer_class_teacher_question(sender, combined)
     if reply == _CT_ASK_WHICH_CHILD:
-        return ""
+        return "Sorry, I could not match that. Please tell me the child's name and class, for example Riya, 5A."
+    await delete_pending_query(sender)
     return reply or _VOICE_NOTE_UNKNOWN_REPLY
 
 
@@ -6926,7 +6926,7 @@ async def _answer_class_teacher_question(sender: str, text: str) -> str:
         return f"The class teacher of {entry['grade']} is {entry['teacher'].split('/')[0].strip()}."
     all_children = await _lookup_parent_child_class(sender)
     children = _children_named_in(all_children, text)
-    if len(children) > 1:
+    if _needs_child_choice(children):
         return _CT_ASK_WHICH_CHILD
     parts = []
     for child in children:
@@ -6937,6 +6937,11 @@ async def _answer_class_teacher_question(sender: str, text: str) -> str:
                 f"{entry['teacher'].split('/')[0].strip()} as class teacher"
             )
     return (". ".join(parts) + ".") if parts else ""
+
+
+def _needs_child_choice(children: list) -> bool:
+    """True when several children remain and they are not all in the same class."""
+    return len({c.get("grade", "").lower() for c in children}) > 1
 
 
 def _children_named_in(children: list, text: str) -> list:
@@ -6972,7 +6977,7 @@ async def _answer_subject_teacher_question(sender: str, text: str) -> str:
     children = _children_named_in(await _lookup_parent_child_class(sender), text)
     if not children:
         return ""
-    if len(children) > 1:
+    if _needs_child_choice(children):
         return _CT_ASK_WHICH_CHILD
     low = text.lower()
     for child in children:
