@@ -516,7 +516,7 @@ def generate_fallback_response(user_message: str) -> str:
         )
     elif any(word in msg for word in ["principal", "staff", "faculty"]):
         return (
-            "PP International School has a team of 44+ qualified teachers.\n"
+            "PP International School has a team of qualified and experienced teachers.\n"
             "Our School Principal is Ms. Deepi Bector.\n\n"
             "We believe in practical-based learning and empower students "
             "to become representatives of a meaningful and value-based society.\n\n"
