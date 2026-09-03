@@ -201,7 +201,11 @@
     var form = new FormData();
     form.append("session_id", sessionId);
     return fetch("/api/voice-agent/end", { method: "POST", body: form, keepalive: !!keepalive })
-      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (r) {
+        if (r.ok) return r.json();
+        if (r.status === 404) return { status: "expired" };
+        return null;
+      })
       .catch(function () { return null; });
   }
   end.addEventListener("click", function () {
@@ -218,9 +222,13 @@
       setBusy(false);
       end.disabled = true;
       talk.textContent = "Done";
-      status.textContent = res.status === "nothing_to_send"
-        ? "Conversation ended."
-        : "Conversation ended. Your details are being sent to the school office.";
+      if (res.status === "expired") {
+        status.textContent = "This conversation expired before it could be sent. Please reload the page and tell us again.";
+      } else if (res.status === "nothing_to_send") {
+        status.textContent = "Conversation ended.";
+      } else {
+        status.textContent = "Conversation ended. Your details are being sent to the school office.";
+      }
     });
   });
   window.addEventListener("pagehide", function () { endNow(true); });

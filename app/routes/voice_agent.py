@@ -89,6 +89,8 @@ async def voice_agent_turn(
         return _too_many()
     session = va.get_session(session_id) if session_id else None
     if session is None:
+        if session_id:
+            return JSONResponse({"error": "This conversation has expired. Please reload the page."}, status_code=404)
         session = va.new_session(channel="web")
     if session.done:
         return JSONResponse({"error": "This conversation has ended. Start a new one."}, status_code=409)
