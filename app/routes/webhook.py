@@ -31,6 +31,7 @@ from app.services.route_duty_service import (
 )
 from app.services.email_service import send_email_async
 from app.services.bulk_service import pause_for_bot_reply, resume_after_bot_reply
+from app.services.voice_agent_service import whatsapp_voice_note_to_admin
 from app.services.openai_service import (
     generate_response,
     find_mentioned_teachers,
@@ -6642,6 +6643,8 @@ async def receive_cloud_api_message(request: Request):
                 voice_reply_text = _ct_reply
             else:
                 await send_whatsapp_message(reply_to, _ct_reply)
+                if voice_note_escalate:
+                    await whatsapp_voice_note_to_admin(sender, message_text, _ct_reply)
             await save_message(bot_phone, sender, _ct_reply, "whatsapp", "outgoing")
             return {"status": "ok"}
 
@@ -6731,6 +6734,8 @@ async def receive_cloud_api_message(request: Request):
                 voice_reply_text = _st_reply
             else:
                 await send_whatsapp_message(reply_to, _st_reply)
+                if voice_note_escalate:
+                    await whatsapp_voice_note_to_admin(sender, message_text, _st_reply)
             await save_message(bot_phone, sender, _st_reply, "whatsapp", "outgoing")
             return {"status": "ok"}
 
@@ -6881,7 +6886,7 @@ async def _answer_class_teacher_question(sender: str, text: str) -> str:
     entry = find_teacher_by_grade(text)
     if entry:
         return f"The class teacher of {entry['grade']} is {entry['teacher'].split('/')[0].strip()}."
-    children = await _lookup_parent_child_class(sender)
+    children = _children_named_in(await _lookup_parent_child_class(sender), text)
     parts = []
     for child in children:
         entry = find_teacher_by_grade(child.get("grade", ""))
@@ -6891,6 +6896,19 @@ async def _answer_class_teacher_question(sender: str, text: str) -> str:
                 f"{entry['teacher'].split('/')[0].strip()} as class teacher"
             )
     return (". ".join(parts) + ".") if parts else ""
+
+
+def _children_named_in(children: list, text: str) -> list:
+    """If the message names one of the parent's children, keep only that child."""
+    low = text.lower()
+    named = [
+        c for c in children
+        if any(
+            len(tok) >= 3 and re.search(rf"\b{re.escape(tok)}\b", low)
+            for tok in c.get("student_name", "").lower().split()
+        )
+    ]
+    return named or children
 
 
 def _is_subject_teacher_question(text: str) -> bool:
@@ -6905,7 +6923,7 @@ async def _answer_subject_teacher_question(sender: str, text: str) -> str:
 
     Returns "" when the parent, subject or teacher is not on record.
     """
-    children = await _lookup_parent_child_class(sender)
+    children = _children_named_in(await _lookup_parent_child_class(sender), text)
     if not children:
         return ""
     low = text.lower()
