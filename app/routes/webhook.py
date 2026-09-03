@@ -6632,11 +6632,24 @@ async def receive_cloud_api_message(request: Request):
             if parent_routed:
                 return {"status": "ok"}
 
+        # --- "Who is my child's class teacher?" is a question, not a forwarding request ---
+        if _is_class_teacher_question(message_text):
+            _ct_reply = await _answer_class_teacher_question(sender, message_text)
+            if not _ct_reply:
+                _ct_reply = _VOICE_NOTE_UNKNOWN_REPLY
+                voice_note_escalate = True
+            if voice_note_transcript:
+                voice_reply_text = _ct_reply
+            else:
+                await send_whatsapp_message(reply_to, _ct_reply)
+            await save_message(bot_phone, sender, _ct_reply, "whatsapp", "outgoing")
+            return {"status": "ok"}
+
         # --- Admin/teacher → Class Teacher forwarding ---
         # If sender is admin/teacher and message mentions "ct", "class teacher",
         # "ask teacher", "confirm from teacher", etc., forward to the class teacher
         # instead of GPT.
-        if _is_admin_panel(sender) or _is_teacher_phone(sender):
+        if (_is_admin_panel(sender) or _is_teacher_phone(sender)) and not voice_note_transcript:
             _ct_pattern = re.compile(
                 r'\b(?:ct|class\s*teacher|ask\s*(?:the\s*)?(?:ct|teacher)|'
                 r'confirm\s*(?:from|with)\s*(?:ct|teacher)|'
@@ -6850,6 +6863,34 @@ _SUBJECT_TEACHER_Q = re.compile(
     r"business|history|geography|political|psychology)\s+(teacher|ma'?am|sir|padhata|padhati))\b",
     re.IGNORECASE,
 )
+
+
+_CLASS_TEACHER_Q = re.compile(
+    r"(who|kaun|kon|कौन|which|name\s+of).{0,40}(class\s*teacher|\bct\b|क्लास\s*टीचर|क्लास्टीचर|कक्षा\s*(अध्यापक|शिक्षक))"
+    r"|(class\s*teacher|\bct\b|क्लास\s*टीचर|क्लास्टीचर).{0,40}(who|kaun|kon|कौन|है|hai)",
+    re.IGNORECASE,
+)
+
+
+def _is_class_teacher_question(text: str) -> bool:
+    return bool(_CLASS_TEACHER_Q.search(text.lower()))
+
+
+async def _answer_class_teacher_question(sender: str, text: str) -> str:
+    """Name the class teacher for the grade in the message or the sender's child. Name only."""
+    entry = find_teacher_by_grade(text)
+    if entry:
+        return f"The class teacher of {entry['grade']} is {entry['teacher'].split('/')[0].strip()}."
+    children = await _lookup_parent_child_class(sender)
+    parts = []
+    for child in children:
+        entry = find_teacher_by_grade(child.get("grade", ""))
+        if entry:
+            parts.append(
+                f"{child.get('student_name', 'your child')} ({entry['grade']}) has "
+                f"{entry['teacher'].split('/')[0].strip()} as class teacher"
+            )
+    return (". ".join(parts) + ".") if parts else ""
 
 
 def _is_subject_teacher_question(text: str) -> bool:
