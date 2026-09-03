@@ -223,6 +223,38 @@ async def _sarvam_tts(text: str, response_format: str) -> bytes | None:
     return base64.b64decode(audios[0]) if audios else None
 
 
+_SPOKEN_ENGLISH_PROMPT = (
+    "Rewrite the school chatbot reply below as it should be SPOKEN aloud to a parent, in English only. "
+    "Translate any Hindi or Hinglish to natural English. Keep every fact, name, phone number and time exactly. "
+    "Do not start with Namaste or any greeting word; begin directly with the answer. "
+    "Remove emojis, markdown, bullet symbols, links and 'reply with' menu instructions. "
+    "Use short plain sentences, at most three. Output only the rewritten text."
+)
+
+
+async def to_spoken_english(text: str) -> str:
+    """Turn a WhatsApp text reply into short spoken English for TTS. Falls back to a cleaned copy."""
+    cleaned = re.sub(r"[*_~`#>]", "", text).strip()
+    ai_client = get_client()
+    if ai_client is None or not cleaned:
+        return cleaned
+    try:
+        resp = await ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.2,
+            max_tokens=300,
+            messages=[
+                {"role": "system", "content": _SPOKEN_ENGLISH_PROMPT},
+                {"role": "user", "content": cleaned[:4000]},
+            ],
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        return out or cleaned
+    except Exception as e:
+        logger.error(f"Spoken-English rewrite failed: {e}")
+        return cleaned
+
+
 async def _openai_tts(text: str, response_format: str) -> bytes | None:
     ai_client = get_client()
     if ai_client is None:
