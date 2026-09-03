@@ -17,7 +17,10 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from xml.sax.saxutils import escape as xml_escape
 from zoneinfo import ZoneInfo
+
+import httpx
 
 from app.services.email_service import send_email_async
 from app.services.openai_service import (
@@ -31,6 +34,12 @@ logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
 ADMIN_EMAIL = os.getenv("VOICE_AGENT_ADMIN_EMAIL", "info@ppischool.in")
+AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY", "")
+AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "centralindia")
+AZURE_VOICE_EN = os.getenv("AZURE_SPEECH_VOICE_EN", "en-IN-NeerjaNeural")
+AZURE_VOICE_HI = os.getenv("AZURE_SPEECH_VOICE_HI", "hi-IN-SwaraNeural")
+_DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+
 TTS_MODEL = os.getenv("VOICE_AGENT_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("VOICE_AGENT_TTS_VOICE", "coral")
 TTS_INSTRUCTIONS = os.getenv(
@@ -43,7 +52,16 @@ SESSION_TTL_SECONDS = 30 * 60
 MAX_SESSIONS = 500
 EMAIL_RETRY_DELAYS = (5, 30, 120)
 DONE_MARKER = "[[DONE]]"
-SUMMARY_KEYS = ["parent_name", "child_name", "child_class", "phone", "query", "category", "urgency", "language"]
+SUMMARY_KEYS = [
+    "parent_name",
+    "child_name",
+    "child_class",
+    "phone",
+    "query",
+    "category",
+    "urgency",
+    "language",
+]
 
 SCHOOL_FACTS = """Facts about the school you may state confidently:
 - PP International School (PPIS): CBSE affiliated Senior Secondary School, affiliation no. 2730720.
@@ -103,6 +121,7 @@ Rules:
 - If the parent says goodbye or that there is nothing else, also end your reply with {marker}
 """
 
+
 def greeting() -> str:
     hour = datetime.now(IST).hour
     if hour < 12:
@@ -115,6 +134,7 @@ def greeting() -> str:
         f"{salute}, this is the PP International School assistant. "
         "Please tell me your name and your child's name and class, and how we can help you."
     )
+
 
 SUMMARY_PROMPT = """You are given a transcript of a conversation between a school voice assistant and a parent.
 Extract the details as JSON with exactly these keys:
@@ -144,11 +164,15 @@ _sessions: dict[str, VoiceSession] = {}
 
 def _purge_sessions() -> None:
     now = time.time()
-    stale = [k for k, s in _sessions.items() if now - s.updated_at > SESSION_TTL_SECONDS]
+    stale = [
+        k for k, s in _sessions.items() if now - s.updated_at > SESSION_TTL_SECONDS
+    ]
     for k in stale:
         _sessions.pop(k, None)
     if len(_sessions) > MAX_SESSIONS:
-        for k in sorted(_sessions, key=lambda k: _sessions[k].updated_at)[: len(_sessions) - MAX_SESSIONS]:
+        for k in sorted(_sessions, key=lambda k: _sessions[k].updated_at)[
+            : len(_sessions) - MAX_SESSIONS
+        ]:
             _sessions.pop(k, None)
 
 
@@ -189,22 +213,61 @@ async def agent_reply(session: VoiceSession, user_text: str) -> tuple[str, bool]
     return reply, done
 
 
-async def synthesize_speech(text: str, response_format: str = "mp3") -> bytes | None:
-    """Text to speech with OpenAI. Returns audio bytes or None."""
+async def _azure_tts(text: str, response_format: str) -> bytes | None:
+    """Azure Speech REST. Indian female voice; Hindi text goes to the Hindi voice."""
+    voice = AZURE_VOICE_HI if _DEVANAGARI.search(text) else AZURE_VOICE_EN
+    lang = voice[:5]
+    ssml = (
+        f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang}">'
+        f'<voice name="{voice}"><prosody rate="-5%">{xml_escape(text)}</prosody></voice></speak>'
+    )
+    fmt = (
+        "ogg-24khz-16bit-mono-opus"
+        if response_format == "opus"
+        else "audio-24khz-48kbitrate-mono-mp3"
+    )
+    url = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
+    headers = {
+        "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": fmt,
+        "User-Agent": "ppis-voice-agent",
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(url, content=ssml.encode("utf-8"), headers=headers)
+    if resp.status_code != 200:
+        logger.error(f"Azure TTS failed: {resp.status_code} {resp.text[:200]}")
+        return None
+    return resp.content
+
+
+async def _openai_tts(text: str, response_format: str) -> bytes | None:
     ai_client = get_client()
-    if ai_client is None or not text.strip():
+    if ai_client is None:
         return None
     kwargs: dict = {
         "model": TTS_MODEL,
         "voice": TTS_VOICE,
-        "input": text[:4000],
+        "input": text,
         "response_format": response_format,
     }
     if TTS_INSTRUCTIONS and TTS_MODEL.startswith("gpt-"):
         kwargs["instructions"] = TTS_INSTRUCTIONS
+    resp = await ai_client.audio.speech.create(**kwargs)
+    return resp.content
+
+
+async def synthesize_speech(text: str, response_format: str = "mp3") -> bytes | None:
+    """Text to speech. Azure (Indian voice) when configured, else OpenAI. Returns audio bytes or None."""
+    text = text.strip()[:4000]
+    if not text:
+        return None
     try:
-        resp = await ai_client.audio.speech.create(**kwargs)
-        return resp.content
+        if AZURE_SPEECH_KEY:
+            audio = await _azure_tts(text, response_format)
+            if audio:
+                return audio
+        return await _openai_tts(text, response_format)
     except Exception as e:
         logger.error(f"TTS failed: {e}")
         return None
@@ -249,7 +312,9 @@ async def summarise_conversation(history: list[dict[str, str]]) -> dict[str, str
     return summary
 
 
-def build_admin_email(session: VoiceSession, summary: dict[str, str]) -> tuple[str, str]:
+def build_admin_email(
+    session: VoiceSession, summary: dict[str, str]
+) -> tuple[str, str]:
     when = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
     channel = {"web": "Website voice assistant", "whatsapp": "WhatsApp voice note"}.get(
         session.channel, session.channel
@@ -288,7 +353,9 @@ async def email_admin(session: VoiceSession) -> bool:
         for attempt, delay in enumerate((0,) + EMAIL_RETRY_DELAYS):
             if delay:
                 await asyncio.sleep(delay)
-            if await send_email_async(ADMIN_EMAIL, subject, body, sender_name="PPIS Voice Agent"):
+            if await send_email_async(
+                ADMIN_EMAIL, subject, body, sender_name="PPIS Voice Agent"
+            ):
                 session.emailed = True
                 return True
             logger.error(
@@ -307,9 +374,13 @@ async def transcribe_upload(audio_bytes: bytes, content_type: str) -> str | None
     return await transcribe_audio(audio_bytes=audio_bytes, content_type=content_type)
 
 
-async def whatsapp_voice_note_to_admin(sender: str, transcript: str, reply: str) -> bool:
+async def whatsapp_voice_note_to_admin(
+    sender: str, transcript: str, reply: str
+) -> bool:
     """Mail the admin one WhatsApp voice note and the bot's reply."""
-    session = VoiceSession(session_id=f"wa-{sender}-{int(time.time())}", channel="whatsapp", contact=sender)
+    session = VoiceSession(
+        session_id=f"wa-{sender}-{int(time.time())}", channel="whatsapp", contact=sender
+    )
     session.history = [
         {"role": "user", "content": transcript},
         {"role": "assistant", "content": reply},
