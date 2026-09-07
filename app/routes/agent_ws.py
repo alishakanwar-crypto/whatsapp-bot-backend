@@ -279,7 +279,9 @@ def _record_auto_update(data: dict, hello: bool = False) -> None:
         )
 
 
-def _record_camera_health(data: dict) -> None:
+def _record_camera_health(
+    data: dict, websocket: WebSocket | None = None
+) -> None:
     """Remember which classroom cameras are giving parents nothing.
 
     A dead camera on a working recorder looks from the cloud exactly like a
@@ -289,8 +291,14 @@ def _record_camera_health(data: dict) -> None:
     cameras = data.get("camera_health")
     if cameras is None:
         return
+    if websocket is not None and websocket is not _agent_ws:
+        # A restarted agent overlaps its predecessor for a few seconds, and a
+        # last pong from the replaced process would otherwise describe cameras
+        # by a count of failures nobody is adding to any more.
+        return
+    previous = _health_state.get("cameras_not_answering", [])
     _health_state["cameras_not_answering"] = cameras
-    if cameras:
+    if cameras and cameras != previous:
         logger.warning(
             "Classroom cameras giving no picture: %s",
             ", ".join(
@@ -301,9 +309,11 @@ def _record_camera_health(data: dict) -> None:
         )
 
 
-def _record_recorder_health(data: dict) -> None:
+def _record_recorder_health(
+    data: dict, websocket: WebSocket | None = None
+) -> None:
     """Remember which recorders the agent is currently bypassing ISAPI on."""
-    _record_camera_health(data)
+    _record_camera_health(data, websocket)
     health = data.get("dvr_health")
     if health is None:
         return
@@ -830,7 +840,7 @@ async def agent_websocket(websocket: WebSocket):
                     data.get("started_at_ist") or "unknown",
                 )
                 _record_agent_version(data)
-                _record_recorder_health(data)
+                _record_recorder_health(data, websocket)
                 _record_auto_update(data, hello=True)
 
             # --- v2 protocol: individual images ---
@@ -864,7 +874,7 @@ async def agent_websocket(websocket: WebSocket):
                     logger.warning(f"Snapshot response for unknown/expired request: {request_id}")
 
             elif msg_type == "pong":
-                _record_recorder_health(data)
+                _record_recorder_health(data, websocket)
                 _record_auto_update(data)
 
             elif msg_type == "test_result":
