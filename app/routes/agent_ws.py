@@ -310,6 +310,11 @@ def _record_camera_health(
         )
 
 
+# The worst delay already said out loud, so one bad minute is not logged on
+# every keepalive for the next five.
+_agent_lag_warned_at_seconds = 0.0
+
+
 def _record_agent_lag(data: dict, websocket: WebSocket | None = None) -> None:
     """Remember how long the campus agent's own work delays a request.
 
@@ -317,20 +322,29 @@ def _record_agent_lag(data: dict, websocket: WebSocket | None = None) -> None:
     twenty seconds late. Without this number a slow morning gets blamed on the
     cameras, and the wrong thing gets looked at.
     """
+    global _agent_lag_warned_at_seconds
     lag = data.get("agent_lag")
     if lag is None:
         return
     if websocket is not None and websocket is not _agent_ws:
         return
-    previous = _health_state.get("agent_lag") or {}
     _health_state["agent_lag"] = lag
     worst = float(lag.get("worst_seconds") or 0)
-    if worst >= 2.0 and lag != previous:
-        logger.warning(
-            "Campus agent's own work delayed requests by up to %.1fs "
-            "(usually %.2fs) in the last few minutes",
-            worst, float(lag.get("usual_seconds") or 0),
-        )
+    if worst < 2.0:
+        # The agent's window has rolled past the delay; the next one is news.
+        _agent_lag_warned_at_seconds = 0.0
+        return
+    # The sample count changes on every keepalive, so the reading itself
+    # cannot decide this: one incident would be logged all day. Say it once,
+    # and again only when the delay is materially worse.
+    if worst < _agent_lag_warned_at_seconds * 2:
+        return
+    _agent_lag_warned_at_seconds = worst
+    logger.warning(
+        "Campus agent's own work delayed requests by up to %.1fs "
+        "(usually %.2fs) in the last few minutes",
+        worst, float(lag.get("usual_seconds") or 0),
+    )
 
 
 def _record_recorder_health(
