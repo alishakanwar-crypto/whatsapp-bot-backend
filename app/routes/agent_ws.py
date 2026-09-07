@@ -233,8 +233,14 @@ def _record_agent_version(data: dict) -> None:
     A restart that leaves the old process alive keeps serving pre-pull code, so
     this is the only way to tell a bad fix from a fix that never took effect.
     """
+    global _agent_lag_warned_at_seconds
+    started = data.get("started_at_ist", "")
+    if started and started != _health_state.get("agent_started_at_ist", ""):
+        # A different process: the delay the last one caused says nothing
+        # about this one, and its first bad minute has to be heard.
+        _agent_lag_warned_at_seconds = 0.0
     _health_state["agent_code_commit"] = data.get("code_commit", "")
-    _health_state["agent_started_at_ist"] = data.get("started_at_ist", "")
+    _health_state["agent_started_at_ist"] = started
 
 
 def _scrub_update_error(text: str) -> str:

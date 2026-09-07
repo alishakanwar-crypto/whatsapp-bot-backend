@@ -9,11 +9,13 @@ LAG = {"worst_seconds": 21.4, "usual_seconds": 0.004, "samples": 300}
 
 class AgentLagHealthTests(unittest.TestCase):
     def setUp(self):
+        self._started = agent_ws._health_state.get("agent_started_at_ist", "")
         agent_ws._health_state.pop("agent_lag", None)
         agent_ws._agent_lag_warned_at_seconds = 0.0
 
     def tearDown(self):
         agent_ws._health_state.pop("agent_lag", None)
+        agent_ws._health_state["agent_started_at_ist"] = self._started
         agent_ws._agent_lag_warned_at_seconds = 0.0
 
     def test_health_starts_with_no_lag_reported(self):
@@ -90,6 +92,43 @@ class AgentLagHealthTests(unittest.TestCase):
             if "delayed requests by up to" in line
         ]
         self.assertEqual(len(said), 2, logs.output)
+
+    def test_a_new_agents_first_bad_minute_is_logged(self):
+        """A restarted process is not judged by the old one's worst delay."""
+        with self.assertLogs(agent_ws.logger, level=logging.WARNING) as logs:
+            agent_ws._record_agent_version(
+                {"started_at_ist": "07-09-2026 17:40:05 IST"}
+            )
+            agent_ws._record_agent_lag({"agent_lag": LAG})
+            agent_ws._record_agent_version(
+                {"started_at_ist": "07-09-2026 18:05:11 IST"}
+            )
+            agent_ws._record_agent_lag(
+                {"agent_lag": dict(LAG, worst_seconds=4.0)}
+            )
+
+        said = [
+            line for line in logs.output
+            if "delayed requests by up to" in line
+        ]
+        self.assertEqual(len(said), 2, logs.output)
+
+    def test_a_reconnect_by_the_same_agent_does_not_repeat_the_warning(self):
+        with self.assertLogs(agent_ws.logger, level=logging.WARNING) as logs:
+            agent_ws._record_agent_version(
+                {"started_at_ist": "07-09-2026 17:40:05 IST"}
+            )
+            agent_ws._record_agent_lag({"agent_lag": LAG})
+            agent_ws._record_agent_version(
+                {"started_at_ist": "07-09-2026 17:40:05 IST"}
+            )
+            agent_ws._record_agent_lag({"agent_lag": dict(LAG, samples=305)})
+
+        said = [
+            line for line in logs.output
+            if "delayed requests by up to" in line
+        ]
+        self.assertEqual(len(said), 1, logs.output)
 
     def test_a_healthy_reading_is_not_logged(self):
         with self.assertLogs(agent_ws.logger, level=logging.WARNING) as logs:
