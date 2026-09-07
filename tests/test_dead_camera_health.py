@@ -1,3 +1,4 @@
+import logging
 import unittest
 
 from app.routes import agent_ws
@@ -50,6 +51,71 @@ class DeadCameraHealthTests(unittest.TestCase):
         self.assertEqual(
             len(agent_ws.get_health_state()["cameras_not_answering"]), 1
         )
+
+
+class ReplacedAgentTests(unittest.TestCase):
+    def setUp(self):
+        agent_ws._health_state.pop("cameras_not_answering", None)
+        self._live = agent_ws._agent_ws
+
+    def tearDown(self):
+        agent_ws._agent_ws = self._live
+        agent_ws._health_state.pop("cameras_not_answering", None)
+
+    def test_a_replaced_agents_last_pong_is_ignored(self):
+        """Its failure counts stopped being added to when it was replaced."""
+        live = object()
+        replaced = object()
+        agent_ws._agent_ws = live
+        agent_ws._record_recorder_health({"camera_health": []}, live)
+
+        agent_ws._record_recorder_health({"camera_health": [CAMERA]}, replaced)
+
+        self.assertEqual(
+            agent_ws.get_health_state()["cameras_not_answering"], []
+        )
+
+    def test_the_live_agents_report_is_kept(self):
+        live = object()
+        agent_ws._agent_ws = live
+
+        agent_ws._record_recorder_health({"camera_health": [CAMERA]}, live)
+
+        self.assertEqual(
+            len(agent_ws.get_health_state()["cameras_not_answering"]), 1
+        )
+
+
+class RepeatedWarningTests(unittest.TestCase):
+    def setUp(self):
+        agent_ws._health_state.pop("cameras_not_answering", None)
+
+    def tearDown(self):
+        agent_ws._health_state.pop("cameras_not_answering", None)
+
+    def test_the_same_camera_is_not_logged_on_every_keepalive(self):
+        with self.assertLogs(agent_ws.logger, level=logging.WARNING) as logs:
+            agent_ws._record_camera_health({"camera_health": [CAMERA]})
+            agent_ws._record_camera_health({"camera_health": [CAMERA]})
+            agent_ws._record_camera_health({"camera_health": [CAMERA]})
+
+        said = [
+            line for line in logs.output
+            if "Classroom cameras giving no picture" in line
+        ]
+        self.assertEqual(len(said), 1, logs.output)
+
+    def test_a_changed_report_is_logged_again(self):
+        worse = dict(CAMERA, failures_in_a_row=9)
+        with self.assertLogs(agent_ws.logger, level=logging.WARNING) as logs:
+            agent_ws._record_camera_health({"camera_health": [CAMERA]})
+            agent_ws._record_camera_health({"camera_health": [worse]})
+
+        said = [
+            line for line in logs.output
+            if "Classroom cameras giving no picture" in line
+        ]
+        self.assertEqual(len(said), 2, logs.output)
 
 
 if __name__ == "__main__":
