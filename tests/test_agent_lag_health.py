@@ -130,6 +130,33 @@ class AgentLagHealthTests(unittest.TestCase):
         ]
         self.assertEqual(len(said), 1, logs.output)
 
+    def test_a_replaced_agents_late_hello_does_not_repeat_the_warning(self):
+        """Its hello arrives after the live process has already been heard."""
+        live = object()
+        previous = agent_ws._agent_ws
+        agent_ws._agent_ws = live
+        try:
+            with self.assertLogs(agent_ws.logger, level=logging.WARNING) as lg:
+                agent_ws._record_agent_version(
+                    {"started_at_ist": "07-09-2026 18:05:11 IST"}, live
+                )
+                agent_ws._record_agent_lag({"agent_lag": LAG}, live)
+                agent_ws._record_agent_version(
+                    {"started_at_ist": "07-09-2026 17:40:05 IST"}, object()
+                )
+                agent_ws._record_agent_lag({"agent_lag": LAG}, live)
+        finally:
+            agent_ws._agent_ws = previous
+
+        said = [
+            line for line in lg.output if "delayed requests by up to" in line
+        ]
+        self.assertEqual(len(said), 1, lg.output)
+        self.assertEqual(
+            agent_ws.get_health_state()["agent_started_at_ist"],
+            "07-09-2026 18:05:11 IST",
+        )
+
     def test_a_healthy_reading_is_not_logged(self):
         with self.assertLogs(agent_ws.logger, level=logging.WARNING) as logs:
             agent_ws.logger.warning("something else")
