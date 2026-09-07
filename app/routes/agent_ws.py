@@ -216,6 +216,7 @@ def get_health_state() -> dict:
         "admin_alerted": _health_state["admin_alerted"],
         "pending_requests": len(_pending_requests),
         "recorders_on_fallback": _health_state.get("recorders_on_fallback", []),
+        "cameras_not_answering": _health_state.get("cameras_not_answering", []),
         "recorders_reported_at_ist": _health_state.get(
             "recorders_reported_at_ist", ""
         ),
@@ -278,8 +279,31 @@ def _record_auto_update(data: dict, hello: bool = False) -> None:
         )
 
 
+def _record_camera_health(data: dict) -> None:
+    """Remember which classroom cameras are giving parents nothing.
+
+    A dead camera on a working recorder looks from the cloud exactly like a
+    busy recorder, so parents of that one class kept being told the camera was
+    unavailable while nobody knew which camera to go and look at.
+    """
+    cameras = data.get("camera_health")
+    if cameras is None:
+        return
+    _health_state["cameras_not_answering"] = cameras
+    if cameras:
+        logger.warning(
+            "Classroom cameras giving no picture: %s",
+            ", ".join(
+                f"{c.get('camera')} ({c.get('ip')} ch{c.get('channel')}, "
+                f"{c.get('failures_in_a_row')} in a row: {c.get('reason')})"
+                for c in cameras
+            ),
+        )
+
+
 def _record_recorder_health(data: dict) -> None:
     """Remember which recorders the agent is currently bypassing ISAPI on."""
+    _record_camera_health(data)
     health = data.get("dvr_health")
     if health is None:
         return
