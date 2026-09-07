@@ -217,6 +217,7 @@ def get_health_state() -> dict:
         "pending_requests": len(_pending_requests),
         "recorders_on_fallback": _health_state.get("recorders_on_fallback", []),
         "cameras_not_answering": _health_state.get("cameras_not_answering", []),
+        "agent_lag": _health_state.get("agent_lag", {}),
         "recorders_reported_at_ist": _health_state.get(
             "recorders_reported_at_ist", ""
         ),
@@ -309,11 +310,35 @@ def _record_camera_health(
         )
 
 
+def _record_agent_lag(data: dict, websocket: WebSocket | None = None) -> None:
+    """Remember how long the campus agent's own work delays a request.
+
+    A photo whose camera answers in under a second can still reach a parent
+    twenty seconds late. Without this number a slow morning gets blamed on the
+    cameras, and the wrong thing gets looked at.
+    """
+    lag = data.get("agent_lag")
+    if lag is None:
+        return
+    if websocket is not None and websocket is not _agent_ws:
+        return
+    previous = _health_state.get("agent_lag") or {}
+    _health_state["agent_lag"] = lag
+    worst = float(lag.get("worst_seconds") or 0)
+    if worst >= 2.0 and lag != previous:
+        logger.warning(
+            "Campus agent's own work delayed requests by up to %.1fs "
+            "(usually %.2fs) in the last few minutes",
+            worst, float(lag.get("usual_seconds") or 0),
+        )
+
+
 def _record_recorder_health(
     data: dict, websocket: WebSocket | None = None
 ) -> None:
     """Remember which recorders the agent is currently bypassing ISAPI on."""
     _record_camera_health(data, websocket)
+    _record_agent_lag(data, websocket)
     health = data.get("dvr_health")
     if health is None:
         return
