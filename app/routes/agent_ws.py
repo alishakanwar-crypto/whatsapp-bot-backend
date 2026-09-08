@@ -227,14 +227,27 @@ def get_health_state() -> dict:
     }
 
 
-def _record_agent_version(data: dict) -> None:
+def _record_agent_version(
+    data: dict, websocket: WebSocket | None = None
+) -> None:
     """Remember which commit the connected agent is actually running.
 
     A restart that leaves the old process alive keeps serving pre-pull code, so
     this is the only way to tell a bad fix from a fix that never took effect.
     """
+    global _agent_lag_warned_at_seconds
+    if websocket is not None and websocket is not _agent_ws:
+        # A replaced process overlaps its successor for a few seconds, and its
+        # late hello must not describe the running commit or clear the delay
+        # already reported for the live one.
+        return
+    started = data.get("started_at_ist", "")
+    if started and started != _health_state.get("agent_started_at_ist", ""):
+        # A different process: the delay the last one caused says nothing
+        # about this one, and its first bad minute has to be heard.
+        _agent_lag_warned_at_seconds = 0.0
     _health_state["agent_code_commit"] = data.get("code_commit", "")
-    _health_state["agent_started_at_ist"] = data.get("started_at_ist", "")
+    _health_state["agent_started_at_ist"] = started
 
 
 def _scrub_update_error(text: str) -> str:
@@ -878,7 +891,7 @@ async def agent_websocket(websocket: WebSocket):
                     data.get("code_commit") or "unknown",
                     data.get("started_at_ist") or "unknown",
                 )
-                _record_agent_version(data)
+                _record_agent_version(data, websocket)
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data, hello=True)
 
