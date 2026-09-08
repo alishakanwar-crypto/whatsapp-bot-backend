@@ -6911,6 +6911,7 @@ async def try_answer_pending_class_teacher(sender: str, text: str) -> str:
     else:
         reply = await _answer_class_teacher_question(sender, combined)
     if reply == _CT_ASK_WHICH_CHILD:
+        await save_pending_query(sender, pending["reply_to"], pending["original_query"])
         return "Sorry, I could not match that. Please tell me the child's name and class, for example Riya, 5A."
     await delete_pending_query(sender)
     return reply or _VOICE_NOTE_UNKNOWN_REPLY
