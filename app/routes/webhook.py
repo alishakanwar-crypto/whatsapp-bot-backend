@@ -665,6 +665,26 @@ async def save_pending_query(sender_phone: str, reply_to: str, original_query: s
         await db.close()
 
 
+async def refresh_pending_query(sender_phone: str, reply_to: str,
+                                original_query: str) -> None:
+    """Restart the one-hour clock on one pending row, if it is still the row.
+
+    Unlike save_pending_query this touches nothing else, so a reply that
+    arrived meanwhile and answered or replaced the question is not undone.
+    """
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE pending_queries
+               SET created_at = CURRENT_TIMESTAMP
+               WHERE sender_phone = ? AND reply_to = ? AND original_query = ?""",
+            (sender_phone, reply_to, original_query),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def get_pending_query(sender_phone: str) -> dict | None:
     """Get pending query for a sender (within last 1 hour)."""
     db = await get_db()
@@ -6911,7 +6931,7 @@ async def try_answer_pending_class_teacher(sender: str, text: str) -> str:
     else:
         reply = await _answer_class_teacher_question(sender, combined)
     if reply == _CT_ASK_WHICH_CHILD:
-        await save_pending_query(sender, pending["reply_to"], pending["original_query"])
+        await refresh_pending_query(sender, pending["reply_to"], pending["original_query"])
         return "Sorry, I could not match that. Please tell me the child's name and class, for example Riya, 5A."
     await delete_pending_query(sender)
     return reply or _VOICE_NOTE_UNKNOWN_REPLY
