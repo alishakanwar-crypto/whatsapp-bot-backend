@@ -35,11 +35,15 @@ async def verify_agent_secret(x_agent_secret: str = Header("")) -> None:
 
 @router.get("/dvrs", dependencies=[Depends(verify_agent_secret)])
 async def list_dvrs():
-    """Return all DVR entries."""
+    """Return all DVR entries, without their recorder passwords.
+
+    The agent takes its passwords from /full; nothing else needs them, and
+    this endpoint answers anyone while no agent secret is configured.
+    """
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, name, ip, port, username, password, channels FROM agent_dvrs ORDER BY id"
+            "SELECT id, name, ip, port, username, channels FROM agent_dvrs ORDER BY id"
         )
         rows = await cursor.fetchall()
         dvrs = [dict(r) for r in rows]
