@@ -29,9 +29,9 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_plan_preserves_all_41_latest_revised_source_rows(self):
-        self.assertEqual(len(reminders.SHOWCASES), 41)
-        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 18)
+    def test_plan_preserves_all_63_latest_revised_source_rows(self):
+        self.assertEqual(len(reminders.SHOWCASES), 63)
+        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 31)
         self.assertTrue(
             any(
                 item.grade_class == "Nursery"
@@ -70,6 +70,24 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item.grade_class for item in due[date(2026, 8, 3)]],
             ["Nursery", "Prep", "Grade VI"],
+        )
+
+    def test_diwali_reminder_names_every_class_presenting_that_day(self):
+        due = reminders.due_showcases(date(2026, 11, 2))
+
+        self.assertEqual(set(due), {date(2026, 11, 5)})
+        self.assertEqual(
+            [item.grade_class for item in due[date(2026, 11, 5)]],
+            ["Nursery", "Prep", "Grade II"],
+        )
+
+    def test_christmas_carol_reminder_goes_out_three_days_before(self):
+        due = reminders.due_showcases(date(2026, 12, 21))
+
+        self.assertEqual(set(due), {date(2026, 12, 24)})
+        self.assertIn(
+            "Grade II — Christmas: Carol Mashup",
+            reminders.format_showcase_details(due[date(2026, 12, 24)]),
         )
 
     def test_selects_exactly_three_day_lead_time(self):
