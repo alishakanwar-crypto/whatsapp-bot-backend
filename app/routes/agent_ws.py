@@ -224,6 +224,9 @@ def get_health_state() -> dict:
         "agent_code_commit": _health_state.get("agent_code_commit", ""),
         "agent_started_at_ist": _health_state.get("agent_started_at_ist", ""),
         "agent_auto_update": _health_state.get("agent_auto_update", {}),
+        "agent_config_key_refused": _health_state.get(
+            "agent_config_key_refused", False
+        ),
     }
 
 
@@ -894,6 +897,14 @@ async def agent_websocket(websocket: WebSocket):
                 _record_agent_version(data, websocket)
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data, hello=True)
+                refused = bool(data.get("config_key_refused"))
+                _health_state["agent_config_key_refused"] = refused
+                if refused:
+                    logger.warning(
+                        "Campus agent's key was refused for config; it is "
+                        "running on a cached config and will not see "
+                        "recorder or camera changes."
+                    )
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
