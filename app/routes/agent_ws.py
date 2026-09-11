@@ -225,6 +225,7 @@ def get_health_state() -> dict:
         "agent_started_at_ist": _health_state.get("agent_started_at_ist", ""),
         "agent_auto_update": _health_state.get("agent_auto_update", {}),
         "agent_previous_run": _health_state.get("agent_previous_run", {}),
+        "agent_ws_link": _health_state.get("agent_ws_link", {}),
     }
 
 
@@ -318,6 +319,27 @@ def _record_previous_run(data: dict) -> None:
             kept["exit_code"] or "unknown",
             kept["last_error"] or "nothing said",
         )
+
+
+def _record_ws_link(data: dict) -> None:
+    """Keep the agent's own view of the link beside ours.
+
+    The two views disagreeing is the whole diagnosis: an agent that believes
+    it is connected while we cannot see it is a socket problem, and an agent
+    that keeps rebuilding a link we can see is the agent misreading its own
+    library.
+    """
+    link = data.get("ws_link")
+    if not isinstance(link, dict):
+        return
+    _health_state["agent_ws_link"] = {
+        "connected": bool(link.get("connected")),
+        "liveness_basis": str(link.get("liveness_basis", ""))[:40],
+        "silent_seconds": link.get("silent_seconds"),
+        "recycles": link.get("recycles"),
+        "offline_seconds": link.get("offline_seconds"),
+        "library_version": str(link.get("library_version", ""))[:20],
+    }
 
 
 def _record_camera_health(
@@ -922,6 +944,7 @@ async def agent_websocket(websocket: WebSocket):
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data, hello=True)
                 _record_previous_run(data)
+                _record_ws_link(data)
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
@@ -956,6 +979,7 @@ async def agent_websocket(websocket: WebSocket):
             elif msg_type == "pong":
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data)
+                _record_ws_link(data)
 
             elif msg_type == "test_result":
                 logger.info(f"DVR test result: {data}")
