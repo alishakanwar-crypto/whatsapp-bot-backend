@@ -226,6 +226,9 @@ def get_health_state() -> dict:
         "agent_auto_update": _health_state.get("agent_auto_update", {}),
         "agent_previous_run": _health_state.get("agent_previous_run", {}),
         "agent_ws_link": _health_state.get("agent_ws_link", {}),
+        "agent_config_key_refused": _health_state.get(
+            "agent_config_key_refused", False
+        ),
     }
 
 
@@ -295,7 +298,28 @@ def _record_auto_update(data: dict, hello: bool = False) -> None:
         )
 
 
-def _record_previous_run(data: dict) -> None:
+def _ended_how(last_error: str, exit_code: str) -> str:
+    """What killed the previous run, in one word fit for a public endpoint.
+
+    The log line itself stays in our own logs: a traceback quotes whatever the
+    agent was holding at the time, and this endpoint needs no password.
+    """
+    if "Traceback" in last_error:
+        return "traceback"
+    if "[CRITICAL]" in last_error:
+        return "critical error"
+    if "[ERROR]" in last_error:
+        return "error"
+    if exit_code and exit_code != "0":
+        return f"exit code {exit_code}"
+    if exit_code == "0":
+        return "stopped without an error"
+    return ""
+
+
+def _record_previous_run(
+    data: dict, websocket: WebSocket | None = None
+) -> None:
     """Remember how the agent's last run ended, as that run cannot say so.
 
     A campus agent that dies is restarted by its wrapper, and from here that
@@ -303,41 +327,60 @@ def _record_previous_run(data: dict) -> None:
     logs on the campus PC, where nobody is when it matters, so the new process
     brings the tail of them with its hello.
     """
+    if websocket is not None and websocket is not _agent_ws:
+        # A replaced process overlaps its successor for a few seconds, and its
+        # late hello must not describe how the live one started.
+        return
     previous = data.get("previous_run")
     if not isinstance(previous, dict):
         return
-    kept = {
-        "ended_at": str(previous.get("ended_at", ""))[:40],
-        "exit_code": str(previous.get("exit_code", ""))[:10],
-        "last_error": _scrub_update_error(str(previous.get("last_error", ""))),
+    ended_at = str(previous.get("ended_at", ""))[:40]
+    exit_code = str(previous.get("exit_code", ""))[:10]
+    last_error = _scrub_update_error(str(previous.get("last_error", "")))
+    _health_state["agent_previous_run"] = {
+        "ended_at": ended_at,
+        "exit_code": exit_code,
+        # Only the kind of ending is public; the line itself is logged.
+        "ended_how": _ended_how(last_error, exit_code),
     }
-    _health_state["agent_previous_run"] = kept
-    if kept["last_error"] or kept["exit_code"]:
+    if last_error or exit_code:
         logger.warning(
             "Campus agent's previous run ended at %s with exit code %s: %s",
-            kept["ended_at"] or "unknown",
-            kept["exit_code"] or "unknown",
-            kept["last_error"] or "nothing said",
+            ended_at or "unknown",
+            exit_code or "unknown",
+            last_error or "nothing said",
         )
 
 
-def _record_ws_link(data: dict) -> None:
+def _number(value: object) -> float | None:
+    """A reading kept only when it really is a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return round(float(value), 1)
+
+
+def _record_ws_link(
+    data: dict, websocket: WebSocket | None = None
+) -> None:
     """Keep the agent's own view of the link beside ours.
 
     The two views disagreeing is the whole diagnosis: an agent that believes
     it is connected while we cannot see it is a socket problem, and an agent
     that keeps rebuilding a link we can see is the agent misreading its own
-    library.
+    library. The view means nothing once its own socket is gone, so a replaced
+    process is ignored here and a closed socket's last word is dropped.
     """
+    if websocket is not None and websocket is not _agent_ws:
+        return
     link = data.get("ws_link")
     if not isinstance(link, dict):
         return
     _health_state["agent_ws_link"] = {
         "connected": bool(link.get("connected")),
         "liveness_basis": str(link.get("liveness_basis", ""))[:40],
-        "silent_seconds": link.get("silent_seconds"),
-        "recycles": link.get("recycles"),
-        "offline_seconds": link.get("offline_seconds"),
+        "silent_seconds": _number(link.get("silent_seconds")),
+        "recycles": _number(link.get("recycles")),
+        "offline_seconds": _number(link.get("offline_seconds")),
         "library_version": str(link.get("library_version", ""))[:20],
     }
 
@@ -943,8 +986,16 @@ async def agent_websocket(websocket: WebSocket):
                 _record_agent_version(data, websocket)
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data, hello=True)
-                _record_previous_run(data)
-                _record_ws_link(data)
+                _record_previous_run(data, websocket)
+                _record_ws_link(data, websocket)
+                refused = bool(data.get("config_key_refused"))
+                _health_state["agent_config_key_refused"] = refused
+                if refused:
+                    logger.warning(
+                        "Campus agent's key was refused for config; it is "
+                        "running on a cached config and will not see "
+                        "recorder or camera changes."
+                    )
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
@@ -979,7 +1030,7 @@ async def agent_websocket(websocket: WebSocket):
             elif msg_type == "pong":
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data)
-                _record_ws_link(data)
+                _record_ws_link(data, websocket)
 
             elif msg_type == "test_result":
                 logger.info(f"DVR test result: {data}")
@@ -1020,6 +1071,10 @@ async def agent_websocket(websocket: WebSocket):
                 _agent_websockets[-1] if _agent_websockets else None
             )
             _health_state["last_disconnected_at"] = time.time()
+            # The agent's own view of a link that is now closed would sit
+            # beside our "not connected" and make every ordinary restart look
+            # like the half-open socket this field exists to catch.
+            _health_state["agent_ws_link"] = {}
 
         disconnected_requests = [
             req_id
