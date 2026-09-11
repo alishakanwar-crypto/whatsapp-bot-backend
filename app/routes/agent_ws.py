@@ -224,6 +224,7 @@ def get_health_state() -> dict:
         "agent_code_commit": _health_state.get("agent_code_commit", ""),
         "agent_started_at_ist": _health_state.get("agent_started_at_ist", ""),
         "agent_auto_update": _health_state.get("agent_auto_update", {}),
+        "agent_previous_run": _health_state.get("agent_previous_run", {}),
     }
 
 
@@ -290,6 +291,32 @@ def _record_auto_update(data: dict, hello: bool = False) -> None:
             "Campus agent will not pick up merged fixes by itself "
             "(enabled=%s, wrapper=%s)",
             state.get("enabled"), state.get("wrapper"),
+        )
+
+
+def _record_previous_run(data: dict) -> None:
+    """Remember how the agent's last run ended, as that run cannot say so.
+
+    A campus agent that dies is restarted by its wrapper, and from here that
+    looks like a quiet gap followed by a fresh process. The reason sits in the
+    logs on the campus PC, where nobody is when it matters, so the new process
+    brings the tail of them with its hello.
+    """
+    previous = data.get("previous_run")
+    if not isinstance(previous, dict):
+        return
+    kept = {
+        "ended_at": str(previous.get("ended_at", ""))[:40],
+        "exit_code": str(previous.get("exit_code", ""))[:10],
+        "last_error": _scrub_update_error(str(previous.get("last_error", ""))),
+    }
+    _health_state["agent_previous_run"] = kept
+    if kept["last_error"] or kept["exit_code"]:
+        logger.warning(
+            "Campus agent's previous run ended at %s with exit code %s: %s",
+            kept["ended_at"] or "unknown",
+            kept["exit_code"] or "unknown",
+            kept["last_error"] or "nothing said",
         )
 
 
@@ -894,6 +921,7 @@ async def agent_websocket(websocket: WebSocket):
                 _record_agent_version(data, websocket)
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data, hello=True)
+                _record_previous_run(data)
 
             # --- v2 protocol: individual images ---
             elif msg_type == "snapshot_image":
