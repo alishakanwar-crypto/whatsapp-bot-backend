@@ -63,6 +63,40 @@ class AgentPreviousRunTests(unittest.TestCase):
         agent_ws._record_previous_run({})
         self.assertEqual(agent_ws.get_health_state()["agent_previous_run"], {})
 
+    def test_a_windows_crash_keeps_its_whole_code_and_is_named(self):
+        agent_ws._record_previous_run(
+            {
+                "previous_run": {
+                    "ended_at": "14-09-2026  7:14:27.88",
+                    "exit_code": "-1073741819",
+                    "last_error": "",
+                }
+            }
+        )
+        kept = agent_ws.get_health_state()["agent_previous_run"]
+        self.assertEqual(kept["exit_code"], "-1073741819")
+        self.assertEqual(
+            kept["ended_how"], "killed by Windows (native crash, -1073741819)"
+        )
+
+    def test_a_plain_failure_is_not_called_a_native_crash(self):
+        agent_ws._record_previous_run(
+            {"previous_run": {"exit_code": "-1", "last_error": ""}}
+        )
+        kept = agent_ws.get_health_state()["agent_previous_run"]
+        self.assertEqual(kept["ended_how"], "exit code -1")
+
+    def test_health_says_when_the_agent_is_serving_parents_only(self):
+        agent_ws._record_previous_run(
+            {
+                "previous_run": {"exit_code": "-1073741819", "last_error": ""},
+                "face_work_paused": True,
+            }
+        )
+        self.assertTrue(
+            agent_ws.get_health_state()["agent_face_work_paused"]
+        )
+
     def test_a_replaced_process_does_not_describe_the_live_one(self):
         live = object()
         replaced = object()
