@@ -355,6 +355,9 @@ def _record_previous_run(
         # A replaced process overlaps its successor for a few seconds, and its
         # late hello must not describe how the live one started.
         return
+    # Whether this agent is serving parents only describes the live run, so it
+    # is recorded even when the hello brings no word on the run before it.
+    _health_state["agent_face_work_paused"] = bool(data.get("face_work_paused"))
     previous = data.get("previous_run")
     if not isinstance(previous, dict):
         return
@@ -363,7 +366,6 @@ def _record_previous_run(
     # unreadable, and that code is the only word on a crash nothing logged.
     exit_code = str(previous.get("exit_code", ""))[:16]
     last_error = _scrub_update_error(str(previous.get("last_error", "")))
-    _health_state["agent_face_work_paused"] = bool(data.get("face_work_paused"))
     _health_state["agent_previous_run"] = {
         "ended_at": ended_at,
         "exit_code": exit_code,
