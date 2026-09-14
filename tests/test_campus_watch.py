@@ -355,6 +355,43 @@ class CampusWatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audit["rooms_checked"], 0)
         self.assertIn("192.0.2.11", self.sent[0])
 
+    async def test_the_daily_audit_says_so_when_the_room_list_cannot_be_read(self):
+        with self._capture_alerts(), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch.object(watch, "_mapped_rooms",
+                             AsyncMock(side_effect=RuntimeError("db locked"))), \
+                patch("app.routes.agent_ws.is_agent_connected", return_value=True), \
+                patch("app.routes.agent_ws.request_snapshot",
+                      AsyncMock()) as snapshot:
+            audit = await watch.daily_room_audit()
+
+        self.assertEqual(audit["error"], "room list unreadable")
+        self.assertEqual(snapshot.await_count, 0)
+        self.assertIn("Not Done", self.sent[0])
+
+    async def test_a_failed_fault_report_is_tried_again(self):
+        rooms = [{"classroom": "GRADE 1A", "ip": "192.0.2.11", "expected": 2}]
+        results = [False, True]
+
+        async def record(message):
+            self.sent.append(message)
+            return results.pop(0)
+
+        with patch.object(watch, "_alert", side_effect=record), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch.object(watch, "_mapped_rooms", AsyncMock(return_value=rooms)), \
+                patch.object(watch, "ROOM_AUDIT_GAP_SECONDS", 0), \
+                patch.object(watch, "ROOM_AUDIT_ALERT_GAP_SECONDS", 0), \
+                patch("app.routes.agent_ws.is_agent_connected", return_value=True), \
+                patch("app.routes.agent_ws.get_health_state",
+                      return_value=self._health(pending_requests=0)), \
+                patch("app.routes.agent_ws.request_snapshot",
+                      AsyncMock(return_value={"success": True, "image_count": 1})):
+            audit = await watch.daily_room_audit()
+
+        self.assertEqual(len(self.sent), 2)
+        self.assertTrue(audit["reported"])
+
     async def test_the_daily_audit_says_so_when_the_campus_pc_is_off(self):
         with self._capture_alerts(), \
                 patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
