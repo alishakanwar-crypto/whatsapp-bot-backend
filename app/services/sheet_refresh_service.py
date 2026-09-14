@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from app.services.student_birthday_service import parse_dob
+
 logger = logging.getLogger(__name__)
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -741,6 +743,46 @@ async def _alert_sheet_refresh_problem(detail: str) -> None:
             logger.warning(f"PI SHEET ALERT: could not notify {phone}: {exc}")
 
 
+async def _write_student_birthdays(
+    db, students: list[dict], partial: bool, fetched_grades: set[str]
+) -> int:
+    """Keep student_birthdays in step with the classes just read.
+
+    A child with no readable date of birth is left out rather than stored with
+    an empty one, so nothing can match a wish to the wrong day.
+    """
+    with_dob = [s for s in students if s.get("dob")]
+
+    if partial and fetched_grades:
+        placeholders = ",".join("?" * len(fetched_grades))
+        await db.execute(
+            f"DELETE FROM student_birthdays WHERE grade IN ({placeholders})",
+            tuple(fetched_grades),
+        )
+    else:
+        await db.execute("DELETE FROM student_birthdays")
+
+    for s in with_dob:
+        await db.execute(
+            "INSERT INTO student_birthdays "
+            "(student_name, grade, dob, father_phone, mother_phone) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                s["name"],
+                s["grade"],
+                s["dob"],
+                s["father_phone"],
+                s["mother_phone"],
+            ),
+        )
+
+    logger.info(
+        f"PI SHEET FULL REFRESH: {len(with_dob)} of {len(students)} students "
+        f"have a readable date of birth"
+    )
+    return len(with_dob)
+
+
 async def fetch_all_pi_sheet_tabs() -> bool:
     """Fetch ALL grade tabs from the published PI Sheet and rebuild pi_sheet_students.
 
@@ -822,6 +864,15 @@ async def fetch_all_pi_sheet_tabs() -> bool:
 
                 father_phone_col = _find_phone_column(header_cells, "FATHER")
                 mother_phone_col = _find_phone_column(header_cells, "MOTHER")
+
+                dob_col = -1
+                for j, cell in enumerate(header_upper):
+                    if cell.replace(".", "").replace(" ", "") in (
+                        "DOB",
+                        "DATEOFBIRTH",
+                    ):
+                        dob_col = j
+                        break
 
                 # Determine tab grade from first data row
                 tab_grade = ""
@@ -916,11 +967,18 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                         else ""
                     )
 
+                    dob = (
+                        parse_dob(row[dob_col])
+                        if dob_col >= 0 and dob_col < len(row)
+                        else ""
+                    )
+
                     student = {
                         "name": name,
                         "grade": grade,
                         "father_phone": fp,
                         "mother_phone": mp,
+                        "dob": dob,
                     }
                     if bot_enabled and not in_withdrawal:
                         active_students.append(student)
@@ -1145,6 +1203,8 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 f"PI SHEET FULL REFRESH: re-added {len(seen_names)} "
                 f"allowlisted student entries"
             )
+
+        await _write_student_birthdays(db, unique, partial, fetched_grades)
 
         await apply_manual_students(db)
 

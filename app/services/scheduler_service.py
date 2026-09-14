@@ -28,6 +28,10 @@ from app.services.sci_spectrum_service import (
     send_feedback_resends_sync,
     send_thankyou_messages_sync,
 )
+from app.services.student_birthday_service import (
+    IST as STUDENT_BIRTHDAY_IST,
+    send_birthday_wishes_sync as send_student_birthday_wishes_sync,
+)
 from app.services.staff_birthday_service import (
     IST as STAFF_BIRTHDAY_IST,
     notify_upcoming_blocked_sync as notify_staff_birthday_blocked_sync,
@@ -199,195 +203,6 @@ def _send_reminder_sync(chat_id: str, message: str) -> None:
             logger.error(f"Failed to send scheduled reminder to {chat_id}")
     except Exception as e:
         logger.error(f"Error sending scheduled reminder: {e}")
-    finally:
-        loop.close()
-
-
-# ---------------------------------------------------------------------------
-# Birthday Wishes
-# ---------------------------------------------------------------------------
-
-# Path to the student DOB JSON file (bundled with the app)
-_STUDENT_DOB_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "static", "student_dobs.json"
-)
-
-
-def _normalize_phone(phone: str) -> str:
-    """Normalise a phone string to a single 10-digit number with 91 prefix."""
-    if not phone:
-        return ""
-    # Take only the first number if multiple are listed (separated by / or ,)
-    phone = phone.split("/")[0].split(",")[0].strip()
-    # Remove non-digit characters
-    digits = "".join(c for c in phone if c.isdigit())
-    if not digits:
-        return ""
-    # Ensure 91 prefix
-    if len(digits) == 10:
-        digits = "91" + digits
-    elif len(digits) == 11 and digits.startswith("0"):
-        digits = "91" + digits[1:]
-    elif len(digits) == 12 and digits.startswith("91"):
-        pass  # already good
-    else:
-        # Best-effort: just prepend 91 if short
-        if len(digits) < 12:
-            digits = "91" + digits
-    return digits
-
-
-def _load_student_dob_data_sync() -> None:
-    """Load student DOB data from JSON file into the student_birthdays DB table.
-
-    This runs once at startup (or daily) to keep the DB in sync with the JSON.
-    """
-    import aiosqlite
-
-    dob_path = _STUDENT_DOB_PATH
-    if not os.path.exists(dob_path):
-        logger.warning(f"Student DOB file not found at {dob_path}")
-        return
-
-    try:
-        with open(dob_path, "r", encoding="utf-8") as f:
-            students = json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to read student DOB JSON: {e}")
-        return
-
-    if not students:
-        logger.warning("Student DOB JSON is empty")
-        return
-
-    logger.info(f"Loading {len(students)} student DOB records into database...")
-
-    from app.database import DB_PATH
-
-    loop = asyncio.new_event_loop()
-    try:
-        async def _do_load():
-            db = await aiosqlite.connect(DB_PATH)
-            try:
-                # Clear existing data and reload
-                await db.execute("DELETE FROM student_birthdays")
-                for s in students:
-                    name = s.get("name", "").strip()
-                    grade = s.get("grade", "").strip()
-                    dob = s.get("dob", "").strip()
-                    father_phone = s.get("father_phone", "").strip()
-                    mother_phone = s.get("mother_phone", "").strip()
-                    if name and dob:
-                        await db.execute(
-                            "INSERT INTO student_birthdays "
-                            "(student_name, grade, dob, father_phone, mother_phone) "
-                            "VALUES (?, ?, ?, ?, ?)",
-                            (name, grade, dob, father_phone, mother_phone),
-                        )
-                await db.commit()
-                cursor = await db.execute("SELECT COUNT(*) FROM student_birthdays")
-                row = await cursor.fetchone()
-                logger.info(f"Loaded {row[0]} student birthday records into DB")
-            finally:
-                await db.close()
-
-        loop.run_until_complete(_do_load())
-    except Exception as e:
-        logger.error(f"Error loading student DOB data: {e}")
-    finally:
-        loop.close()
-
-
-def _send_birthday_wishes_sync() -> None:
-    """Check for students whose birthday is today and send wishes to parents.
-
-    Runs daily at midnight IST (18:30 UTC previous day).
-    Uses the student_birthdays table which is loaded from the DOB JSON.
-    """
-    import aiosqlite
-    from app.database import DB_PATH
-
-    # Get today's date in IST (UTC+5:30)
-    utc_now = datetime.utcnow()
-    ist_now = utc_now + timedelta(hours=5, minutes=30)
-    today_mm_dd = ist_now.strftime("%m-%d")
-    today_str = ist_now.strftime("%Y-%m-%d")
-
-    logger.info(f"Birthday check running for IST date: {ist_now.strftime('%Y-%m-%d')} (MM-DD: {today_mm_dd})")
-
-    loop = asyncio.new_event_loop()
-    try:
-        async def _do_birthday_check():
-            db = await aiosqlite.connect(DB_PATH)
-            db.row_factory = aiosqlite.Row
-            try:
-                # Find students whose DOB matches today's month-day
-                # DOB format in DB is YYYY-MM-DD
-                cursor = await db.execute(
-                    "SELECT * FROM student_birthdays "
-                    "WHERE substr(dob, 6) = ? AND (last_wish_sent IS NULL OR last_wish_sent != ?)",
-                    (today_mm_dd, today_str),
-                )
-                birthday_students = await cursor.fetchall()
-
-                if not birthday_students:
-                    logger.info(f"No birthdays today ({today_mm_dd})")
-                    return
-
-                logger.info(f"Found {len(birthday_students)} birthday(s) today!")
-
-                sent_count = 0
-                for student in birthday_students:
-                    student_name = student["student_name"]
-                    grade = student["grade"]
-                    father_phone = _normalize_phone(student["father_phone"])
-                    mother_phone = _normalize_phone(student["mother_phone"])
-
-                    wish_msg = (
-                        f"Dear Parent,\n\n"
-                        f"PP International School wishes *{student_name}* ({grade}) "
-                        f"a very Happy Birthday!\n\n"
-                        f"May this special day bring joy, laughter, and wonderful "
-                        f"memories. We hope the year ahead is filled with success "
-                        f"and happiness.\n\n"
-                        f"Happy Birthday, {student_name}!\n\n"
-                        f"Thank you for your cooperation.\n"
-                        f"Warm regards,\nPP International School"
-                    )
-
-                    # Send to both parents (deduplicate if same number)
-                    sent_phones = set()
-                    for phone in [father_phone, mother_phone]:
-                        if phone and phone not in sent_phones:
-                            result = await send_whatsapp_message(phone, wish_msg)
-                            if result:
-                                sent_phones.add(phone)
-                                sent_count += 1
-                                logger.info(
-                                    f"Birthday wish sent to {phone} for {student_name}"
-                                )
-                            else:
-                                logger.warning(
-                                    f"Failed to send birthday wish to {phone} for {student_name}"
-                                )
-                            # Small delay between messages
-                            await asyncio.sleep(2)
-
-                    # Mark as sent for today
-                    await db.execute(
-                        "UPDATE student_birthdays SET last_wish_sent = ? WHERE id = ?",
-                        (today_str, student["id"]),
-                    )
-
-                await db.commit()
-                logger.info(f"Birthday wishes sent: {sent_count} messages for {len(birthday_students)} students")
-
-            finally:
-                await db.close()
-
-        loop.run_until_complete(_do_birthday_check())
-    except Exception as e:
-        logger.error(f"Error sending birthday wishes: {e}")
     finally:
         loop.close()
 
@@ -612,34 +427,15 @@ def start_scheduler() -> None:
     logger.info("Scheduled initial teacher data refresh in 60 seconds")
 
     # --- Birthday Wishes ---
-    # Load student DOB data into DB at startup (after 120s — was 45s, staggered
-    # so it doesn't overlap with sheet_refresh_initial which runs at 60s)
+    # Dates of birth come from the PI Sheet with the daily student sync, so
+    # nothing loads them separately. The wish goes out in the morning.
     scheduler.add_job(
-        _load_student_dob_data_sync,
-        trigger="date",
-        run_date=datetime.now() + timedelta(seconds=120),
-        id="load_student_dob_initial",
+        send_student_birthday_wishes_sync,
+        trigger=CronTrigger(hour=8, minute=0, timezone=STUDENT_BIRTHDAY_IST),
+        id="student_birthday_wishes",
         replace_existing=True,
     )
-    logger.info("Scheduled initial student DOB data load in 120 seconds")
-
-    # Send birthday wishes daily at midnight IST (18:30 UTC previous day)
-    scheduler.add_job(
-        _send_birthday_wishes_sync,
-        trigger=CronTrigger(hour=18, minute=30, second=0),
-        id="birthday_wishes_daily",
-        replace_existing=True,
-    )
-    logger.info("Scheduled daily birthday wishes at midnight IST (18:30 UTC)")
-
-    # Also refresh DOB data daily (in case JSON is updated)
-    scheduler.add_job(
-        _load_student_dob_data_sync,
-        trigger=CronTrigger(hour=18, minute=0, second=0),
-        id="refresh_student_dob_daily",
-        replace_existing=True,
-    )
-    logger.info("Scheduled daily student DOB data refresh at 18:00 UTC")
+    logger.info("Scheduled student birthday wishes at 8:00 AM IST")
 
     # --- Parent Phone Data Refresh ---
     # Refresh parent phone numbers from personalized_parents.json every 14 days (fortnightly)
