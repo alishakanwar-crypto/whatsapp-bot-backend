@@ -225,6 +225,10 @@ def get_health_state() -> dict:
         "agent_started_at_ist": _health_state.get("agent_started_at_ist", ""),
         "agent_auto_update": _health_state.get("agent_auto_update", {}),
         "agent_previous_run": _health_state.get("agent_previous_run", {}),
+        # True while the agent is serving parents only after a crash loop.
+        "agent_face_work_paused": _health_state.get(
+            "agent_face_work_paused", False
+        ),
         "agent_ws_link": _health_state.get("agent_ws_link", {}),
         "agent_config_key_refused": _health_state.get(
             "agent_config_key_refused", False
@@ -298,12 +302,32 @@ def _record_auto_update(data: dict, hello: bool = False) -> None:
         )
 
 
+def _killed_by_windows(exit_code: str) -> bool:
+    """Whether Windows ended the process instead of the process ending.
+
+    A crash inside a native face library is reported as an NTSTATUS error:
+    0xC0000005 access violation, 0xC0000374 heap corruption. A plain failure
+    (-1, 0xFFFFFFFF) sits above that band and is the process's own word.
+    """
+    try:
+        code = int(exit_code)
+    except (TypeError, ValueError):
+        return False
+    if code >= 0:
+        return False
+    return 0xC0000000 <= code + (1 << 32) <= 0xCFFFFFFF
+
+
 def _ended_how(last_error: str, exit_code: str) -> str:
     """What killed the previous run, in one word fit for a public endpoint.
 
     The log line itself stays in our own logs: a traceback quotes whatever the
     agent was holding at the time, and this endpoint needs no password.
     """
+    if _killed_by_windows(exit_code):
+        # Nothing is logged when this happens, so the code is the only word
+        # on it and it means native code, not Python.
+        return f"killed by Windows (native crash, {exit_code})"
     if "Traceback" in last_error:
         return "traceback"
     if "[CRITICAL]" in last_error:
@@ -335,8 +359,11 @@ def _record_previous_run(
     if not isinstance(previous, dict):
         return
     ended_at = str(previous.get("ended_at", ""))[:40]
-    exit_code = str(previous.get("exit_code", ""))[:10]
+    # Long enough for a Windows crash code: cutting -1073741819 short made it
+    # unreadable, and that code is the only word on a crash nothing logged.
+    exit_code = str(previous.get("exit_code", ""))[:16]
     last_error = _scrub_update_error(str(previous.get("last_error", "")))
+    _health_state["agent_face_work_paused"] = bool(data.get("face_work_paused"))
     _health_state["agent_previous_run"] = {
         "ended_at": ended_at,
         "exit_code": exit_code,
