@@ -725,7 +725,10 @@ def start_scheduler() -> None:
     # prove the campus PC and every recorder on their own and alert on change.
     from app.services.campus_watch_service import (
         IST as CAMPUS_WATCH_IST,
+        ROOM_AUDIT_HOUR,
+        ROOM_AUDIT_MINUTE,
         check_campus_link_sync,
+        daily_room_audit_sync,
         morning_readiness_sync,
         sweep_cameras_sync,
     )
@@ -750,9 +753,25 @@ def start_scheduler() -> None:
         id="campus_watch_morning",
         replace_existing=True,
     )
+    # Every room checked one at a time from 1:30 PM IST, as Alisha asked, so a
+    # camera that is giving parents nothing is found the same day.
+    scheduler.add_job(
+        daily_room_audit_sync,
+        trigger=CronTrigger(
+            hour=ROOM_AUDIT_HOUR,
+            minute=ROOM_AUDIT_MINUTE,
+            second=0,
+            timezone=CAMPUS_WATCH_IST,
+        ),
+        id="campus_watch_room_audit",
+        replace_existing=True,
+        misfire_grace_time=60 * 60,
+    )
     logger.info(
         "Scheduled campus watch: link every 5 min, cameras every 30 min, "
-        "morning readiness 07:15 IST"
+        "morning readiness 07:15 IST, room-by-room audit %02d:%02d IST",
+        ROOM_AUDIT_HOUR,
+        ROOM_AUDIT_MINUTE,
     )
 
     # --- Meal Monitoring ---

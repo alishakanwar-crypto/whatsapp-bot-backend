@@ -22,6 +22,7 @@ password is what kept DVR 2 locked, and those recorders are already alerted on.
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -362,6 +363,185 @@ async def _report_change(
         "This check repeats every 30 minutes and you will be told when it "
         "recovers."
     )
+
+
+# ---------------------------------------------------------------------------
+# Daily room-by-room audit
+# ---------------------------------------------------------------------------
+# Alisha asked for a full room-by-room check every working day from 1:30 PM
+# IST, and for it never to take a slot a parent is waiting on: rooms are
+# captured one at a time, with a gap between them, and each capture waits while
+# any parent request is in flight.
+ROOM_AUDIT_HOUR = int(os.environ.get("CAMPUS_ROOM_AUDIT_HOUR", "13"))
+ROOM_AUDIT_MINUTE = int(os.environ.get("CAMPUS_ROOM_AUDIT_MINUTE", "30"))
+ROOM_AUDIT_GAP_SECONDS = float(
+    os.environ.get("CAMPUS_ROOM_AUDIT_GAP_SECONDS", "5")
+)
+ROOM_AUDIT_YIELD_SECONDS = float(
+    os.environ.get("CAMPUS_ROOM_AUDIT_YIELD_SECONDS", "90")
+)
+_room_audit: dict = {}
+
+
+def room_audit_state() -> dict:
+    """What the last daily room-by-room audit found."""
+    return dict(_room_audit)
+
+
+async def _mapped_rooms() -> list[dict]:
+    """Every location a parent or the admin panel can ask for, with its angles."""
+    from app.database import get_db
+
+    db = None
+    try:
+        db = await get_db()
+        cursor = await db.execute("SELECT ip FROM agent_dvrs ORDER BY id")
+        ips = [row["ip"] for row in await cursor.fetchall()]
+        cursor = await db.execute(
+            "SELECT location, dvr_index, all_cameras FROM agent_camera_mapping "
+            "ORDER BY location"
+        )
+        rooms = []
+        for row in await cursor.fetchall():
+            index = row["dvr_index"]
+            ip = ips[index] if index is not None and 0 <= index < len(ips) else ""
+            angles = 1
+            raw = row["all_cameras"]
+            if raw:
+                try:
+                    listed = json.loads(raw)
+                    angles = max(1, len(listed)) if isinstance(listed, list) else 1
+                except Exception:
+                    angles = 1
+            rooms.append(
+                {"classroom": row["location"], "ip": ip, "expected": angles}
+            )
+        return rooms
+    except Exception as exc:
+        logger.warning("CAMPUS WATCH: could not read the room list: %s", exc)
+        return []
+    finally:
+        if db is not None:
+            await db.close()
+
+
+async def _wait_for_a_free_moment() -> None:
+    """Hold the audit while a parent's photo is being captured."""
+    from app.routes.agent_ws import get_health_state
+
+    waited = 0.0
+    while waited < ROOM_AUDIT_YIELD_SECONDS:
+        if not (get_health_state().get("pending_requests") or 0):
+            return
+        await asyncio.sleep(3)
+        waited += 3
+
+
+async def daily_room_audit(alert: bool = True) -> dict:
+    """Capture every mapped room once, one at a time, and report what failed."""
+    from app.routes.agent_ws import is_agent_connected
+
+    started_at = _now_ist()
+    if not await is_working_day():
+        return {}
+    if not is_agent_connected():
+        if alert:
+            await _alert(
+                "PPIS Bot — Daily Camera Check Not Done\n\n"
+                f"At {started_at} the campus PC was offline, so no room could "
+                "be checked. Please power it on and run "
+                "restart_all_admin.vbs."
+            )
+        return {"started_at": started_at, "error": "campus PC offline"}
+
+    held = _recorders_held_for_password()
+    rooms = [room for room in await _mapped_rooms() if room["ip"] not in held]
+    dead: list[str] = []
+    partial: list[str] = []
+    slow: list[str] = []
+    served = 0
+    for room in rooms:
+        if not is_agent_connected():
+            break
+        await _wait_for_a_free_moment()
+        probe = await _probe_classroom(room["classroom"])
+        images = probe.get("images", 0)
+        if not probe["ok"]:
+            dead.append(f"{room['classroom']} ({probe['error']})")
+        else:
+            served += 1
+            if images < room["expected"]:
+                partial.append(
+                    f"{room['classroom']} {images} of {room['expected']}"
+                )
+            if probe["seconds"] > SLOW_CAPTURE_SECONDS:
+                slow.append(f"{room['classroom']} {probe['seconds']}s")
+        await asyncio.sleep(ROOM_AUDIT_GAP_SECONDS)
+
+    _room_audit.clear()
+    _room_audit.update(
+        {
+            "started_at": started_at,
+            "finished_at": _now_ist(),
+            "rooms_checked": len(rooms),
+            "rooms_served": served,
+            "no_photo": dead,
+            "fewer_angles": partial,
+            "slow": slow,
+            "recorders_login_refused": sorted(held),
+        }
+    )
+    if alert and _something_is_wrong(_room_audit):
+        await _alert(_room_audit_message(_room_audit))
+    logger.info(
+        "CAMPUS WATCH: daily room audit checked %s rooms, %s served, "
+        "%s gave nothing",
+        len(rooms), served, len(dead),
+    )
+    return dict(_room_audit)
+
+
+def _something_is_wrong(audit: dict) -> bool:
+    """Only a fault is worth a message; a clean campus stays quiet."""
+    return bool(
+        audit["no_photo"]
+        or audit["fewer_angles"]
+        or audit["slow"]
+        or audit["recorders_login_refused"]
+    )
+
+
+def _room_audit_message(audit: dict) -> str:
+    lines = [
+        f"PPIS Bot — Daily Camera Check {audit['finished_at']}",
+        "",
+        (
+            f"{audit['rooms_served']} of {audit['rooms_checked']} rooms gave "
+            "a live photo."
+        ),
+    ]
+    if audit["no_photo"]:
+        lines += ["", "No photo at all:"] + [
+            f"- {entry}" for entry in audit["no_photo"]
+        ]
+    if audit["fewer_angles"]:
+        lines += ["", "Only part of their cameras:"] + [
+            f"- {entry}" for entry in audit["fewer_angles"]
+        ]
+    if audit["slow"]:
+        lines += ["", "Slow to answer:"] + [
+            f"- {entry}" for entry in audit["slow"]
+        ]
+    for ip in audit["recorders_login_refused"]:
+        lines += ["", f"Recorder {ip} is refusing our login and was not checked."]
+    return "\n".join(lines)
+
+
+def daily_room_audit_sync() -> None:
+    try:
+        _run_on_app_loop(daily_room_audit(), timeout=60 * 60)
+    except Exception as exc:
+        logger.error("CAMPUS WATCH: daily room audit failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
