@@ -368,6 +368,19 @@ class CampusWatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audit["error"], "room list unreadable")
         self.assertEqual(snapshot.await_count, 0)
         self.assertIn("Not Done", self.sent[0])
+        self.assertEqual(watch.room_audit_state()["error"], "room list unreadable")
+
+    async def test_a_failed_not_done_report_is_tried_again(self):
+        with self._capture_alerts(delivered=False), \
+                patch.object(watch, "ROOM_AUDIT_ALERT_GAP_SECONDS", 0), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch("app.routes.agent_ws.is_agent_connected",
+                      return_value=False):
+            audit = await watch.daily_room_audit()
+
+        self.assertEqual(len(self.sent), watch.ROOM_AUDIT_ALERT_TRIES)
+        self.assertFalse(audit["reported"])
+        self.assertEqual(audit["error"], "campus PC offline")
 
     async def test_a_failed_fault_report_is_tried_again(self):
         rooms = [{"classroom": "GRADE 1A", "ip": "192.0.2.11", "expected": 2}]
