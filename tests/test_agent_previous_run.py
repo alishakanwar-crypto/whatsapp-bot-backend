@@ -97,6 +97,21 @@ class AgentPreviousRunTests(unittest.TestCase):
             agent_ws.get_health_state()["agent_face_work_paused"]
         )
 
+    def test_parents_only_is_cleared_by_a_hello_without_a_previous_run(self):
+        agent_ws._record_previous_run(
+            {
+                "previous_run": {"exit_code": "-1073741819", "last_error": ""},
+                "face_work_paused": True,
+            }
+        )
+        # A restart that had nothing to say about the run before it still says
+        # whether it is scanning faces, and stale "parents only" would send me
+        # chasing a crash loop that ended.
+        agent_ws._record_previous_run({"face_work_paused": False})
+        self.assertFalse(
+            agent_ws.get_health_state()["agent_face_work_paused"]
+        )
+
     def test_a_replaced_process_does_not_describe_the_live_one(self):
         live = object()
         replaced = object()
