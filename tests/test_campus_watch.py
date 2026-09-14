@@ -257,6 +257,102 @@ class CampusWatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("OFFLINE", message)
 
+    async def test_the_daily_audit_names_dead_and_one_angle_rooms(self):
+        rooms = [
+            {"classroom": "GRADE 1A", "ip": "192.0.2.11", "expected": 2},
+            {"classroom": "GRADE 2A", "ip": "192.0.2.11", "expected": 2},
+            {"classroom": "ART ROOM", "ip": "192.0.2.11", "expected": 1},
+        ]
+
+        async def probe(classroom, timeout=0):
+            if classroom == "GRADE 1A":
+                return {"success": True, "image_count": 2}
+            if classroom == "GRADE 2A":
+                return {"success": True, "image_count": 1}
+            return {"success": False, "error": "camera offline"}
+
+        with self._capture_alerts(), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch.object(watch, "_mapped_rooms", AsyncMock(return_value=rooms)), \
+                patch.object(watch, "ROOM_AUDIT_GAP_SECONDS", 0), \
+                patch("app.routes.agent_ws.is_agent_connected", return_value=True), \
+                patch("app.routes.agent_ws.get_health_state",
+                      return_value=self._health(pending_requests=0)), \
+                patch("app.routes.agent_ws.request_snapshot",
+                      AsyncMock(side_effect=probe)):
+            audit = await watch.daily_room_audit()
+
+        self.assertEqual(audit["rooms_checked"], 3)
+        self.assertEqual(audit["rooms_served"], 2)
+        self.assertEqual(audit["fewer_angles"], ["GRADE 2A 1 of 2"])
+        self.assertIn("ART ROOM", audit["no_photo"][0])
+        self.assertIn("ART ROOM", self.sent[0])
+        self.assertIn("GRADE 2A", self.sent[0])
+        self.assertNotIn("GRADE 1A", self.sent[0])
+
+    async def test_the_daily_audit_waits_while_a_parent_is_being_served(self):
+        rooms = [{"classroom": "GRADE 1A", "ip": "192.0.2.11", "expected": 1}]
+        health = self._health(pending_requests=1)
+        sleeps: list[float] = []
+
+        async def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 2:
+                health["pending_requests"] = 0
+
+        with self._capture_alerts(), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch.object(watch, "_mapped_rooms", AsyncMock(return_value=rooms)), \
+                patch.object(watch.asyncio, "sleep", AsyncMock(side_effect=sleep)), \
+                patch("app.routes.agent_ws.is_agent_connected", return_value=True), \
+                patch("app.routes.agent_ws.get_health_state", return_value=health), \
+                patch("app.routes.agent_ws.request_snapshot",
+                      AsyncMock(return_value={"success": True, "image_count": 1})) \
+                as snapshot:
+            await watch.daily_room_audit()
+
+        self.assertEqual(health["pending_requests"], 0)
+        self.assertEqual(snapshot.await_count, 1)
+        self.assertGreaterEqual(len(sleeps), 2)
+
+    async def test_the_daily_audit_skips_a_recorder_refusing_our_login(self):
+        rooms = [{"classroom": "GRADE 1A", "ip": "192.0.2.11", "expected": 1}]
+        health = self._health(
+            pending_requests=0,
+            recorders_on_fallback=[
+                {"ip": "192.0.2.11", "reason": "credentials refused"}
+            ],
+        )
+        with self._capture_alerts(), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch.object(watch, "_mapped_rooms", AsyncMock(return_value=rooms)), \
+                patch("app.routes.agent_ws.is_agent_connected", return_value=True), \
+                patch("app.routes.agent_ws.get_health_state", return_value=health), \
+                patch("app.routes.agent_ws.request_snapshot",
+                      AsyncMock()) as snapshot:
+            audit = await watch.daily_room_audit()
+
+        self.assertEqual(snapshot.await_count, 0)
+        self.assertEqual(audit["rooms_checked"], 0)
+        self.assertIn("192.0.2.11", self.sent[0])
+
+    async def test_the_daily_audit_says_so_when_the_campus_pc_is_off(self):
+        with self._capture_alerts(), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch("app.routes.agent_ws.is_agent_connected",
+                      return_value=False):
+            audit = await watch.daily_room_audit()
+
+        self.assertEqual(audit["error"], "campus PC offline")
+        self.assertIn("Not Done", self.sent[0])
+
+    async def test_no_daily_audit_on_a_holiday(self):
+        with self._capture_alerts(), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=False)):
+            self.assertEqual(await watch.daily_room_audit(), {})
+
+        self.assertEqual(self.sent, [])
+
     async def test_nothing_is_checked_on_a_holiday(self):
         with self._capture_alerts(), \
                 patch.object(watch, "is_working_day", AsyncMock(return_value=False)):
