@@ -380,6 +380,10 @@ ROOM_AUDIT_GAP_SECONDS = float(
 ROOM_AUDIT_YIELD_SECONDS = float(
     os.environ.get("CAMPUS_ROOM_AUDIT_YIELD_SECONDS", "90")
 )
+ROOM_AUDIT_ALERT_TRIES = int(os.environ.get("CAMPUS_ROOM_AUDIT_ALERT_TRIES", "4"))
+ROOM_AUDIT_ALERT_GAP_SECONDS = float(
+    os.environ.get("CAMPUS_ROOM_AUDIT_ALERT_GAP_SECONDS", "120")
+)
 _room_audit: dict = {}
 
 
@@ -417,9 +421,6 @@ async def _mapped_rooms() -> list[dict]:
                 {"classroom": row["location"], "ip": ip, "expected": angles}
             )
         return rooms
-    except Exception as exc:
-        logger.warning("CAMPUS WATCH: could not read the room list: %s", exc)
-        return []
     finally:
         if db is not None:
             await db.close()
@@ -455,7 +456,19 @@ async def daily_room_audit(alert: bool = True) -> dict:
         return {"started_at": started_at, "error": "campus PC offline"}
 
     held = _recorders_held_for_password()
-    rooms = [room for room in await _mapped_rooms() if room["ip"] not in held]
+    try:
+        mapped = await _mapped_rooms()
+    except Exception as exc:
+        logger.error("CAMPUS WATCH: could not read the room list: %s", exc)
+        if alert:
+            await _alert(
+                "PPIS Bot — Daily Camera Check Not Done\n\n"
+                f"At {started_at} the room list could not be read, so no room "
+                "was checked. A camera could be dead without anyone knowing."
+            )
+        return {"started_at": started_at, "error": "room list unreadable"}
+
+    rooms = [room for room in mapped if room["ip"] not in held]
     dead: list[str] = []
     partial: list[str] = []
     slow: list[str] = []
@@ -492,13 +505,24 @@ async def daily_room_audit(alert: bool = True) -> dict:
         }
     )
     if alert and _something_is_wrong(_room_audit):
-        await _alert(_room_audit_message(_room_audit))
+        _room_audit["reported"] = await _report_audit(_room_audit)
     logger.info(
         "CAMPUS WATCH: daily room audit checked %s rooms, %s served, "
         "%s gave nothing",
         len(rooms), served, len(dead),
     )
     return dict(_room_audit)
+
+
+async def _report_audit(audit: dict) -> bool:
+    """Keep trying the fault report so a bad minute does not lose the day."""
+    message = _room_audit_message(audit)
+    for attempt in range(ROOM_AUDIT_ALERT_TRIES):
+        if await _alert(message):
+            return True
+        if attempt + 1 < ROOM_AUDIT_ALERT_TRIES:
+            await asyncio.sleep(ROOM_AUDIT_ALERT_GAP_SECONDS)
+    return False
 
 
 def _something_is_wrong(audit: dict) -> bool:
