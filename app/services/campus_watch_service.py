@@ -446,27 +446,26 @@ async def daily_room_audit(alert: bool = True) -> dict:
     if not await is_working_day():
         return {}
     if not is_agent_connected():
-        if alert:
-            await _alert(
-                "PPIS Bot — Daily Camera Check Not Done\n\n"
-                f"At {started_at} the campus PC was offline, so no room could "
-                "be checked. Please power it on and run "
-                "restart_all_admin.vbs."
-            )
-        return {"started_at": started_at, "error": "campus PC offline"}
+        return await _audit_not_done(
+            started_at,
+            "campus PC offline",
+            f"At {started_at} the campus PC was offline, so no room could be "
+            "checked. Please power it on and run restart_all_admin.vbs.",
+            alert,
+        )
 
     held = _recorders_held_for_password()
     try:
         mapped = await _mapped_rooms()
     except Exception as exc:
         logger.error("CAMPUS WATCH: could not read the room list: %s", exc)
-        if alert:
-            await _alert(
-                "PPIS Bot — Daily Camera Check Not Done\n\n"
-                f"At {started_at} the room list could not be read, so no room "
-                "was checked. A camera could be dead without anyone knowing."
-            )
-        return {"started_at": started_at, "error": "room list unreadable"}
+        return await _audit_not_done(
+            started_at,
+            "room list unreadable",
+            f"At {started_at} the room list could not be read, so no room was "
+            "checked. A camera could be dead without anyone knowing.",
+            alert,
+        )
 
     rooms = [room for room in mapped if room["ip"] not in held]
     dead: list[str] = []
@@ -514,9 +513,42 @@ async def daily_room_audit(alert: bool = True) -> dict:
     return dict(_room_audit)
 
 
+async def _audit_not_done(
+    started_at: str, error: str, message: str, alert: bool
+) -> dict:
+    """Record and report a day on which no room could be checked at all.
+
+    Health must show today's failed check rather than yesterday's clean one,
+    or a dead camera hides behind an old good reading.
+    """
+    _room_audit.clear()
+    _room_audit.update(
+        {
+            "started_at": started_at,
+            "finished_at": _now_ist(),
+            "rooms_checked": 0,
+            "rooms_served": 0,
+            "no_photo": [],
+            "fewer_angles": [],
+            "slow": [],
+            "recorders_login_refused": [],
+            "error": error,
+        }
+    )
+    if alert:
+        _room_audit["reported"] = await _keep_trying(
+            "PPIS Bot — Daily Camera Check Not Done\n\n" + message
+        )
+    return dict(_room_audit)
+
+
 async def _report_audit(audit: dict) -> bool:
     """Keep trying the fault report so a bad minute does not lose the day."""
-    message = _room_audit_message(audit)
+    return await _keep_trying(_room_audit_message(audit))
+
+
+async def _keep_trying(message: str) -> bool:
+    """Send an audit report until someone has it, so a bad minute costs nothing."""
     for attempt in range(ROOM_AUDIT_ALERT_TRIES):
         if await _alert(message):
             return True
