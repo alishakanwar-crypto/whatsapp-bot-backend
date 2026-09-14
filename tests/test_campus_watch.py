@@ -290,6 +290,25 @@ class CampusWatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("GRADE 2A", self.sent[0])
         self.assertNotIn("GRADE 1A", self.sent[0])
 
+    async def test_the_daily_audit_stays_quiet_when_every_room_is_fine(self):
+        rooms = [
+            {"classroom": "GRADE 1A", "ip": "192.0.2.11", "expected": 2},
+            {"classroom": "GRADE 2B", "ip": "192.0.2.11", "expected": 2},
+        ]
+        with self._capture_alerts(), \
+                patch.object(watch, "is_working_day", AsyncMock(return_value=True)), \
+                patch.object(watch, "_mapped_rooms", AsyncMock(return_value=rooms)), \
+                patch.object(watch, "ROOM_AUDIT_GAP_SECONDS", 0), \
+                patch("app.routes.agent_ws.is_agent_connected", return_value=True), \
+                patch("app.routes.agent_ws.get_health_state",
+                      return_value=self._health(pending_requests=0)), \
+                patch("app.routes.agent_ws.request_snapshot",
+                      AsyncMock(return_value={"success": True, "image_count": 2})):
+            audit = await watch.daily_room_audit()
+
+        self.assertEqual(audit["rooms_served"], 2)
+        self.assertEqual(self.sent, [])
+
     async def test_the_daily_audit_waits_while_a_parent_is_being_served(self):
         rooms = [{"classroom": "GRADE 1A", "ip": "192.0.2.11", "expected": 1}]
         health = self._health(pending_requests=1)

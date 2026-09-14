@@ -491,7 +491,7 @@ async def daily_room_audit(alert: bool = True) -> dict:
             "recorders_login_refused": sorted(held),
         }
     )
-    if alert:
+    if alert and _something_is_wrong(_room_audit):
         await _alert(_room_audit_message(_room_audit))
     logger.info(
         "CAMPUS WATCH: daily room audit checked %s rooms, %s served, "
@@ -499,6 +499,16 @@ async def daily_room_audit(alert: bool = True) -> dict:
         len(rooms), served, len(dead),
     )
     return dict(_room_audit)
+
+
+def _something_is_wrong(audit: dict) -> bool:
+    """Only a fault is worth a message; a clean campus stays quiet."""
+    return bool(
+        audit["no_photo"]
+        or audit["fewer_angles"]
+        or audit["slow"]
+        or audit["recorders_login_refused"]
+    )
 
 
 def _room_audit_message(audit: dict) -> str:
@@ -524,10 +534,6 @@ def _room_audit_message(audit: dict) -> str:
         ]
     for ip in audit["recorders_login_refused"]:
         lines += ["", f"Recorder {ip} is refusing our login and was not checked."]
-    if not (
-        audit["no_photo"] or audit["fewer_angles"] or audit["recorders_login_refused"]
-    ):
-        lines += ["", "Every camera is working."]
     return "\n".join(lines)
 
 
