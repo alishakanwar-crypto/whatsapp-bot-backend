@@ -96,6 +96,23 @@ class AgentPcRecoveryTests(unittest.TestCase):
         kept = agent_ws.get_health_state()["agent_pc_recovery"]
         self.assertTrue(kept["recovers_without_logon"])
 
+    def test_an_agent_that_cannot_report_is_not_credited_with_recovery(self):
+        # A PC rolled back to an older agent says nothing about its tasks;
+        # holding on to the last answer would promise a recovery nobody has.
+        agent_ws._record_pc_recovery(
+            {"pc_recovery": {"recovers_without_logon": True}}
+        )
+        agent_ws._record_pc_recovery({"agent_id": "campus"}, hello=True)
+        self.assertEqual(agent_ws.get_health_state()["agent_pc_recovery"], {})
+
+    def test_one_silent_pong_does_not_erase_the_last_reading(self):
+        agent_ws._record_pc_recovery(
+            {"pc_recovery": {"recovers_without_logon": True}}
+        )
+        agent_ws._record_pc_recovery({})
+        kept = agent_ws.get_health_state()["agent_pc_recovery"]
+        self.assertTrue(kept["recovers_without_logon"])
+
 
 if __name__ == "__main__":
     unittest.main()

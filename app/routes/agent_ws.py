@@ -442,7 +442,7 @@ def _task_states(value: object) -> dict:
 
 
 def _record_pc_recovery(
-    data: dict, websocket: WebSocket | None = None
+    data: dict, websocket: WebSocket | None = None, hello: bool = False
 ) -> None:
     """Remember whether the campus PC can restart its agents unattended.
 
@@ -455,6 +455,8 @@ def _record_pc_recovery(
         return
     state = data.get("pc_recovery")
     if not isinstance(state, dict) or not state:
+        if hello:
+            _health_state.pop("agent_pc_recovery", None)
         return
     _health_state["agent_pc_recovery"] = {
         "boot_at_ist": str(state.get("boot_at_ist", ""))[:40],
@@ -1070,7 +1072,7 @@ async def agent_websocket(websocket: WebSocket):
                 _record_auto_update(data, hello=True)
                 _record_previous_run(data, websocket)
                 _record_ws_link(data, websocket)
-                _record_pc_recovery(data, websocket)
+                _record_pc_recovery(data, websocket, hello=True)
                 refused = bool(data.get("config_key_refused"))
                 _health_state["agent_config_key_refused"] = refused
                 if refused:
