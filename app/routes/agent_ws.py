@@ -230,6 +230,7 @@ def get_health_state() -> dict:
             "agent_face_work_paused", False
         ),
         "agent_ws_link": _health_state.get("agent_ws_link", {}),
+        "agent_pc_recovery": _health_state.get("agent_pc_recovery", {}),
         "agent_config_key_refused": _health_state.get(
             "agent_config_key_refused", False
         ),
@@ -411,6 +412,58 @@ def _record_ws_link(
         "recycles": _number(link.get("recycles")),
         "offline_seconds": _number(link.get("offline_seconds")),
         "library_version": str(link.get("library_version", ""))[:20],
+    }
+
+
+def _task_names(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(name)[:60] for name in value[:10]]
+
+
+def _task_states(value: object) -> dict:
+    """Only the fields we asked the agent for: the rest is not ours to show."""
+    if not isinstance(value, dict):
+        return {}
+    kept = {}
+    for name, state in list(value.items())[:10]:
+        if not isinstance(state, dict):
+            continue
+        kept[str(name)[:60]] = {
+            "exists": state.get("exists"),
+            "enabled": bool(state.get("enabled")),
+            "needs_logon": bool(state.get("needs_logon")),
+            "repaired": bool(state.get("repaired")),
+            "last_run": str(state.get("last_run", ""))[:40],
+            "last_result": str(state.get("last_result", ""))[:20],
+            "next_run": str(state.get("next_run", ""))[:40],
+        }
+    return kept
+
+
+def _record_pc_recovery(
+    data: dict, websocket: WebSocket | None = None
+) -> None:
+    """Remember whether the campus PC can restart its agents unattended.
+
+    Every restart on that PC is a Windows scheduled task, and a task bound to
+    the logged-on user does nothing while the PC sits at the login screen. A
+    night-time reboot then costs a whole morning of parents' photos and looks
+    from here like an agent that simply went quiet.
+    """
+    if websocket is not None and websocket is not _agent_ws:
+        return
+    state = data.get("pc_recovery")
+    if not isinstance(state, dict) or not state:
+        return
+    _health_state["agent_pc_recovery"] = {
+        "boot_at_ist": str(state.get("boot_at_ist", ""))[:40],
+        "recovers_without_logon": bool(state.get("recovers_without_logon")),
+        "tasks_missing": _task_names(state.get("tasks_missing")),
+        "tasks_unreadable": _task_names(state.get("tasks_unreadable")),
+        "tasks_disabled": _task_names(state.get("tasks_disabled")),
+        "tasks_need_logon": _task_names(state.get("tasks_need_logon")),
+        "tasks": _task_states(state.get("tasks")),
     }
 
 
@@ -1017,6 +1070,7 @@ async def agent_websocket(websocket: WebSocket):
                 _record_auto_update(data, hello=True)
                 _record_previous_run(data, websocket)
                 _record_ws_link(data, websocket)
+                _record_pc_recovery(data, websocket)
                 refused = bool(data.get("config_key_refused"))
                 _health_state["agent_config_key_refused"] = refused
                 if refused:
@@ -1060,6 +1114,7 @@ async def agent_websocket(websocket: WebSocket):
                 _record_recorder_health(data, websocket)
                 _record_auto_update(data)
                 _record_ws_link(data, websocket)
+                _record_pc_recovery(data, websocket)
 
             elif msg_type == "test_result":
                 logger.info(f"DVR test result: {data}")
