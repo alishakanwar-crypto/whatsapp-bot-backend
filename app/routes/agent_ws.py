@@ -460,7 +460,20 @@ def _record_pc_recovery(
         return
     _health_state["agent_pc_recovery"] = {
         "boot_at_ist": str(state.get("boot_at_ist", ""))[:40],
+        "read_at_ist": str(state.get("read_at_ist", ""))[:40],
         "recovers_without_logon": bool(state.get("recovers_without_logon")),
+        # A registered logon-free watchdog is a promise; this is the evidence.
+        # Windows runs it in session 0, where its runner can fail silently,
+        # so until it has actually run nobody should believe the promise.
+        "logon_free_watchdog_proven": bool(
+            state.get("logon_free_watchdog_proven")
+        ),
+        "logon_free_watchdog_last_run": str(
+            state.get("logon_free_watchdog_last_run", "")
+        )[:40],
+        "logon_free_watchdog_last_result": str(
+            state.get("logon_free_watchdog_last_result", "")
+        )[:20],
         "tasks_missing": _task_names(state.get("tasks_missing")),
         "tasks_unreadable": _task_names(state.get("tasks_unreadable")),
         "tasks_disabled": _task_names(state.get("tasks_disabled")),
