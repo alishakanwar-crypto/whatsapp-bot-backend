@@ -105,6 +105,31 @@ class AgentPcRecoveryTests(unittest.TestCase):
         agent_ws._record_pc_recovery({"agent_id": "campus"}, hello=True)
         self.assertEqual(agent_ws.get_health_state()["agent_pc_recovery"], {})
 
+    def test_a_logon_bound_nightly_refresh_is_shown(self):
+        # A nightly refresh tied to a logon is skipped on any night nobody
+        # logged in, and the campus then serves the morning on stale code.
+        agent_ws._record_pc_recovery(
+            {
+                "pc_recovery": {
+                    "recovers_without_logon": True,
+                    "nightly_refresh_without_logon": False,
+                }
+            }
+        )
+        kept = agent_ws.get_health_state()["agent_pc_recovery"]
+        self.assertFalse(kept["nightly_refresh_without_logon"])
+
+        agent_ws._record_pc_recovery(
+            {
+                "pc_recovery": {
+                    "recovers_without_logon": True,
+                    "nightly_refresh_without_logon": True,
+                }
+            }
+        )
+        kept = agent_ws.get_health_state()["agent_pc_recovery"]
+        self.assertTrue(kept["nightly_refresh_without_logon"])
+
     def test_a_watchdog_that_never_ran_is_shown_as_unproven(self):
         # The task can be registered, enabled and logon-free and still have
         # never fired, and then this PC's unattended recovery is only a hope.

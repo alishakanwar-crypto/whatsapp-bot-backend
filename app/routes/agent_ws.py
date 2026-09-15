@@ -474,6 +474,12 @@ def _record_pc_recovery(
         "logon_free_watchdog_last_result": str(
             state.get("logon_free_watchdog_last_result", "")
         )[:20],
+        # The 03:00 IST refresh is what puts the campus PC on merged code
+        # overnight. Tied to a logon it is skipped on any night nobody
+        # logged in, and the PC then serves the morning on stale code.
+        "nightly_refresh_without_logon": bool(
+            state.get("nightly_refresh_without_logon")
+        ),
         "tasks_missing": _task_names(state.get("tasks_missing")),
         "tasks_unreadable": _task_names(state.get("tasks_unreadable")),
         "tasks_disabled": _task_names(state.get("tasks_disabled")),
