@@ -483,7 +483,14 @@ def _record_pc_recovery(
         # Running unattended is not the same as succeeding: the refresh ends
         # non-zero when it could not take the merged code, which is a morning
         # served on last night's code while the task itself looks fine.
-        "nightly_refresh_ok": bool(state.get("nightly_refresh_ok")),
+        # An agent too old to report this sends no value, and calling that a
+        # failed refresh would send somebody looking for a fault that is only
+        # version skew, so an unknown outcome stays unknown.
+        "nightly_refresh_ok": (
+            bool(state["nightly_refresh_ok"])
+            if state.get("nightly_refresh_ok") is not None
+            else None
+        ),
         "nightly_refresh_last_run": str(
             state.get("nightly_refresh_last_run", "")
         )[:40],
