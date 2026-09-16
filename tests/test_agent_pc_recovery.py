@@ -152,6 +152,21 @@ class AgentPcRecoveryTests(unittest.TestCase):
             kept["nightly_refresh_last_run"], "16-09-2026 03:00:01"
         )
 
+    def test_an_agent_too_old_to_report_the_refresh_is_not_called_failed(self):
+        # A PC still on the previous agent sends every other field and none
+        # for the refresh; reading that as a failed night would send somebody
+        # hunting a fault that is only old code on the PC.
+        agent_ws._record_pc_recovery(
+            {
+                "pc_recovery": {
+                    "recovers_without_logon": True,
+                    "nightly_refresh_without_logon": True,
+                }
+            }
+        )
+        kept = agent_ws.get_health_state()["agent_pc_recovery"]
+        self.assertIsNone(kept["nightly_refresh_ok"])
+
     def test_a_watchdog_that_never_ran_is_shown_as_unproven(self):
         # The task can be registered, enabled and logon-free and still have
         # never fired, and then this PC's unattended recovery is only a hope.
