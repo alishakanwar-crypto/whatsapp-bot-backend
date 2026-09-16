@@ -480,6 +480,16 @@ def _record_pc_recovery(
         "nightly_refresh_without_logon": bool(
             state.get("nightly_refresh_without_logon")
         ),
+        # Running unattended is not the same as succeeding: the refresh ends
+        # non-zero when it could not take the merged code, which is a morning
+        # served on last night's code while the task itself looks fine.
+        "nightly_refresh_ok": bool(state.get("nightly_refresh_ok")),
+        "nightly_refresh_last_run": str(
+            state.get("nightly_refresh_last_run", "")
+        )[:40],
+        "nightly_refresh_last_result": str(
+            state.get("nightly_refresh_last_result", "")
+        )[:20],
         "tasks_missing": _task_names(state.get("tasks_missing")),
         "tasks_unreadable": _task_names(state.get("tasks_unreadable")),
         "tasks_disabled": _task_names(state.get("tasks_disabled")),
