@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.database import DB_PATH
@@ -20,19 +20,19 @@ GK_OLYMPIAD_REMINDER_PHONES = tuple(
 GK_OLYMPIAD_TEMPLATE = os.environ.get(
     "GK_OLYMPIAD_REMINDER_TEMPLATE", "ppis_gk_olympiad_reminder",
 )
-# Used only while the purpose-written wording is still with Meta: an approved
-# announcement carries the same words rather than the reminder going unsent.
-GK_OLYMPIAD_FALLBACK_TEMPLATE = os.environ.get(
-    "GK_OLYMPIAD_REMINDER_FALLBACK_TEMPLATE", "ppis_school_announcement",
-)
 GK_OLYMPIAD_DATE = date(2026, 10, 6)
-GK_OLYMPIAD_DATE_TEXT = "Monday, 6th October 2026"
+# No weekday: the notice called 6 October 2026 a Monday, but it falls on a
+# Tuesday, and a reminder must not carry either claim until that is settled.
+GK_OLYMPIAD_DATE_TEXT = "6th October 2026"
 GK_OLYMPIAD_STUDY_LINK = "https://shorturl.at/lZOmc"
 GK_OLYMPIAD_REMINDER_DATES = (
     date(2026, 9, 25),
     date(2026, 9, 30),
     date(2026, 10, 3),
 )
+# A claim is a lease, not a tombstone: a process that dies between claiming
+# and sending must not silence that day's reminder for good.
+GK_OLYMPIAD_CLAIM_LEASE = timedelta(minutes=10)
 GK_OLYMPIAD_NOTE = (
     "Please remind the participating students that the GK Olympiad is "
     "approaching, so they prepare and revise regularly."
@@ -43,21 +43,8 @@ def is_reminder_due(today: date) -> bool:
     return today in GK_OLYMPIAD_REMINDER_DATES
 
 
-def fallback_announcement(today: date) -> str:
-    """The same reminder as one line, for the generic announcement wording.
-
-    Meta refuses a template parameter holding a newline, a tab or four
-    spaces in a row, so everything the fallback says lives on one line.
-    """
-    days_left = (GK_OLYMPIAD_DATE - today).days
-    return (
-        f"Reminder: the GK Olympiad is scheduled on {GK_OLYMPIAD_DATE_TEXT} "
-        f"({days_left} day(s) away). {GK_OLYMPIAD_NOTE} "
-        f"Study material for practice: {GK_OLYMPIAD_STUDY_LINK}"
-    )
-
-
 def _claim_reminder(reminder_date: date, recipient: str, now: datetime) -> bool:
+    expiry = (now - GK_OLYMPIAD_CLAIM_LEASE).isoformat()
     with sqlite3.connect(DB_PATH) as db:
         cursor = db.execute(
             "INSERT INTO gk_olympiad_reminder_deliveries "
@@ -65,11 +52,16 @@ def _claim_reminder(reminder_date: date, recipient: str, now: datetime) -> bool:
             "VALUES (?, ?, 'generated', ?) "
             "ON CONFLICT(reminder_date, recipient) DO UPDATE SET "
             "status = 'generated', claimed_at = excluded.claimed_at "
-            "WHERE gk_olympiad_reminder_deliveries.status = 'failed'",
+            "WHERE gk_olympiad_reminder_deliveries.status = 'failed' "
+            "   OR (gk_olympiad_reminder_deliveries.status = 'generated' "
+            "       AND (gk_olympiad_reminder_deliveries.claimed_at < ? "
+            "            OR gk_olympiad_reminder_deliveries.claimed_at "
+            "               NOT LIKE '____-__-__T%'))",
             (
                 reminder_date.isoformat(),
                 recipient,
-                now.strftime("%d-%m-%Y %H:%M:%S IST"),
+                now.isoformat(),
+                expiry,
             ),
         )
         db.commit()
@@ -89,7 +81,7 @@ def _finish_reminder(
             "WHERE reminder_date = ? AND recipient = ?",
             (
                 "accepted" if sent else "failed",
-                now.strftime("%d-%m-%Y %H:%M:%S IST"),
+                now.isoformat(),
                 reminder_date.isoformat(),
                 recipient,
             ),
@@ -97,9 +89,9 @@ def _finish_reminder(
         db.commit()
 
 
-async def _send_one(recipient: str, today: date) -> bool:
+async def _send_one(recipient: str) -> bool:
     try:
-        sent = await whatsapp_service.send_cloud_template_message(
+        return await whatsapp_service.send_cloud_template_message(
             to=recipient,
             template_name=GK_OLYMPIAD_TEMPLATE,
             language_code="en",
@@ -110,19 +102,7 @@ async def _send_one(recipient: str, today: date) -> bool:
             ],
         )
     except Exception:
-        logger.exception("GK Olympiad reminder errored on its own wording")
-        sent = False
-    if sent or not GK_OLYMPIAD_FALLBACK_TEMPLATE:
-        return sent
-    try:
-        return await whatsapp_service.send_cloud_template_message(
-            to=recipient,
-            template_name=GK_OLYMPIAD_FALLBACK_TEMPLATE,
-            language_code="en",
-            body_params=[fallback_announcement(today)],
-        )
-    except Exception:
-        logger.exception("GK Olympiad reminder errored on the announcement wording")
+        logger.exception("GK Olympiad reminder errored")
         return False
 
 
@@ -135,7 +115,7 @@ async def send_gk_olympiad_reminders(now: datetime | None = None) -> int:
     for recipient in GK_OLYMPIAD_REMINDER_PHONES:
         if not _claim_reminder(today, recipient, current):
             continue
-        sent = await _send_one(recipient, today)
+        sent = await _send_one(recipient)
         _finish_reminder(today, recipient, sent, datetime.now(IST))
         if sent:
             sent_count += 1
