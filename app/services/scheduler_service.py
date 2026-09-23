@@ -20,6 +20,10 @@ from app.services.showcase_reminder_service import (
     IST as SHOWCASE_IST,
     send_showcase_reminders_sync,
 )
+from app.services.gk_olympiad_reminder_service import (
+    IST as GK_OLYMPIAD_IST,
+    send_gk_olympiad_reminders_sync,
+)
 from app.services.sci_spectrum_service import (
     EVENT_DATE as SCI_SPECTRUM_EVENT_DATE,
     IST as SCI_SPECTRUM_IST,
@@ -843,6 +847,28 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled musical showcase reminders at 9:00 AM IST")
+
+    # GK Olympiad reminders at 9:00 AM IST on 25 and 30 September and
+    # 3 October 2026, ahead of the Olympiad on 6 October.
+    scheduler.add_job(
+        send_gk_olympiad_reminders_sync,
+        trigger=CronTrigger(
+            hour=9, minute=0, second=0, timezone=GK_OLYMPIAD_IST,
+        ),
+        id="gk_olympiad_reminders",
+        replace_existing=True,
+    )
+    # A restart after 9 AM on a reminder day must still deliver that day's
+    # reminder, so a late one goes out rather than none at all.
+    scheduler.add_job(
+        send_gk_olympiad_reminders_sync,
+        trigger=DateTrigger(
+            run_date=datetime.now(GK_OLYMPIAD_IST) + timedelta(seconds=60),
+        ),
+        id="gk_olympiad_reminders_initial",
+        replace_existing=True,
+    )
+    logger.info("Scheduled GK Olympiad reminders at 9:00 AM IST")
 
     if SCI_SPECTRUM_ENABLED:
         def _sci_spectrum_run_at(env_name: str, default: str) -> datetime:

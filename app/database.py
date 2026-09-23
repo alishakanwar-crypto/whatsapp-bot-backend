@@ -61,6 +61,15 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_showcase_reminder_message_id
                 ON showcase_reminder_deliveries (wa_message_id);
 
+            CREATE TABLE IF NOT EXISTS gk_olympiad_reminder_deliveries (
+                reminder_date TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'generated',
+                claimed_at TEXT NOT NULL,
+                status_updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (reminder_date, recipient)
+            );
+
             CREATE TABLE IF NOT EXISTS sci_spectrum_deliveries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 phase TEXT NOT NULL,
