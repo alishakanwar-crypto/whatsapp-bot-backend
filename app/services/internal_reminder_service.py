@@ -32,6 +32,9 @@ INTERNAL_REMINDER_TEMPLATE = os.environ.get(
 # A claim is a lease, not a tombstone: a process that dies between claiming
 # and sending must not silence that reminder for good.
 CLAIM_LEASE = timedelta(minutes=10)
+# Alisha asked for these at 9:00 AM IST; a restart earlier in the morning runs
+# the catch-up job, which must not send her the reminder hours ahead of time.
+SEND_FROM_HOUR = 9
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,8 @@ async def _send_one(reminder: Reminder, recipient: str) -> bool:
 
 async def send_internal_reminders(now: datetime | None = None) -> int:
     current = now or datetime.now(IST)
+    if current.hour < SEND_FROM_HOUR:
+        return 0
     sent_count = 0
     for reminder in due_reminders(current.date()):
         for recipient in INTERNAL_REMINDER_PHONES:

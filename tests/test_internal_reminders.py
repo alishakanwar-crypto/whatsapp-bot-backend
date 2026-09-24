@@ -78,6 +78,19 @@ class InternalReminderTests(unittest.IsolatedAsyncioTestCase):
             call["body_params"], [workshop.subject, workshop.detail],
         )
 
+    async def test_a_restart_before_nine_waits_for_nine(self):
+        send = AsyncMock(return_value=True)
+        early = datetime(2026, 10, 1, 7, 31, tzinfo=reminders.IST)
+
+        with self._patched(send):
+            waited = await reminders.send_internal_reminders(early)
+            at_nine = await reminders.send_internal_reminders(
+                datetime(2026, 10, 1, 9, 0, tzinfo=reminders.IST),
+            )
+
+        self.assertEqual((waited, at_nine), (0, 1))
+        send.assert_awaited_once()
+
     async def test_no_other_day_sends_anything(self):
         send = AsyncMock(return_value=True)
         now = datetime(2026, 10, 2, 9, 0, tzinfo=reminders.IST)
