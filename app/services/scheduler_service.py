@@ -870,11 +870,13 @@ def start_scheduler() -> None:
     )
     # A claim only holds for its lease, so something has to come back after
     # the lease expires: without this, a worker that dies just after claiming
-    # leaves that reminder day undelivered until the date gate closes it.
+    # leaves that reminder day undelivered until the date gate closes it. The
+    # sweep runs every five minutes to the end of the day, so a claim taken
+    # late in the evening is still retried while the date gate is open.
     scheduler.add_job(
         send_gk_olympiad_reminders_sync,
         trigger=CronTrigger(
-            hour="9-20", minute="*/15", second=0, timezone=GK_OLYMPIAD_IST,
+            hour="9-23", minute="*/5", second=0, timezone=GK_OLYMPIAD_IST,
         ),
         id="gk_olympiad_reminders_sweep",
         replace_existing=True,
