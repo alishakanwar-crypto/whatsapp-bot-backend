@@ -24,6 +24,9 @@ from app.services.gk_olympiad_reminder_service import (
     IST as GK_OLYMPIAD_IST,
     send_gk_olympiad_reminders_sync,
 )
+from app.services.internal_reminder_service import (
+    send_internal_reminders_sync,
+)
 from app.services.sci_spectrum_service import (
     EVENT_DATE as SCI_SPECTRUM_EVENT_DATE,
     IST as SCI_SPECTRUM_IST,
@@ -882,6 +885,34 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled GK Olympiad reminders at 9:00 AM IST")
+
+    # One-off reminders Alisha asked for, each on its own date at 9:00 AM IST,
+    # with the same catch-up and lease-expiry sweep as the Olympiad reminders.
+    scheduler.add_job(
+        send_internal_reminders_sync,
+        trigger=CronTrigger(
+            hour=9, minute=0, second=0, timezone=GK_OLYMPIAD_IST,
+        ),
+        id="internal_reminders",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_internal_reminders_sync,
+        trigger=DateTrigger(
+            run_date=datetime.now(GK_OLYMPIAD_IST) + timedelta(seconds=60),
+        ),
+        id="internal_reminders_initial",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_internal_reminders_sync,
+        trigger=CronTrigger(
+            hour="9-23", minute="*/5", second=0, timezone=GK_OLYMPIAD_IST,
+        ),
+        id="internal_reminders_sweep",
+        replace_existing=True,
+    )
+    logger.info("Scheduled one-off internal reminders at 9:00 AM IST")
 
     if SCI_SPECTRUM_ENABLED:
         def _sci_spectrum_run_at(env_name: str, default: str) -> datetime:
