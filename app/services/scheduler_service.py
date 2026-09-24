@@ -868,6 +868,17 @@ def start_scheduler() -> None:
         id="gk_olympiad_reminders_initial",
         replace_existing=True,
     )
+    # A claim only holds for its lease, so something has to come back after
+    # the lease expires: without this, a worker that dies just after claiming
+    # leaves that reminder day undelivered until the date gate closes it.
+    scheduler.add_job(
+        send_gk_olympiad_reminders_sync,
+        trigger=CronTrigger(
+            hour="9-20", minute="*/15", second=0, timezone=GK_OLYMPIAD_IST,
+        ),
+        id="gk_olympiad_reminders_sweep",
+        replace_existing=True,
+    )
     logger.info("Scheduled GK Olympiad reminders at 9:00 AM IST")
 
     if SCI_SPECTRUM_ENABLED:
