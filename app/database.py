@@ -70,6 +70,16 @@ async def init_db():
                 PRIMARY KEY (reminder_date, recipient)
             );
 
+            CREATE TABLE IF NOT EXISTS internal_reminder_deliveries (
+                reminder_key TEXT NOT NULL,
+                reminder_date TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'generated',
+                claimed_at TEXT NOT NULL,
+                status_updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (reminder_key, reminder_date, recipient)
+            );
+
             CREATE TABLE IF NOT EXISTS sci_spectrum_deliveries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 phase TEXT NOT NULL,
