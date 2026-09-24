@@ -43,8 +43,19 @@ def is_reminder_due(today: date) -> bool:
     return today in GK_OLYMPIAD_REMINDER_DATES
 
 
-def _claim_reminder(reminder_date: date, recipient: str, now: datetime) -> bool:
+def _claim_reminder(
+    reminder_date: date,
+    recipient: str,
+    now: datetime,
+) -> str | None:
+    """Take the lease on this day's reminder and return the claim's token.
+
+    The token is the claim timestamp, which `_finish_reminder` must still
+    find in the row: a sender whose lease was taken over by a later run must
+    not write its own stale result over that run's.
+    """
     expiry = (now - GK_OLYMPIAD_CLAIM_LEASE).isoformat()
+    token = now.isoformat()
     with sqlite3.connect(DB_PATH) as db:
         cursor = db.execute(
             "INSERT INTO gk_olympiad_reminder_deliveries "
@@ -60,12 +71,12 @@ def _claim_reminder(reminder_date: date, recipient: str, now: datetime) -> bool:
             (
                 reminder_date.isoformat(),
                 recipient,
-                now.isoformat(),
+                token,
                 expiry,
             ),
         )
         db.commit()
-        return cursor.rowcount == 1
+        return token if cursor.rowcount == 1 else None
 
 
 def _finish_reminder(
@@ -73,17 +84,20 @@ def _finish_reminder(
     recipient: str,
     sent: bool,
     now: datetime,
+    token: str,
 ) -> None:
     with sqlite3.connect(DB_PATH) as db:
         db.execute(
             "UPDATE gk_olympiad_reminder_deliveries SET "
             "status = ?, status_updated_at = ? "
-            "WHERE reminder_date = ? AND recipient = ?",
+            "WHERE reminder_date = ? AND recipient = ? "
+            "  AND status = 'generated' AND claimed_at = ?",
             (
                 "accepted" if sent else "failed",
                 now.isoformat(),
                 reminder_date.isoformat(),
                 recipient,
+                token,
             ),
         )
         db.commit()
@@ -113,10 +127,13 @@ async def send_gk_olympiad_reminders(now: datetime | None = None) -> int:
         return 0
     sent_count = 0
     for recipient in GK_OLYMPIAD_REMINDER_PHONES:
-        if not _claim_reminder(today, recipient, current):
+        # Time each lease from its own claim, so a slow send to the first
+        # recipient cannot hand the next one an already half-spent lease.
+        token = _claim_reminder(today, recipient, now or datetime.now(IST))
+        if token is None:
             continue
         sent = await _send_one(recipient)
-        _finish_reminder(today, recipient, sent, datetime.now(IST))
+        _finish_reminder(today, recipient, sent, datetime.now(IST), token)
         if sent:
             sent_count += 1
             logger.info(

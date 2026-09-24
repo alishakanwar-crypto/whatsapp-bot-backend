@@ -119,6 +119,33 @@ class GkOlympiadReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent, 0)
         send.assert_not_awaited()
 
+    def test_an_overtaken_sender_cannot_overwrite_the_newer_result(self):
+        first_claim = datetime(2026, 10, 3, 9, 0, tzinfo=reminders.IST)
+        takeover = first_claim + reminders.GK_OLYMPIAD_CLAIM_LEASE + timedelta(
+            minutes=1,
+        )
+        with patch.object(reminders, "DB_PATH", str(self.db_path)):
+            stalled = reminders._claim_reminder(
+                date(2026, 10, 3), "919999995224", first_claim,
+            )
+            live = reminders._claim_reminder(
+                date(2026, 10, 3), "919999995224", takeover,
+            )
+            reminders._finish_reminder(
+                date(2026, 10, 3), "919999995224", True, takeover, live,
+            )
+            reminders._finish_reminder(
+                date(2026, 10, 3), "919999995224", False, takeover, stalled,
+            )
+
+        self.assertIsNotNone(stalled)
+        self.assertIsNotNone(live)
+        with sqlite3.connect(self.db_path) as db:
+            status = db.execute(
+                "SELECT status FROM gk_olympiad_reminder_deliveries"
+            ).fetchone()[0]
+        self.assertEqual(status, "accepted")
+
     async def test_a_failed_day_is_tried_again(self):
         send = AsyncMock(side_effect=[False, True])
         now = datetime(2026, 9, 30, 9, 0, tzinfo=reminders.IST)
