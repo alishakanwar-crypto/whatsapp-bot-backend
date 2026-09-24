@@ -72,7 +72,7 @@ class InternalReminderTests(unittest.IsolatedAsyncioTestCase):
         send.assert_awaited_once()
         call = send.await_args.kwargs
         self.assertEqual(call["to"], "919999995224")
-        self.assertEqual(call["template_name"], "ppis_internal_reminder")
+        self.assertEqual(call["template_name"], "ppis_internal_reminder_v2")
         workshop = reminders.due_reminders(date(2026, 10, 1))[0]
         self.assertEqual(
             call["body_params"], [workshop.subject, workshop.detail],

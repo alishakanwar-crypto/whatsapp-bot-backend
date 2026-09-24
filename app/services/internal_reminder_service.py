@@ -27,7 +27,7 @@ INTERNAL_REMINDER_PHONES = tuple(
     if phone.strip()
 )
 INTERNAL_REMINDER_TEMPLATE = os.environ.get(
-    "INTERNAL_REMINDER_TEMPLATE", "ppis_internal_reminder",
+    "INTERNAL_REMINDER_TEMPLATE", "ppis_internal_reminder_v2",
 )
 # A claim is a lease, not a tombstone: a process that dies between claiming
 # and sending must not silence that reminder for good.
@@ -46,7 +46,7 @@ REMINDERS: tuple[Reminder, ...] = (
     Reminder(
         key="gk_workshop_teachers",
         on=date(2026, 10, 1),
-        subject="GK workshop for teachers today at 2:00 PM",
+        subject="the GK workshop for teachers at 2:00 PM",
         detail=(
             "Teachers are to assemble in the school basement at 2:00 PM and "
             "carry their phone, a notepad and a pen."
