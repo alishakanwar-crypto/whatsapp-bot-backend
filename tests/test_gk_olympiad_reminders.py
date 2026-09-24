@@ -2,7 +2,7 @@ import contextlib
 import sqlite3
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -48,14 +48,13 @@ class GkOlympiadReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(reminders.is_reminder_due(date(2026, 9, 29)))
         self.assertFalse(reminders.is_reminder_due(date(2026, 10, 6)))
 
-    def test_the_announcement_wording_is_one_line_meta_accepts(self):
-        text = reminders.fallback_announcement(date(2026, 9, 25))
-
-        self.assertNotIn("\n", text)
-        self.assertNotIn("\t", text)
-        self.assertNotIn("    ", text)
-        self.assertIn("11 day(s) away", text)
-        self.assertIn(reminders.GK_OLYMPIAD_STUDY_LINK, text)
+    def test_the_olympiad_date_claims_no_weekday(self):
+        self.assertEqual(reminders.GK_OLYMPIAD_DATE, date(2026, 10, 6))
+        for weekday in (
+            "Monday", "Tuesday", "Wednesday", "Thursday",
+            "Friday", "Saturday", "Sunday",
+        ):
+            self.assertNotIn(weekday, reminders.GK_OLYMPIAD_DATE_TEXT)
 
     async def test_a_reminder_day_sends_once_and_no_second_time(self):
         send = AsyncMock(return_value=True)
@@ -70,7 +69,7 @@ class GkOlympiadReminderTests(unittest.IsolatedAsyncioTestCase):
         call = send.await_args.kwargs
         self.assertEqual(call["to"], "919999995224")
         self.assertEqual(call["template_name"], "ppis_gk_olympiad_reminder")
-        self.assertEqual(call["body_params"][0], "Monday, 6th October 2026")
+        self.assertEqual(call["body_params"][0], "6th October 2026")
         self.assertEqual(call["body_params"][2], reminders.GK_OLYMPIAD_STUDY_LINK)
 
     async def test_no_other_day_sends_anything(self):
@@ -83,22 +82,45 @@ class GkOlympiadReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent, 0)
         send.assert_not_awaited()
 
-    async def test_the_announcement_carries_it_until_meta_approves(self):
-        """The reminder must not wait on a wording that is still pending."""
-        send = AsyncMock(side_effect=[False, True])
+    async def test_a_send_that_died_mid_claim_is_tried_again(self):
+        """A process that stops between claiming and sending must not
+        silence that day's reminder for good."""
         now = datetime(2026, 10, 3, 9, 0, tzinfo=reminders.IST)
+        stale = now - reminders.GK_OLYMPIAD_CLAIM_LEASE - timedelta(minutes=1)
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT INTO gk_olympiad_reminder_deliveries "
+                "(reminder_date, recipient, status, claimed_at) "
+                "VALUES ('2026-10-03', '919999995224', 'generated', ?)",
+                (stale.isoformat(),),
+            )
+        send = AsyncMock(return_value=True)
 
         with self._patched(send):
             sent = await reminders.send_gk_olympiad_reminders(now)
 
         self.assertEqual(sent, 1)
-        self.assertEqual(send.await_count, 2)
-        fallback = send.await_args.kwargs
-        self.assertEqual(fallback["template_name"], "ppis_school_announcement")
-        self.assertIn("GK Olympiad", fallback["body_params"][0])
+        send.assert_awaited_once()
+
+    async def test_a_claim_still_in_flight_is_left_alone(self):
+        now = datetime(2026, 10, 3, 9, 0, tzinfo=reminders.IST)
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT INTO gk_olympiad_reminder_deliveries "
+                "(reminder_date, recipient, status, claimed_at) "
+                "VALUES ('2026-10-03', '919999995224', 'generated', ?)",
+                ((now - timedelta(minutes=1)).isoformat(),),
+            )
+        send = AsyncMock(return_value=True)
+
+        with self._patched(send):
+            sent = await reminders.send_gk_olympiad_reminders(now)
+
+        self.assertEqual(sent, 0)
+        send.assert_not_awaited()
 
     async def test_a_failed_day_is_tried_again(self):
-        send = AsyncMock(side_effect=[False, False, True])
+        send = AsyncMock(side_effect=[False, True])
         now = datetime(2026, 9, 30, 9, 0, tzinfo=reminders.IST)
 
         with self._patched(send):
