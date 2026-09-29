@@ -58,11 +58,16 @@ _pending_image_callbacks: dict[str, SnapshotImageCallback] = {}
 # task instead of holding up the images arriving behind it.
 _pending_image_deliveries: dict[str, list[asyncio.Task]] = {}
 
-# Queued snapshot requests — filled when agent is offline, drained on reconnect
+# Queued snapshot requests — filled when agent is offline, each served by its
+# own task as soon as the agent is back.
 # Each entry: {"classroom": str, "sender": str, "reply_to": str, "queued_at": float}
 _queued_snapshots: list[dict] = []
 _MAX_QUEUED = 20  # max pending queued requests
-_QUEUE_TTL = 120  # discard queued requests older than 2 minutes
+_QUEUE_TTL = 120  # stop waiting for the agent after 2 minutes
+# A capture attempted the moment the agent returns can still fail while it
+# finishes starting up, so one more attempt is made before giving up.
+_QUEUE_RETRY_GAP = 10.0
+_queue_tasks: set[asyncio.Task] = set()
 
 AGENT_SECRET = os.environ.get("AGENT_SECRET", "")
 
@@ -702,72 +707,155 @@ def should_alert_admin() -> bool:
 def queue_snapshot_request(classroom: str, sender: str, reply_to: str) -> bool:
     """Queue a snapshot request to be fulfilled when the agent reconnects.
 
+    Each queued request gets its own task, so it is served within a second of
+    the agent returning and the parent is told when it cannot be served.
+
     Returns True if queued successfully, False if queue is full.
     """
-    # Purge expired entries
     now = time.time()
-    _queued_snapshots[:] = [
-        q for q in _queued_snapshots
-        if now - q["queued_at"] < _QUEUE_TTL
-    ]
     # Avoid duplicate requests from same sender for same classroom
     for q in _queued_snapshots:
         if q["sender"] == sender and q["classroom"] == classroom:
             return True  # already queued
     if len(_queued_snapshots) >= _MAX_QUEUED:
         return False
-    _queued_snapshots.append({
+    entry = {
         "classroom": classroom,
         "sender": sender,
         "reply_to": reply_to,
         "queued_at": now,
-    })
+    }
+    _queued_snapshots.append(entry)
+    task = asyncio.create_task(_serve_queued_snapshot(entry))
+    _queue_tasks.add(task)
+    task.add_done_callback(_queue_tasks.discard)
     logger.info(f"Queued snapshot request for '{classroom}' from {sender} ({len(_queued_snapshots)} in queue)")
     return True
 
 
-async def _drain_queued_snapshots():
-    """Process all queued snapshot requests after agent reconnects.
+async def _send_queued_images(entry: dict, images: list[dict]) -> bool:
+    """Send a queued request's photos; True if the parent received one."""
+    from app.services.whatsapp_service import (
+        upload_base64_image_cloud,
+        send_cloud_media,
+    )
 
-    Called automatically when the agent WebSocket reconnects.
+    sent = False
+    for img_data in images:
+        img_b64 = img_data.get("image_base64", "")
+        desc = img_data.get("description", entry["classroom"])
+        if not img_b64:
+            continue
+        media_id = await upload_base64_image_cloud(img_b64)
+        if not media_id:
+            continue
+        caption = (
+            f"Live photo from {entry['classroom']} ({desc})\n"
+            "PP International School"
+            if desc
+            else f"Live photo from {entry['classroom']}\nPP International School"
+        )
+        if await send_cloud_media(
+            entry["reply_to"], "image", media_id=media_id, caption=caption,
+        ):
+            sent = True
+    return sent
+
+
+async def _tell_parent_the_queued_photo_failed(entry: dict) -> None:
+    """Ask for the request again, having promised it would arrive by itself."""
+    from app.services.whatsapp_service import send_whatsapp_message
+
+    try:
+        await send_whatsapp_message(
+            entry["reply_to"],
+            "Dear Parent,\n\n"
+            "We are sorry — we could not get the photo you asked for. "
+            "Please send your request again and we will try once more.\n\n"
+            "Warm regards,\nPP International School",
+        )
+    except Exception as exc:
+        logger.error(
+            "Could not tell %s their queued photo failed: %s",
+            entry["sender"], exc,
+        )
+
+
+async def _serve_queued_snapshot(entry: dict) -> None:
+    """Serve one queued request, or say so when it cannot be served.
+
+    The parent was told their photo would arrive without asking again, so a
+    capture that fails — or an agent that never comes back — must end in a
+    message rather than silence.
     """
-    if not _queued_snapshots:
-        return
-
-    now = time.time()
-    # Copy and clear the queue atomically
-    pending = [q for q in _queued_snapshots if now - q["queued_at"] < _QUEUE_TTL]
-    _queued_snapshots.clear()
-
-    if not pending:
-        return
-
-    logger.info(f"Draining {len(pending)} queued snapshot request(s)")
-
-    for q in pending:
-        try:
-            result = await request_snapshot(q["classroom"], timeout=55.0)
-            if result.get("success") and result.get("images"):
-                from app.services.whatsapp_service import (
-                    upload_base64_image_cloud,
-                    send_cloud_media,
+    classroom = entry["classroom"]
+    try:
+        waited = time.time() - entry["queued_at"]
+        served = False
+        if await wait_for_agent(max_wait=max(_QUEUE_TTL - waited, 1.0)):
+            for attempt in (1, 2):
+                if attempt == 2:
+                    await asyncio.sleep(_QUEUE_RETRY_GAP)
+                try:
+                    result = await request_snapshot(classroom, timeout=55.0)
+                except Exception as exc:
+                    logger.error(
+                        "Queued snapshot for '%s' attempt %d raised: %s",
+                        classroom, attempt, exc, exc_info=True,
+                    )
+                    continue
+                if result.get("success") and result.get("images"):
+                    served = await _send_queued_images(entry, result["images"])
+                    if served:
+                        break
+                logger.warning(
+                    "Queued snapshot for '%s' attempt %d failed: %s",
+                    classroom, attempt, result.get("error", "no image sent"),
                 )
-                for img_data in result["images"]:
-                    img_b64 = img_data.get("image_base64", "")
-                    desc = img_data.get("description", q["classroom"])
-                    if img_b64:
-                        media_id = await upload_base64_image_cloud(img_b64)
-                        if media_id:
-                            await send_cloud_media(
-                                q["reply_to"], media_id, "image",
-                                caption=f"📸 {desc}"
-                            )
-                record_snapshot_success()
-                logger.info(f"Delivered queued snapshot for '{q['classroom']}' to {q['sender']}")
-            else:
-                logger.warning(f"Queued snapshot for '{q['classroom']}' failed: {result.get('error')}")
-        except Exception as e:
-            logger.error(f"Error delivering queued snapshot for '{q['classroom']}': {e}")
+        else:
+            logger.warning(
+                "Queued snapshot for '%s' gave up: agent never came back",
+                classroom,
+            )
+
+        from app.services.snapshot_audit_service import (
+            OUTCOME_CAPTURE_FAILED,
+            OUTCOME_DELIVERED,
+            log_snapshot_request,
+            mark_resolved,
+        )
+
+        if served:
+            record_snapshot_success()
+            logger.info(
+                "Delivered queued snapshot for '%s' to %s",
+                classroom, entry["sender"],
+            )
+            await log_snapshot_request(
+                entry["sender"], "Show my child", OUTCOME_DELIVERED,
+                reason="served from the queue after the agent returned",
+                location=classroom,
+            )
+            await mark_resolved(
+                entry["sender"], note="queued request served after reconnect",
+            )
+            return
+
+        record_snapshot_failure()
+        await log_snapshot_request(
+            entry["sender"], "Show my child", OUTCOME_CAPTURE_FAILED,
+            reason="queued request could not be served",
+            location=classroom,
+        )
+        await _tell_parent_the_queued_photo_failed(entry)
+    except Exception as exc:
+        logger.error(
+            "Serving queued snapshot for '%s' failed: %s",
+            classroom, exc, exc_info=True,
+        )
+    finally:
+        if entry in _queued_snapshots:
+            _queued_snapshots.remove(entry)
 
 
 async def _proxy_snapshot_request(classroom: str, timeout: float = 55.0) -> dict | None:
@@ -1077,9 +1165,6 @@ async def agent_websocket(websocket: WebSocket):
     logger.info("Campus agent connected via WebSocket")
     _note_agent_message(websocket)
     keepalive = asyncio.create_task(_keep_agent_link_honest(websocket))
-
-    # Drain any queued snapshot requests from while agent was offline
-    asyncio.create_task(_drain_queued_snapshots())
 
     try:
         while True:
