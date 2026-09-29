@@ -762,23 +762,47 @@ async def _send_queued_images(entry: dict, images: list[dict]) -> bool:
     return sent
 
 
+def _result_images(result: dict) -> list[dict]:
+    """The photos in a snapshot result, in either protocol's shape."""
+    images = result.get("images") or []
+    if not images and result.get("image_base64"):
+        images = [{
+            "image_base64": result["image_base64"],
+            "description": result.get("description", ""),
+        }]
+    return images
+
+
 async def _tell_parent_the_queued_photo_failed(entry: dict) -> None:
     """Ask for the request again, having promised it would arrive by itself."""
     from app.services.whatsapp_service import send_whatsapp_message
 
-    try:
-        await send_whatsapp_message(
-            entry["reply_to"],
-            "Dear Parent,\n\n"
-            "We are sorry — we could not get the photo you asked for. "
-            "Please send your request again and we will try once more.\n\n"
-            "Warm regards,\nPP International School",
-        )
-    except Exception as exc:
-        logger.error(
-            "Could not tell %s their queued photo failed: %s",
-            entry["sender"], exc,
-        )
+    text = (
+        "Dear Parent,\n\n"
+        "We are sorry — we could not get the photo you asked for. "
+        "Please send your request again and we will try once more.\n\n"
+        "Warm regards,\nPP International School"
+    )
+    for attempt in (1, 2):
+        try:
+            if await send_whatsapp_message(entry["reply_to"], text):
+                return
+            logger.warning(
+                "WhatsApp refused the queued-photo failure notice for %s "
+                "(attempt %d)",
+                entry["sender"], attempt,
+            )
+        except Exception as exc:
+            logger.error(
+                "Could not tell %s their queued photo failed (attempt %d): %s",
+                entry["sender"], attempt, exc,
+            )
+        if attempt == 1:
+            await asyncio.sleep(_QUEUE_RETRY_GAP)
+    logger.error(
+        "Queued photo for %s failed and the parent could not be told",
+        entry["sender"],
+    )
 
 
 async def _serve_queued_snapshot(entry: dict) -> None:
@@ -798,16 +822,17 @@ async def _serve_queued_snapshot(entry: dict) -> None:
                     await asyncio.sleep(_QUEUE_RETRY_GAP)
                 try:
                     result = await request_snapshot(classroom, timeout=55.0)
+                    images = _result_images(result) if result.get("success") else []
+                    if images:
+                        served = await _send_queued_images(entry, images)
+                        if served:
+                            break
                 except Exception as exc:
                     logger.error(
                         "Queued snapshot for '%s' attempt %d raised: %s",
                         classroom, attempt, exc, exc_info=True,
                     )
                     continue
-                if result.get("success") and result.get("images"):
-                    served = await _send_queued_images(entry, result["images"])
-                    if served:
-                        break
                 logger.warning(
                     "Queued snapshot for '%s' attempt %d failed: %s",
                     classroom, attempt, result.get("error", "no image sent"),
