@@ -160,6 +160,34 @@ class QueuedSnapshotDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(asked.await_count, 2)
         told.assert_awaited_once()
 
+    async def test_a_second_photo_failing_does_not_apologise(self):
+        result = {
+            "success": True,
+            "images": [
+                {"image_base64": "aaa", "description": "G3C C1"},
+                {"image_base64": "bbb", "description": "G3C C2"},
+            ],
+        }
+        with patch.object(agent_ws, "request_snapshot",
+                          AsyncMock(return_value=result)) as asked, \
+            patch("app.services.whatsapp_service.upload_base64_image_cloud",
+                  AsyncMock(side_effect=["media-1",
+                                         RuntimeError("upload down")])), \
+            patch("app.services.whatsapp_service.send_cloud_media",
+                  AsyncMock(return_value=True)) as send, \
+            patch("app.services.whatsapp_service.send_whatsapp_message",
+                  AsyncMock(return_value=True)) as told, \
+            patch("app.services.snapshot_audit_service.log_snapshot_request",
+                  AsyncMock()), \
+            patch("app.services.snapshot_audit_service.mark_resolved",
+                  AsyncMock()):
+            agent_ws.queue_snapshot_request("GRADE 3C", "91999", "91999")
+            await self._drain()
+
+        self.assertEqual(asked.await_count, 1)
+        send.assert_awaited_once()
+        told.assert_not_awaited()
+
     async def test_a_refused_failure_notice_is_sent_again(self):
         with patch.object(agent_ws, "request_snapshot",
                           AsyncMock(return_value={"success": False})), \

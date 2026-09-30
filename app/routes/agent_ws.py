@@ -746,19 +746,25 @@ async def _send_queued_images(entry: dict, images: list[dict]) -> bool:
         desc = img_data.get("description", entry["classroom"])
         if not img_b64:
             continue
-        media_id = await upload_base64_image_cloud(img_b64)
-        if not media_id:
-            continue
         caption = (
             f"Live photo from {entry['classroom']} ({desc})\n"
             "PP International School"
             if desc
             else f"Live photo from {entry['classroom']}\nPP International School"
         )
-        if await send_cloud_media(
-            entry["reply_to"], "image", media_id=media_id, caption=caption,
-        ):
-            sent = True
+        try:
+            media_id = await upload_base64_image_cloud(img_b64)
+            if not media_id:
+                continue
+            if await send_cloud_media(
+                entry["reply_to"], "image", media_id=media_id, caption=caption,
+            ):
+                sent = True
+        except Exception as exc:
+            logger.error(
+                "Could not send a queued photo of '%s' to %s: %s",
+                entry["classroom"], entry["sender"], exc,
+            )
     return sent
 
 
