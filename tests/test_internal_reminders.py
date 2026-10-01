@@ -60,6 +60,30 @@ class InternalReminderTests(unittest.IsolatedAsyncioTestCase):
         for expected in ("basement", "2:00 pm", "notepad", "pen", "phone"):
             self.assertIn(expected, words)
 
+    def test_the_assembly_schedule_falls_on_the_sixteenth_of_october(self):
+        due = reminders.due_reminders(date(2026, 10, 16))
+        self.assertEqual(
+            [item.key for item in due], ["assembly_schedule_21_to_31_october"],
+        )
+        words = f"{due[0].subject} {due[0].detail}".lower()
+        for expected in ("assembly schedule", "21st october", "31st october"):
+            self.assertIn(expected, words)
+        self.assertEqual(reminders.due_reminders(date(2026, 10, 15)), ())
+        self.assertEqual(reminders.due_reminders(date(2026, 10, 21)), ())
+
+    async def test_the_assembly_reminder_sends_on_its_own_day(self):
+        send = AsyncMock(return_value=True)
+        now = datetime(2026, 10, 16, 9, 0, tzinfo=reminders.IST)
+
+        with self._patched(send):
+            sent = await reminders.send_internal_reminders(now)
+
+        self.assertEqual(sent, 1)
+        due = reminders.due_reminders(date(2026, 10, 16))[0]
+        self.assertEqual(
+            send.await_args.kwargs["body_params"], [due.subject, due.detail],
+        )
+
     async def test_the_day_sends_once_and_no_second_time(self):
         send = AsyncMock(return_value=True)
         now = datetime(2026, 10, 1, 9, 0, tzinfo=reminders.IST)
