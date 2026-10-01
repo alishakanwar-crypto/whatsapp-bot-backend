@@ -55,6 +55,17 @@ REMINDERS: tuple[Reminder, ...] = (
             "carry their phone, a notepad and a pen."
         ),
     ),
+    Reminder(
+        key="assembly_schedule_21_to_31_october",
+        on=date(2026, 10, 16),
+        subject=(
+            "sharing the assembly schedule for 21st to 31st October 2026"
+        ),
+        detail=(
+            "Please share the next assembly schedule, covering 21st October "
+            "to 31st October 2026."
+        ),
+    ),
 )
 
 
