@@ -239,6 +239,7 @@ def get_health_state() -> dict:
         "agent_config_key_refused": _health_state.get(
             "agent_config_key_refused", False
         ),
+        "agent_disk": _health_state.get("agent_disk", {}),
     }
 
 
@@ -444,6 +445,68 @@ def _task_states(value: object) -> dict:
             "next_run": str(state.get("next_run", ""))[:40],
         }
     return kept
+
+
+def _record_disk(
+    data: dict, websocket: WebSocket | None = None, hello: bool = False
+) -> None:
+    """Remember how much room is left on the campus PC's drive.
+
+    Windows kills a process that runs out of disk with exit code 112 and no
+    traceback, which is how the agent has been dying in the mornings, and from
+    here it looks like an agent that simply went quiet.
+    """
+    if websocket is not None and websocket is not _agent_ws:
+        return
+    state = data.get("disk")
+    if not isinstance(state, dict) or not state:
+        if hello:
+            _health_state.pop("agent_disk", None)
+        return
+    kept = {
+        "drive": str(state.get("drive", ""))[:8],
+        "free_mb": state.get("free_mb"),
+        "total_mb": state.get("total_mb"),
+        "low": bool(state.get("low")),
+        "logs_mb": state.get("logs_mb"),
+        "snapshots_mb": state.get("snapshots_mb"),
+    }
+    _health_state["agent_disk"] = kept
+    if not kept["low"]:
+        _health_state["disk_alerted"] = False
+        return
+    logger.warning(
+        "Campus PC is low on disk: %s MB free of %s MB",
+        kept["free_mb"], kept["total_mb"],
+    )
+    if _health_state.get("disk_alerted"):
+        return
+    _health_state["disk_alerted"] = True
+    try:
+        asyncio.get_running_loop().create_task(_alert_low_disk(kept))
+    except RuntimeError:
+        pass
+
+
+async def _alert_low_disk(disk: dict) -> None:
+    """Ask for disk space to be freed before the drive stops the agent."""
+    from app.services.whatsapp_service import send_whatsapp_force
+
+    when = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
+    message = (
+        "PPIS Bot — Campus PC Running Out of Disk\n\n"
+        f"As of {when} the campus PC has only "
+        f"{disk.get('free_mb')} MB free of {disk.get('total_mb')} MB.\n\n"
+        "When the drive fills, Windows kills the campus agent outright and "
+        "live photos stop until somebody restarts it. Please free space on "
+        "the campus PC (recordings, downloads, old installers)."
+    )
+    for admin_phone in _RECORDER_ALERT_NUMBERS:
+        try:
+            await send_whatsapp_force(admin_phone, message)
+        except Exception as exc:
+            logger.warning("Could not alert %s about low disk: %s",
+                           admin_phone, exc)
 
 
 def _record_pc_recovery(
@@ -1225,6 +1288,7 @@ async def agent_websocket(websocket: WebSocket):
                 _record_previous_run(data, websocket)
                 _record_ws_link(data, websocket)
                 _record_pc_recovery(data, websocket, hello=True)
+                _record_disk(data, websocket, hello=True)
                 refused = bool(data.get("config_key_refused"))
                 _health_state["agent_config_key_refused"] = refused
                 if refused:
@@ -1269,6 +1333,7 @@ async def agent_websocket(websocket: WebSocket):
                 _record_auto_update(data)
                 _record_ws_link(data, websocket)
                 _record_pc_recovery(data, websocket)
+                _record_disk(data, websocket)
 
             elif msg_type == "test_result":
                 logger.info(f"DVR test result: {data}")
