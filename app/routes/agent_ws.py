@@ -106,6 +106,12 @@ _RECORDER_ALERT_NUMBERS = [
     if number.strip()
 ]
 
+# Approved utility template, so a low-disk warning reaches an admin whose
+# 24-hour conversation window is shut.
+_LOW_DISK_TEMPLATE = os.environ.get(
+    "INTERNAL_REMINDER_TEMPLATE", "ppis_internal_reminder_v2",
+)
+
 # ---------------------------------------------------------------------------
 # Fallback proxy: when the agent isn't connected locally, proxy snapshot
 # requests to the app where the agent IS connected.  This handles the
@@ -492,25 +498,47 @@ def _record_disk(
 
 async def _alert_low_disk(disk: dict) -> None:
     """Ask for disk space to be freed before the drive stops the agent."""
-    from app.services.whatsapp_service import send_whatsapp_force
+    from app.services import whatsapp_service
 
     when = datetime.now(IST).strftime("%d-%m-%Y %H:%M:%S IST")
-    message = (
-        "PPIS Bot — Campus PC Running Out of Disk\n\n"
+    subject = "freeing space on the campus PC before its drive fills"
+    detail = (
         f"As of {when} the campus PC has only "
-        f"{disk.get('free_mb')} MB free of {disk.get('total_mb')} MB.\n\n"
+        f"{disk.get('free_mb')} MB free of {disk.get('total_mb')} MB. "
         "When the drive fills, Windows kills the campus agent outright and "
         "live photos stop until somebody restarts it. Please free space on "
         "the campus PC (recordings, downloads, old installers)."
     )
+    message = f"PPIS Bot — Campus PC Running Out of Disk\n\n{detail}"
     delivered = False
     for admin_phone in _RECORDER_ALERT_NUMBERS:
+        sent = False
+        # A low drive rarely coincides with an open conversation, and a
+        # freeform message outside Meta's 24-hour window is never delivered,
+        # so the approved utility template carries the warning.
         try:
-            delivered = bool(await send_whatsapp_force(admin_phone, message)) \
-                or delivered
+            sent = bool(
+                await whatsapp_service.send_cloud_template_message(
+                    to=admin_phone,
+                    template_name=_LOW_DISK_TEMPLATE,
+                    language_code="en",
+                    body_params=[subject, detail],
+                )
+            )
         except Exception as exc:
             logger.warning("Could not alert %s about low disk: %s",
                            admin_phone, exc)
+        if not sent:
+            try:
+                sent = bool(
+                    await whatsapp_service.send_whatsapp_force(
+                        admin_phone, message
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Could not alert %s about low disk: %s",
+                               admin_phone, exc)
+        delivered = sent or delivered
     if not delivered:
         # Nobody was warned, so the next low reading has to try again rather
         # than stay quiet until the drive recovers.
