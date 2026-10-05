@@ -69,6 +69,42 @@ class AgentDiskHealthTests(unittest.TestCase):
         finally:
             whatsapp_service.send_whatsapp_force = original
 
+    def test_a_warning_nobody_received_is_sent_again(self):
+        attempts: list[str] = []
+
+        async def refusing_send(phone, message):
+            attempts.append(phone)
+            return False
+
+        import app.services.whatsapp_service as whatsapp_service
+
+        original = whatsapp_service.send_whatsapp_force
+        whatsapp_service.send_whatsapp_force = refusing_send
+        try:
+            low = {
+                "disk": {
+                    "drive": "C:",
+                    "free_mb": 300.0,
+                    "total_mb": 476000.0,
+                    "low": True,
+                }
+            }
+
+            async def report_twice():
+                agent_ws._record_disk(low)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                agent_ws._record_disk(low)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+
+            asyncio.run(report_twice())
+            self.assertEqual(
+                len(attempts), 2 * len(agent_ws._RECORDER_ALERT_NUMBERS)
+            )
+        finally:
+            whatsapp_service.send_whatsapp_force = original
+
     def test_an_agent_that_says_nothing_keeps_what_we_had(self):
         agent_ws._record_disk({"disk": {"free_mb": 1000.0, "low": False}})
         agent_ws._record_disk({})

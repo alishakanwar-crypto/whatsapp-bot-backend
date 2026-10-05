@@ -481,6 +481,8 @@ def _record_disk(
     )
     if _health_state.get("disk_alerted"):
         return
+    # Claimed before the send so two readings in a row cannot both alert; the
+    # claim is given back below if nobody could be reached.
     _health_state["disk_alerted"] = True
     try:
         asyncio.get_running_loop().create_task(_alert_low_disk(kept))
@@ -501,12 +503,18 @@ async def _alert_low_disk(disk: dict) -> None:
         "live photos stop until somebody restarts it. Please free space on "
         "the campus PC (recordings, downloads, old installers)."
     )
+    delivered = False
     for admin_phone in _RECORDER_ALERT_NUMBERS:
         try:
-            await send_whatsapp_force(admin_phone, message)
+            delivered = bool(await send_whatsapp_force(admin_phone, message)) \
+                or delivered
         except Exception as exc:
             logger.warning("Could not alert %s about low disk: %s",
                            admin_phone, exc)
+    if not delivered:
+        # Nobody was warned, so the next low reading has to try again rather
+        # than stay quiet until the drive recovers.
+        _health_state["disk_alerted"] = False
 
 
 def _record_pc_recovery(
