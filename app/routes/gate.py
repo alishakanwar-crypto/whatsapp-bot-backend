@@ -684,6 +684,9 @@ CPPLUS_SNAPSHOT_TEMPLATE = os.environ.get(
 # front-facing face. Tunable via env.
 _SNAPSHOT_MIN_FACE_PX = int(os.environ.get("CPPLUS_SNAPSHOT_MIN_FACE_PX", "48"))
 _SNAPSHOT_MIN_SHARPNESS = float(os.environ.get("CPPLUS_SNAPSHOT_MIN_SHARPNESS", "60"))
+# A crop cut from a person box is taller than it is wide, even after the
+# agent's padding. Anything squarer is a piece of the gate, not a visitor.
+_SNAPSHOT_MIN_ASPECT = float(os.environ.get("CPPLUS_SNAPSHOT_MIN_ASPECT", "1.2"))
 _frontal_cascade = None
 
 
@@ -704,8 +707,11 @@ def _has_clear_frontal_face(image_b64: str) -> bool:
 
     A frontal Haar cascade rejects profile / back-of-head / no-face crops
     (it does not fire on side profiles), and a Laplacian-variance sharpness
-    check on the face region rejects blurry captures. Fails closed: any error
-    or ambiguity returns False so we never share a questionable snapshot.
+    check on the face region rejects blurry captures. The cascade does fire on
+    repeating ground texture (the gate's paving blocks read as a sharp face),
+    so the crop must also be person-shaped: taller than it is wide. Fails
+    closed: any error or ambiguity returns False so we never share a
+    questionable snapshot.
     """
     if not image_b64:
         return False
@@ -717,6 +723,9 @@ def _has_clear_frontal_face(image_b64: str) -> bool:
         arr = np.frombuffer(raw, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
+            return False
+        height, width = img.shape[:2]
+        if width <= 0 or height < _SNAPSHOT_MIN_ASPECT * width:
             return False
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = _get_frontal_cascade().detectMultiScale(
