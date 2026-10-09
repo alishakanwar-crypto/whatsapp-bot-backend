@@ -601,6 +601,21 @@ def _record_pc_recovery(
         "nightly_refresh_last_result": str(
             state.get("nightly_refresh_last_result", "")
         )[:20],
+        # A restart the watchdog triggers must outlive the watchdog run that
+        # triggered it: started as its child, the agent was killed with that
+        # run, so unattended restarts reported success and the campus stayed
+        # without an agent until somebody restarted it by hand.
+        "agent_task_survives_watchdog": bool(
+            state.get("agent_task_survives_watchdog")
+        ),
+        # What came of the last few restarts nobody was there to see, so a
+        # watchdog that keeps reporting success while parents get nothing can
+        # be told apart from one that is working.
+        "unattended_starts": [
+            str(line)[:120]
+            for line in (state.get("unattended_starts") or [])
+            if isinstance(line, str)
+        ][-5:],
         "tasks_missing": _task_names(state.get("tasks_missing")),
         "tasks_unreadable": _task_names(state.get("tasks_unreadable")),
         "tasks_disabled": _task_names(state.get("tasks_disabled")),
