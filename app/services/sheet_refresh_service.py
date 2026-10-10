@@ -795,6 +795,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
     """
     active_students: list[dict] = []
     snapshot_students: list[dict] = []
+    birthday_students: list[dict] = []
     failed_gids: list[str] = []
 
     async with httpx.AsyncClient() as client:
@@ -983,6 +984,11 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                     if bot_enabled and not in_withdrawal:
                         active_students.append(student)
                     snapshot_students.append(student)
+                    # A birthday wish belongs to every child in the school,
+                    # not only the classes the bot's parent features are
+                    # switched on for — but never to one who has left.
+                    if not in_withdrawal and not _is_inline_withdrawn:
+                        birthday_students.append(student)
 
             except Exception as e:
                 logger.warning(f"PI SHEET TAB gid={gid}: {e}")
@@ -1204,7 +1210,18 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 f"allowlisted student entries"
             )
 
-        await _write_student_birthdays(db, unique, partial, fetched_grades)
+        birthday_keys: set[tuple[str, str]] = set()
+        birthday_unique: list[dict] = []
+        for s in birthday_students:
+            key = (s["name"].upper().strip(), s["grade"])
+            if key in birthday_keys:
+                continue
+            birthday_keys.add(key)
+            birthday_unique.append(s)
+
+        await _write_student_birthdays(
+            db, birthday_unique, partial, fetched_grades
+        )
 
         await apply_manual_students(db)
 

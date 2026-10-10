@@ -59,6 +59,16 @@ CREATE TABLE snapshot_audit_report_log (
     failed_count INTEGER NOT NULL DEFAULT 0,
     sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE manual_students (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_name TEXT NOT NULL,
+    grade TEXT NOT NULL,
+    father_name TEXT DEFAULT '',
+    mother_name TEXT DEFAULT '',
+    father_mobile TEXT DEFAULT '',
+    mother_mobile TEXT DEFAULT '',
+    note TEXT DEFAULT ''
+);
 CREATE TABLE allowlist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     phone_number TEXT NOT NULL,
@@ -354,6 +364,36 @@ class PartialSheetRefreshTests(unittest.IsolatedAsyncioTestCase):
             await db.close()
         self.assertEqual(count, 3)
         self.assertTrue(self.alerts)
+
+    async def test_every_child_gets_a_birthday_even_outside_the_bot_list(self):
+        tab = (
+            "GRADE,STUDENT NAME,DOB,FATHER MOBILE NO.,MOTHER MOBILE NO.\n"
+            "Nursery 2,SNAISHA JAIN,24.02.2018,9811111110,9822222220\n"
+            "Nursery 2,OLD NUR2,10.03.2018,9811111111,9822222221\n"
+            "Nursery 2,LEFT KID,11.03.2018,9811111112,\n"
+            "Withdrawal,,,,\n"
+            "Nursery 2,GONE KID,12.03.2018,9811111113,\n"
+        )
+        with patch.object(
+            sheets, "PI_SHEET_BOT_ENABLED_STUDENTS", {"SNAISHA JAIN"}
+        ):
+            ok = await self._refresh_with({"1": tab, "2": tab})
+        self.assertTrue(ok)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            cur = await db.execute(
+                "SELECT student_name FROM student_birthdays ORDER BY student_name"
+            )
+            names = [row[0] for row in await cur.fetchall()]
+            cur = await db.execute("SELECT COUNT(*) FROM pi_sheet_students")
+            bot_students = (await cur.fetchone())[0]
+        finally:
+            await db.close()
+
+        self.assertEqual(names, ["LEFT KID", "OLD NUR2", "SNAISHA JAIN"])
+        # The bot's own parent features stay limited to the allowlist.
+        self.assertEqual(bot_students, 1)
 
 
 if __name__ == "__main__":
