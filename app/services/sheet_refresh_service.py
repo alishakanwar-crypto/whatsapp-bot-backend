@@ -682,6 +682,54 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
+def _keep_highest_grade(students: list[dict]) -> tuple[list[dict], int]:
+    """One row per child, in the highest grade they are listed in.
+
+    A promoted child often stays on the old class tab as well, so the same
+    name and parents' numbers appear twice. Keeping both would mean two of
+    everything for that family.
+    """
+
+    def grade_num(grade: str) -> int:
+        m = _re.search(r"(\d+)", grade)
+        return int(m.group(1)) if m else -1
+
+    highest: dict[tuple[str, str], int] = {}
+    for s in students:
+        name_key = s["name"].upper().strip()
+        gnum = grade_num(s["grade"])
+        for ph in (s["father_phone"], s["mother_phone"]):
+            digits = _re.sub(r"\D", "", ph)
+            if len(digits) >= 10:
+                k = (name_key, digits[-10:])
+                if k not in highest or gnum > highest[k]:
+                    highest[k] = gnum
+
+    kept: list[dict] = []
+    removed = 0
+    for s in students:
+        name_key = s["name"].upper().strip()
+        gnum = grade_num(s["grade"])
+        dominated = False
+        for ph in (s["father_phone"], s["mother_phone"]):
+            digits = _re.sub(r"\D", "", ph)
+            if len(digits) >= 10:
+                k = (name_key, digits[-10:])
+                if highest.get(k, gnum) > gnum:
+                    dominated = True
+                    break
+        if dominated:
+            removed += 1
+            logger.info(
+                f"PI SHEET DEDUP: Removing {s['name']} from {s['grade']} "
+                f"(also in a higher grade)"
+            )
+        else:
+            kept.append(s)
+
+    return kept, removed
+
+
 async def apply_manual_students(db) -> int:
     """Restore students admitted before they reach the PI Sheet.
 
@@ -1015,48 +1063,7 @@ async def fetch_all_pi_sheet_tabs() -> bool:
 
     same_grade_dupes = len(active_students) - len(unique)
 
-    # --- Cross-grade dedup: keep highest grade per (name, phone) ---
-    # Students who appear in multiple grade tabs (e.g. promoted but old tab
-    # not cleaned) should only be kept in the highest grade.
-    def _extract_grade_num(grade_str: str) -> int:
-        m = _re.search(r"(\d+)", grade_str)
-        return int(m.group(1)) if m else -1
-
-    # Build map: (name_upper, phone_last10) → highest grade number
-    highest: dict[tuple[str, str], int] = {}
-    for s in unique:
-        name_key = s["name"].upper().strip()
-        gnum = _extract_grade_num(s["grade"])
-        for ph in [s["father_phone"], s["mother_phone"]]:
-            digits = _re.sub(r"\D", "", ph)
-            if len(digits) >= 10:
-                k = (name_key, digits[-10:])
-                if k not in highest or gnum > highest[k]:
-                    highest[k] = gnum
-
-    cross_grade_removed = 0
-    final: list[dict] = []
-    for s in unique:
-        name_key = s["name"].upper().strip()
-        gnum = _extract_grade_num(s["grade"])
-        dominated = False
-        for ph in [s["father_phone"], s["mother_phone"]]:
-            digits = _re.sub(r"\D", "", ph)
-            if len(digits) >= 10:
-                k = (name_key, digits[-10:])
-                if highest.get(k, gnum) > gnum:
-                    dominated = True
-                    break
-        if dominated:
-            cross_grade_removed += 1
-            logger.info(
-                f"PI SHEET DEDUP: Removing {s['name']} from {s['grade']} "
-                f"(also in a higher grade)"
-            )
-        else:
-            final.append(s)
-
-    unique = final
+    unique, cross_grade_removed = _keep_highest_grade(unique)
 
     logger.info(
         f"PI SHEET FULL REFRESH: {len(unique)} unique active students "
@@ -1218,6 +1225,8 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 continue
             birthday_keys.add(key)
             birthday_unique.append(s)
+
+        birthday_unique, _ = _keep_highest_grade(birthday_unique)
 
         await _write_student_birthdays(
             db, birthday_unique, partial, fetched_grades

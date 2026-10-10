@@ -395,6 +395,38 @@ class PartialSheetRefreshTests(unittest.IsolatedAsyncioTestCase):
         # The bot's own parent features stay limited to the allowlist.
         self.assertEqual(bot_students, 1)
 
+    async def test_a_promoted_child_is_wished_once(self):
+        header = "GRADE,STUDENT NAME,DOB,FATHER MOBILE NO.,MOTHER MOBILE NO.\n"
+        row = "{grade},MOVED KID,24.02.2015,9811111110,9822222220\n"
+        others = (
+            "{grade},STAYS A,01.02.2015,9811111111,\n"
+            "{grade},STAYS B,02.02.2015,9811111112,\n"
+        )
+        ok = await self._refresh_with(
+            {
+                "1": header
+                + row.format(grade="Grade 5")
+                + others.format(grade="Grade 5"),
+                "2": header
+                + row.format(grade="Grade 6")
+                + others.format(grade="Grade 6"),
+            }
+        )
+        self.assertTrue(ok)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            cur = await db.execute(
+                "SELECT grade FROM student_birthdays "
+                "WHERE student_name = 'MOVED KID'"
+            )
+            grades = [row[0] for row in await cur.fetchall()]
+        finally:
+            await db.close()
+
+        # Listed in both class tabs, wished once — in the higher grade.
+        self.assertEqual(grades, ["Grade 6"])
+
 
 if __name__ == "__main__":
     unittest.main()
