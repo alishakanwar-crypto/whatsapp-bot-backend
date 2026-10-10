@@ -1113,12 +1113,15 @@ async def api_broadcast(request: Request):
     message = body.get("message", "")
     template = body.get("template") or None
     template_params = body.get("template_params") or None
-    only_phones = body.get("only_phones") or None
+    only_phones = body.get("only_phones")
     dry_run = body.get("dry_run", False)
     batch_delay = body.get("batch_delay", 1)
 
     if not message and not template:
         return {"status": "error", "error": "Missing message or template"}
+
+    if only_phones is not None and not only_phones:
+        return {"status": "error", "error": "only_phones was empty"}
 
     # Check if a broadcast is already running
     if _broadcast_status.get("running"):
