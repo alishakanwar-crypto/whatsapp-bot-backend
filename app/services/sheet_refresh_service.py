@@ -693,9 +693,9 @@ def _grade_rank(grade: str) -> int:
     number = int(m.group(1)) if m else 0
     for stage, base in (
         ("POPSICLE", -40),
-        ("PRE-NURSERY", -40),
-        ("PRE NURSERY", -40),
-        ("NURSERY", -30),
+        ("PRE-NUR", -40),
+        ("PRE NUR", -40),
+        ("NUR", -30),
         ("PREP", -20),
         ("KG", -10),
     ):
@@ -1237,19 +1237,20 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 f"allowlisted student entries"
             )
 
+        # Only a row carrying a readable date of birth can send the wish, so
+        # a child kept on a row without one would lose their birthday
+        # altogether.
         birthday_keys: set[tuple[str, str]] = set()
         birthday_unique: list[dict] = []
         for s in birthday_students:
+            if not s.get("dob"):
+                continue
             key = (s["name"].upper().strip(), s["grade"])
             if key in birthday_keys:
                 continue
             birthday_keys.add(key)
             birthday_unique.append(s)
 
-        # Only a row carrying a readable date of birth can send the wish, so
-        # a child kept in their higher class on a row without one would lose
-        # their birthday altogether.
-        birthday_unique = [s for s in birthday_unique if s.get("dob")]
         birthday_unique, _ = _keep_highest_grade(birthday_unique)
 
         await _write_student_birthdays(
