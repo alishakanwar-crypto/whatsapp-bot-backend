@@ -682,6 +682,28 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
+def _grade_rank(grade: str) -> int:
+    """Where a class sits in the school, so two of them can be compared.
+
+    The number alone cannot say it: Prep 2 comes before Grade 1, and
+    Nursery 1 before Prep 1.
+    """
+    g = grade.upper()
+    m = _re.search(r"(\d+)", g)
+    number = int(m.group(1)) if m else 0
+    for stage, base in (
+        ("POPSICLE", -40),
+        ("PRE-NUR", -40),
+        ("PRE NUR", -40),
+        ("NUR", -30),
+        ("PREP", -20),
+        ("KG", -10),
+    ):
+        if stage in g:
+            return base + number
+    return number
+
+
 def _keep_highest_grade(students: list[dict]) -> tuple[list[dict], int]:
     """One row per child, in the highest grade they are listed in.
 
@@ -690,9 +712,7 @@ def _keep_highest_grade(students: list[dict]) -> tuple[list[dict], int]:
     everything for that family.
     """
 
-    def grade_num(grade: str) -> int:
-        m = _re.search(r"(\d+)", grade)
-        return int(m.group(1)) if m else -1
+    grade_num = _grade_rank
 
     highest: dict[tuple[str, str], int] = {}
     for s in students:
@@ -1217,9 +1237,14 @@ async def fetch_all_pi_sheet_tabs() -> bool:
                 f"allowlisted student entries"
             )
 
+        # Only a row carrying a readable date of birth can send the wish, so
+        # a child kept on a row without one would lose their birthday
+        # altogether.
         birthday_keys: set[tuple[str, str]] = set()
         birthday_unique: list[dict] = []
         for s in birthday_students:
+            if not s.get("dob"):
+                continue
             key = (s["name"].upper().strip(), s["grade"])
             if key in birthday_keys:
                 continue

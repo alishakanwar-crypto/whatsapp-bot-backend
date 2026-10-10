@@ -427,6 +427,125 @@ class PartialSheetRefreshTests(unittest.IsolatedAsyncioTestCase):
         # Listed in both class tabs, wished once — in the higher grade.
         self.assertEqual(grades, ["Grade 6"])
 
+    async def test_a_child_promoted_out_of_prep_is_named_by_grade(self):
+        header = "GRADE,STUDENT NAME,DOB,FATHER MOBILE NO.,MOTHER MOBILE NO.\n"
+        row = "{grade},PREP KID,24.02.2019,9811111110,9822222220\n"
+        others = (
+            "{grade},STAYS A,01.02.2019,9811111111,\n"
+            "{grade},STAYS B,02.02.2019,9811111112,\n"
+        )
+        ok = await self._refresh_with(
+            {
+                "1": header
+                + row.format(grade="Prep 2")
+                + others.format(grade="Prep 2"),
+                "2": header
+                + row.format(grade="Grade 1")
+                + others.format(grade="Grade 1"),
+            }
+        )
+        self.assertTrue(ok)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            cur = await db.execute(
+                "SELECT grade FROM student_birthdays "
+                "WHERE student_name = 'PREP KID'"
+            )
+            grades = [row[0] for row in await cur.fetchall()]
+        finally:
+            await db.close()
+
+        # Prep 2 carries the bigger number but Grade 1 is the newer class.
+        self.assertEqual(grades, ["Grade 1"])
+
+    async def test_a_birthday_survives_a_new_class_row_without_a_dob(self):
+        header = "GRADE,STUDENT NAME,DOB,FATHER MOBILE NO.,MOTHER MOBILE NO.\n"
+        others = (
+            "{grade},STAYS A,01.02.2015,9811111111,\n"
+            "{grade},STAYS B,02.02.2015,9811111112,\n"
+        )
+        ok = await self._refresh_with(
+            {
+                "1": header
+                + "Grade 5,NO DOB KID,24.02.2015,9811111110,9822222220\n"
+                + others.format(grade="Grade 5"),
+                "2": header
+                + "Grade 6,NO DOB KID,,9811111110,9822222220\n"
+                + others.format(grade="Grade 6"),
+            }
+        )
+        self.assertTrue(ok)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            cur = await db.execute(
+                "SELECT grade, dob FROM student_birthdays "
+                "WHERE student_name = 'NO DOB KID'"
+            )
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+
+        # The new class row has no date, so the old one keeps the wish alive.
+        self.assertEqual(rows, [("Grade 5", "2015-02-24")])
+
+    async def test_a_short_nursery_label_loses_to_prep(self):
+        header = "GRADE,STUDENT NAME,DOB,FATHER MOBILE NO.,MOTHER MOBILE NO.\n"
+        row = "{grade},NUR KID,24.02.2020,9811111110,9822222220\n"
+        others = (
+            "{grade},STAYS A,01.02.2020,9811111111,\n"
+            "{grade},STAYS B,02.02.2020,9811111112,\n"
+        )
+        ok = await self._refresh_with(
+            {
+                "1": header
+                + row.format(grade="Nur 2")
+                + others.format(grade="Nur 2"),
+                "2": header
+                + row.format(grade="Prep 1")
+                + others.format(grade="Prep 1"),
+            }
+        )
+        self.assertTrue(ok)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            cur = await db.execute(
+                "SELECT grade FROM student_birthdays "
+                "WHERE student_name = 'NUR KID'"
+            )
+            grades = [row[0] for row in await cur.fetchall()]
+        finally:
+            await db.close()
+
+        self.assertEqual(grades, ["Prep 1"])
+
+    async def test_a_dated_row_wins_over_a_blank_one_in_the_same_class(self):
+        header = "GRADE,STUDENT NAME,DOB,FATHER MOBILE NO.,MOTHER MOBILE NO.\n"
+        ok = await self._refresh_with(
+            {
+                "1": header
+                + "Grade 5,TWICE KID,,9811111110,9822222220\n"
+                + "Grade 5,TWICE KID,24.02.2015,9811111110,9822222220\n"
+                + "Grade 5,STAYS A,01.02.2015,9811111111,\n"
+                + "Grade 5,STAYS B,02.02.2015,9811111112,\n",
+            }
+        )
+        self.assertTrue(ok)
+
+        db = await aiosqlite.connect(self.db_path)
+        try:
+            cur = await db.execute(
+                "SELECT grade, dob FROM student_birthdays "
+                "WHERE student_name = 'TWICE KID'"
+            )
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+
+        self.assertEqual(rows, [("Grade 5", "2015-02-24")])
+
 
 if __name__ == "__main__":
     unittest.main()
