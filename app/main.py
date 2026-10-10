@@ -1039,17 +1039,35 @@ async def attendance_audit(limit: int = 50):
         await adb.close()
 
 
-async def _run_broadcast(phone_list: list[str], message: str, batch_delay: float):
-    """Background task to send broadcast messages."""
+async def _run_broadcast(
+    phone_list: list[str],
+    message: str,
+    batch_delay: float,
+    template: str | None = None,
+    template_params: list[str] | None = None,
+):
+    """Background task to send broadcast messages.
+
+    With ``template``, each recipient gets that approved template, which
+    reaches parents outside Meta's 24-hour window; otherwise plain text.
+    """
     import asyncio
-    from app.services.whatsapp_service import send_whatsapp_force
+    from app.services.whatsapp_service import (
+        send_cloud_template_message,
+        send_whatsapp_force,
+    )
 
     global _broadcast_status
     _broadcast_status["running"] = True
 
     for i, phone in enumerate(phone_list):
         try:
-            success = await send_whatsapp_force(phone, message)
+            if template:
+                success = await send_cloud_template_message(
+                    phone, template, body_params=template_params or None,
+                )
+            else:
+                success = await send_whatsapp_force(phone, message)
             if success:
                 _broadcast_status["sent"] += 1
             else:
@@ -1072,6 +1090,9 @@ async def api_broadcast(request: Request):
 
     Body JSON:
       - message: The text message to send
+      - template: Approved template name to send instead of plain text
+      - template_params: Positional body parameters for that template
+      - only_phones: Send to these numbers only, instead of the whole sheet
       - dry_run: If true, just return the phone list without sending
       - batch_delay: Seconds between batches (default 1)
     """
@@ -1090,11 +1111,14 @@ async def api_broadcast(request: Request):
 
     body = await request.json()
     message = body.get("message", "")
+    template = body.get("template") or None
+    template_params = body.get("template_params") or None
+    only_phones = body.get("only_phones") or None
     dry_run = body.get("dry_run", False)
     batch_delay = body.get("batch_delay", 1)
 
-    if not message:
-        return {"status": "error", "error": "Missing message"}
+    if not message and not template:
+        return {"status": "error", "error": "Missing message or template"}
 
     # Check if a broadcast is already running
     if _broadcast_status.get("running"):
@@ -1115,15 +1139,18 @@ async def api_broadcast(request: Request):
     finally:
         await db.close()
 
+    raw_numbers = (
+        list(only_phones) if only_phones
+        else [p for row in rows for p in (row[0], row[1])]
+    )
+
     phones = set()
-    for row in rows:
-        for raw_phone in (row[0], row[1]):
-            if not raw_phone:
-                continue
-            digits = re.sub(r"\D", "", raw_phone)
-            if len(digits) >= 10:
-                normalized = f"91{digits[-10:]}"
-                phones.add(normalized)
+    for raw_phone in raw_numbers:
+        if not raw_phone:
+            continue
+        digits = re.sub(r"\D", "", raw_phone)
+        if len(digits) >= 10:
+            phones.add(f"91{digits[-10:]}")
 
     phone_list = sorted(phones)
 
@@ -1136,9 +1163,17 @@ async def api_broadcast(request: Request):
         "total": len(phone_list), "progress": 0,
         "sent": 0, "failed": 0,
     }
-    asyncio.create_task(_run_broadcast(phone_list, message, batch_delay))
+    asyncio.create_task(
+        _run_broadcast(
+            phone_list, message, batch_delay, template, template_params,
+        )
+    )
 
-    return {"status": "started", "total": len(phone_list)}
+    return {
+        "status": "started",
+        "total": len(phone_list),
+        "template": template,
+    }
 
 
 @app.get("/api/broadcast/status")
