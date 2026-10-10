@@ -262,6 +262,14 @@ _RECENT_IMAGE_MAX_SIZE = 200  # max entries to prevent memory leak
 _homework_relay_dedup: dict[str, float] = {}
 _HOMEWORK_RELAY_DEDUP_TTL = 300  # 5 minutes
 
+# Captions a parent writes on a notebook photo they want a teacher to look at.
+_HOMEWORK_CHECK_RE = re.compile(
+    r"\bcheck(ed|ing)?\b|\bunchecked\b|"
+    r"\b(?:work|homework|hw|classwork|notebook)\s+(?:is\s+)?pending\b|"
+    r"\bpending\s+(?:work|homework|hw|classwork|notebook)\b",
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # Pending homework subject confirmation: when AI can't identify subject,
 # we ask the parent "which subject?" and wait for their reply.
@@ -5910,7 +5918,7 @@ async def receive_cloud_api_message(request: Request):
             # forwarding/query keywords, let it fall through to normal handlers.
             _cap_lower = caption_raw.lower()
             _has_fwd_intent = _is_forwarding_or_query(caption_raw) if caption_raw else False
-            _has_check_kw = bool(re.search(r"\bcheck\b", _cap_lower)) if caption_raw else False
+            _has_check_kw = bool(_HOMEWORK_CHECK_RE.search(_cap_lower)) if caption_raw else False
             if not _has_fwd_intent and not _has_check_kw:
                 logger.info(
                     f"[IMAGE CLASSIFY] Document image from {sender} with "
@@ -6279,7 +6287,7 @@ async def receive_cloud_api_message(request: Request):
                     has_image
                     and _img_content_class == "face"
                     and not _is_forwarding_or_query(caption)
-                    and not re.search(r"\bcheck\b", caption.lower())
+                    and not _HOMEWORK_CHECK_RE.search(caption)
                     and await _is_pi_sheet_parent(sender)
                 ):
                     logger.info(
@@ -6302,10 +6310,7 @@ async def receive_cloud_api_message(request: Request):
                 # --- Homework "check" relay — SUBJECT-WISE ROUTING ---
                 # When caption contains "check", use AI to identify subject,
                 # then forward to the correct subject teacher (not class teacher).
-                _check_re = re.compile(
-                    r"\bcheck\b", re.IGNORECASE,
-                )
-                if _check_re.search(caption):
+                if _HOMEWORK_CHECK_RE.search(caption):
                     # Dedup: prevent duplicate forwarding within 5 minutes
                     _dedup_key = f"{sender}:{media_info.get('cloud_media_id', '')}"
                     _now = _time_mod.time()
