@@ -58,3 +58,19 @@ async def test_broadcast_without_a_template_still_sends_text(monkeypatch):
     await main._run_broadcast(["919899641369"], "hello", 0)
 
     assert sent == [("919899641369", "hello")]
+
+
+@pytest.mark.asyncio
+async def test_empty_only_phones_is_rejected_not_treated_as_whole_school():
+    class Req:
+        headers: dict = {}
+
+        async def json(self):
+            return {
+                "template": "ppis_parent_services_notice",
+                "only_phones": [],
+            }
+
+    result = await main.api_broadcast(Req())
+
+    assert result == {"status": "error", "error": "only_phones was empty"}
