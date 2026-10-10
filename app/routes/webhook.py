@@ -263,10 +263,14 @@ _homework_relay_dedup: dict[str, float] = {}
 _HOMEWORK_RELAY_DEDUP_TTL = 300  # 5 minutes
 
 # Captions a parent writes on a notebook photo they want a teacher to look at.
+# "checked" on its own means the opposite (already done), so it counts only
+# when it is negated.
 _HOMEWORK_CHECK_RE = re.compile(
-    r"\bcheck(ed|ing)?\b|\bunchecked\b|"
-    r"\b(?:work|homework|hw|classwork|notebook)\s+(?:is\s+)?pending\b|"
-    r"\bpending\s+(?:work|homework|hw|classwork|notebook)\b",
+    r"\bcheck(ing)?\b|\bun-?checked\b|"
+    r"\b(?:not|never|nahi|nhi)\s+(?:yet\s+|been\s+)?checked\b|"
+    r"\bchecked\s+(?:nahi|nhi)\b|"
+    r"\b(?:work|homework|hw|classwork|notebook|copy)\s+(?:is\s+)?pending\b|"
+    r"\bpending\s+(?:work|homework|hw|classwork|notebook|copy)\b",
     re.IGNORECASE,
 )
 
@@ -5069,6 +5073,9 @@ _NON_NAME_WORDS = {
     # Forwarding/routing words
     "convey", "forward", "fwd", "relay", "inform", "notify", "pass",
     "class", "dont", "doesn", "won",
+    # Notebook-checking words
+    "work", "classwork", "notebook", "copy", "pending", "checked",
+    "unchecked", "checking",
 }
 
 
