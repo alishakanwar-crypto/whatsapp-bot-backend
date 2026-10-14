@@ -687,6 +687,11 @@ _SNAPSHOT_MIN_SHARPNESS = float(os.environ.get("CPPLUS_SNAPSHOT_MIN_SHARPNESS", 
 # A crop cut from a person box is taller than it is wide, even after the
 # agent's padding. Anything squarer is a piece of the gate, not a visitor.
 _SNAPSHOT_MIN_ASPECT = float(os.environ.get("CPPLUS_SNAPSHOT_MIN_ASPECT", "1.2"))
+# The agent crops a person box with head-room above it, so a visitor's face
+# sits in the upper part of the crop. A "face" found lower down is paving.
+_SNAPSHOT_MAX_FACE_DEPTH = float(
+    os.environ.get("CPPLUS_SNAPSHOT_MAX_FACE_DEPTH", "0.55")
+)
 _frontal_cascade = None
 
 
@@ -709,7 +714,8 @@ def _has_clear_frontal_face(image_b64: str) -> bool:
     (it does not fire on side profiles), and a Laplacian-variance sharpness
     check on the face region rejects blurry captures. The cascade does fire on
     repeating ground texture (the gate's paving blocks read as a sharp face),
-    so the crop must also be person-shaped: taller than it is wide. Fails
+    so the crop must also be person-shaped: taller than it is wide, and the
+    face must sit in the upper part of the crop, where a head is. Fails
     closed: any error or ambiguity returns False so we never share a
     questionable snapshot.
     """
@@ -735,6 +741,8 @@ def _has_clear_frontal_face(image_b64: str) -> bool:
             minSize=(_SNAPSHOT_MIN_FACE_PX, _SNAPSHOT_MIN_FACE_PX),
         )
         for (x, y, w, h) in faces:
+            if (y + h / 2) / height > _SNAPSHOT_MAX_FACE_DEPTH:
+                continue
             face = gray[y:y + h, x:x + w]
             if cv2.Laplacian(face, cv2.CV_64F).var() >= _SNAPSHOT_MIN_SHARPNESS:
                 return True
