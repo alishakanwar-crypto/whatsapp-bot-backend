@@ -66,14 +66,6 @@ REMINDERS: tuple[Reminder, ...] = (
             "to 31st October 2026."
         ),
     ),
-    Reminder(
-        key="ieo_duty_plan_school_group",
-        on=date(2026, 10, 26),
-        subject="sharing the IEO duty plan in the school group",
-        detail=(
-            "Please share the IEO duty plan in the school group today."
-        ),
-    ),
 )
 
 
