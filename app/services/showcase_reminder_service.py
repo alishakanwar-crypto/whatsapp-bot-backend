@@ -108,17 +108,6 @@ SHOWCASES = (
     Showcase(date(2026, 10, 30), "Grade III", "Diwali", "Ram Aenge", "Respective CTs"),
     Showcase(date(2026, 11, 13), "Grade III", "Children's Day", "Bachche Man Ke Sachche - song with percussion", "Respective CTs"),
     Showcase(date(2026, 11, 16), "Grade I", "Gratitude", "Thank You Song - gratitude medley with bells and shakers", "Respective CTs"),
-    # Grades IV to VIII of the November-December plan.
-    Showcase(date(2026, 11, 17), "Grade IV", "Guru Nanak Jayanti", "Shabad - Dhan Dhan Guru Nanak with keyboard", "Respective CTs"),
-    Showcase(date(2026, 12, 8), "Grade IV", "Christmas", "Carol medley with handbells and recorder", "Respective CTs"),
-    Showcase(date(2026, 11, 18), "Grade V", "Guru Nanak Jayanti", "Satgur Nanak Pragatya - fusion with keyboard and violin", "Respective CTs"),
-    Showcase(date(2026, 12, 10), "Grade V", "Vijay Diwas", "Ae Mere Watan Ke Logo with live accompaniment", "Respective CTs"),
-    Showcase(date(2026, 12, 2), "Grade VI", "Winter", "Let It Snow - chorus with glockenspiel and triangle", "Respective CTs"),
-    Showcase(date(2026, 12, 11), "Grade VI", "Unity in Diversity", "Sare Jahan Se Achha - fusion band", "Respective CTs"),
-    Showcase(date(2026, 11, 19), "Grade VII", "Constitution Day", "Hum Honge Kamyaab - class band with guitar and cajon", "Respective CTs"),
-    Showcase(date(2026, 12, 14), "Grade VII", "National Mathematics Day", "Song on Srinivasa Ramanujan - rap and chorus", "Respective CTs"),
-    Showcase(date(2026, 12, 3), "Grade VIII", "Christmas", "Carol medley with full class band", "Respective CTs"),
-    Showcase(date(2026, 12, 15), "Grade VIII", "New Year", "Year in Review - band medley", "Respective CTs"),
 )
 
 
