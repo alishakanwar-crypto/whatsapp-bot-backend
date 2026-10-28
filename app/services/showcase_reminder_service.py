@@ -101,8 +101,13 @@ SHOWCASES = (
     Showcase(date(2026, 12, 24), "Grade II", "Christmas", "Carol Mashup", "Respective CTs"),
     # Grade III rows of the same sheet, October to December 2026.
     Showcase(date(2026, 10, 13), "Grade III", "Gandhi Jayanti", "Raghupati Raghav Raja Ram + Ram Aayenge", "Respective CTs"),
-    Showcase(date(2026, 11, 30), "Grade III", "Guru Nanak Jayanti", "Mool Mantra Jaap + Aar Nanak Par Nanak", "Respective CTs"),
     Showcase(date(2026, 12, 22), "Grade III", "Christmas", "Christmas Carols", "Respective CTs"),
+    # Alisha's revisions of 28 October 2026: Grade III's Guru Nanak showcase
+    # became a Diwali one on 30 October, and Grades I and III each gained a
+    # November showcase.
+    Showcase(date(2026, 10, 30), "Grade III", "Diwali", "Ram Aenge", "Respective CTs"),
+    Showcase(date(2026, 11, 13), "Grade III", "Children's Day", "Bachche Man Ke Sachche - song with percussion", "Respective CTs"),
+    Showcase(date(2026, 11, 16), "Grade I", "Gratitude", "Thank You Song - gratitude medley with bells and shakers", "Respective CTs"),
 )
 
 
