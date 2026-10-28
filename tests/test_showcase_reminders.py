@@ -29,9 +29,18 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_plan_preserves_all_63_latest_revised_source_rows(self):
-        self.assertEqual(len(reminders.SHOWCASES), 63)
-        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 31)
+    def test_plan_preserves_all_66_latest_revised_source_rows(self):
+        self.assertEqual(len(reminders.SHOWCASES), 66)
+        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 34)
+        self.assertEqual(
+            sorted(
+                item.event_date
+                for item in reminders.SHOWCASES
+                if item.grade_class == "Grade III"
+                and item.event_date >= date(2026, 10, 1)
+            ),
+            [date(2026, 10, 13), date(2026, 11, 30), date(2026, 12, 22)],
+        )
         self.assertTrue(
             any(
                 item.grade_class == "Nursery"
