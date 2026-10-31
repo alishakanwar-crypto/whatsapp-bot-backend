@@ -108,6 +108,17 @@ SHOWCASES = (
     Showcase(date(2026, 10, 30), "Grade III", "Diwali", "Ram Aenge", "Respective CTs"),
     Showcase(date(2026, 11, 13), "Grade III", "Children's Day", "Bachche Man Ke Sachche - song with percussion", "Respective CTs"),
     Showcase(date(2026, 11, 16), "Grade I", "Gratitude", "Thank You Song - gratitude medley with bells and shakers", "Respective CTs"),
+    # Alisha's November-December 2026 plan, added on 31 October 2026. Only the
+    # rows whose dates she has fixed are here; the undated ones (Christmas
+    # carols, Hindi recitation, speaking activity, the German showcase and the
+    # Nursery/Prep December slots) get reminders once she picks dates.
+    Showcase(date(2026, 11, 5), "Grade III", "Showcase", "Musical Showcase", "Respective CTs"),
+    Showcase(date(2026, 11, 12), "Nursery & Prep", "Winter Fun", "Dance Showcase", "Respective CTs"),
+    Showcase(date(2026, 11, 13), "Grade III", "Children's Day", "Dance Showcase", "Respective CTs"),
+    Showcase(date(2026, 11, 23), "Nursery & Prep", "Guru Nanak Jayanti", "Musical Showcase - Ek Satnam Waheguru", "Respective CTs"),
+    Showcase(date(2026, 12, 4), "Grade IV & V", "Nature", "French Musical Showcase", "Respective CTs"),
+    Showcase(date(2026, 12, 5), "Grade IV", "Kindness", "Musical Showcase - Let's Be Kind", "Respective CTs"),
+    Showcase(date(2026, 12, 8), "Grade VII", "French Showcase", "Theme to be announced", "Respective CTs"),
 )
 
 
