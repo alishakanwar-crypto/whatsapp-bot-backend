@@ -119,6 +119,27 @@ SHOWCASES = (
     Showcase(date(2026, 12, 4), "Grade IV & V", "Nature", "French Musical Showcase", "Respective CTs"),
     Showcase(date(2026, 12, 5), "Grade IV", "Kindness", "Musical Showcase - Let's Be Kind", "Respective CTs"),
     Showcase(date(2026, 12, 8), "Grade VII", "French Showcase", "Theme to be announced", "Respective CTs"),
+    # Rows Alisha added to the showcase sheet on 2 November 2026. The undated
+    # ones (German showcase, the Speaking Competitions, Grade III's January
+    # speaking activity and the blank Nursery/Prep December slots) are left
+    # out until she picks dates.
+    Showcase(date(2026, 11, 18), "Prep", "Speaking Activity", "Fancy Dress Competition - Community Helpers", "Respective CTs"),
+    Showcase(date(2026, 11, 25), "Nursery", "Speaking Activity", "Fancy Dress Competition - Community Helpers", "Respective CTs"),
+    Showcase(date(2026, 11, 30), "Grade III", "Guru Nanak Jayanti", "Musical Showcase - Guru Nanak Jayanti", "CTs of Class 3"),
+    Showcase(date(2026, 12, 10), "Nursery", "Christmas", "Christmas Carols", "Respective CTs"),
+    Showcase(date(2026, 12, 14), "Grade IV", "Christmas", "Theatre Play - Alice in Wonderland", "Ms. Prabhjot"),
+    Showcase(date(2026, 12, 15), "Nursery", "Christmas", "Dance Showcase", "Respective CTs"),
+    Showcase(date(2026, 12, 15), "Grade V", "Christmas", "Theatre Play - Adventures of Pinocchio", "Ms. Alisha"),
+    Showcase(date(2026, 12, 15), "Grade VI", "Christmas", "Theatre Play - Sherlock Holmes", "Ms. Poonam"),
+    Showcase(date(2026, 12, 16), "Grade VII", "Christmas", "Theatre Play - Matilda", "Ms. Twinkle / Ms. Riya"),
+    Showcase(date(2026, 12, 17), "Grade VIII", "Christmas", "Theatre Play - Robinhood", "Ms. Mansi"),
+    Showcase(date(2026, 12, 18), "Grade IX", "Christmas", "Theatre Play - The Merchant of Venice", "Ms. Avneet"),
+    Showcase(date(2026, 12, 19), "Prep", "Broadway", "Christmas Carols / Character Walk", "Respective CTs"),
+    Showcase(date(2026, 12, 19), "Grade I", "Christmas", "The Lion King", "Ms. Muskan"),
+    Showcase(date(2026, 12, 19), "Grade II", "Christmas", "The Wizard of Oz", "Ms. Gargi"),
+    Showcase(date(2026, 12, 19), "Grade III", "Christmas", "Charlie and the Chocolate Factory", "Ms. Harnoor"),
+    Showcase(date(2026, 12, 22), "Grade IV to VIII", "Nav Varsh / New Year", "Hindi Bhashan Pratiyogita - Round 1", "Ms. Seema, Ms. Yamini, Ms. Shikha, Ms. Rashmi, Ms. Harjeet"),
+    Showcase(date(2026, 12, 28), "Grade IV to VIII", "Nav Varsh / New Year", "Hindi Bhashan Pratiyogita - Round 2", "Ms. Seema, Ms. Yamini, Ms. Shikha, Ms. Rashmi, Ms. Harjeet"),
 )
 
 
