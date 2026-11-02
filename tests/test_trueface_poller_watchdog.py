@@ -8,6 +8,16 @@ MONDAY = datetime(2026, 8, 10, 9, 0, 0, tzinfo=trueface.IST)
 SUNDAY = datetime(2026, 8, 9, 9, 0, 0, tzinfo=trueface.IST)
 
 
+class FakeRequest:
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        if self._body is None:
+            raise ValueError("no body")
+        return self._body
+
+
 class FakeDb:
     def __init__(self):
         self.closed = False
@@ -31,6 +41,7 @@ class TrueFacePollerWatchdogTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         trueface._poller_alert_sent_date = ""
         trueface._last_poller_contact.clear()
+        trueface._poller_diag.clear()
 
     def _patches(self, now, attendance, template, text):
         return (
@@ -100,7 +111,7 @@ class TrueFacePollerWatchdogTests(unittest.IsolatedAsyncioTestCase):
         template.assert_not_awaited()
 
     async def test_heartbeat_records_poller_contact(self):
-        result = await trueface.trueface_heartbeat()
+        result = await trueface.trueface_heartbeat(FakeRequest(None))
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(trueface._last_poller_contact["source"], "heartbeat")
@@ -118,6 +129,41 @@ class TrueFacePollerWatchdogTests(unittest.IsolatedAsyncioTestCase):
 
         detail = template.await_args.kwargs["body_params"][3]
         self.assertIn("Poller last reached the cloud at", detail)
+
+    async def test_heartbeat_keeps_what_the_last_poll_saw(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "table_found": False, "rows_seen": 0})
+        )
+
+        self.assertIs(trueface._poller_diag["table_found"], False)
+
+    async def test_alert_names_a_lost_browser_session(self):
+        trueface._record_poller_contact("heartbeat")
+        trueface._poller_diag.update(
+            {"login_ok": True, "table_found": False, "rows_seen": 0}
+        )
+        template = AsyncMock(return_value=True)
+        text = AsyncMock(return_value=True)
+        patches = self._patches(MONDAY, [], template, text)
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            self.assertTrue(await trueface.check_poller_silence())
+
+        detail = template.await_args.kwargs["body_params"][3]
+        self.assertIn("browser session is lost", detail)
+
+    async def test_alert_names_a_failed_device_login(self):
+        trueface._record_poller_contact("heartbeat")
+        trueface._poller_diag.update({"login_ok": False})
+        template = AsyncMock(return_value=True)
+        text = AsyncMock(return_value=True)
+        patches = self._patches(MONDAY, [], template, text)
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            self.assertTrue(await trueface.check_poller_silence())
+
+        detail = template.await_args.kwargs["body_params"][3]
+        self.assertIn("login to the TrueFace device failed", detail)
 
 
 if __name__ == "__main__":
