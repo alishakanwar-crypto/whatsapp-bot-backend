@@ -64,6 +64,8 @@ POLLER_ALERT_TEMPLATE = os.environ.get("TRUEFACE_ALERT_TEMPLATE", "ppis_gate_ale
 
 # Last time the campus poller reached the cloud (heartbeat or attendance event)
 _last_poller_contact: dict[str, str] = {}
+# What the poller's last read of the device actually saw (from its heartbeat)
+_poller_diag: dict[str, object] = {}
 _poller_alert_sent_date = ""
 
 # Persons whose mood should be logged from TrueFace photos
@@ -354,6 +356,29 @@ def _record_poller_contact(source: str) -> None:
     _last_poller_contact["source"] = source
 
 
+def _poller_diagnosis() -> str:
+    """Say what the poller's last heartbeat saw, not merely that it ran.
+
+    A heartbeat alone only proves the process is alive: on 2 November the
+    poller heartbeated all morning while its browser session read nothing.
+    """
+    if not _poller_diag:
+        return ""
+    if _poller_diag.get("login_ok") is False:
+        return "Its last login to the TrueFace device failed."
+    if _poller_diag.get("table_found") is False:
+        return (
+            "It is logged in but its last read found no records table — "
+            "the browser session is lost."
+        )
+    if _poller_diag.get("query_ok") is False:
+        return "It could not click Query on the records page."
+    rows = _poller_diag.get("rows_seen")
+    if isinstance(rows, int) and rows <= 1:
+        return "It is reading the records page, but the device lists no scans."
+    return ""
+
+
 async def check_poller_silence() -> bool:
     """Alert admins on a school day when no arrival has been recorded yet."""
     global _poller_alert_sent_date
@@ -380,6 +405,10 @@ async def check_poller_silence() -> bool:
         poller_line = f"Poller last reached the cloud at {contact_at}."
     else:
         poller_line = "The poller has not reached the cloud at all today."
+
+    diagnosis = _poller_diagnosis()
+    if diagnosis:
+        poller_line = f"{poller_line} {diagnosis}"
 
     detail = (
         f"No teacher arrival recorded today. {poller_line} "
@@ -1558,9 +1587,16 @@ async def trigger_departure_report():
 
 
 @router.post("/api/trueface/heartbeat")
-async def trueface_heartbeat():
+async def trueface_heartbeat(request: Request):
     """Record that the campus poller is alive even when it sees no faces."""
     _record_poller_contact("heartbeat")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        _poller_diag.clear()
+        _poller_diag.update(body)
     return {"status": "ok", "at": _last_poller_contact.get("at")}
 
 
@@ -1581,4 +1617,6 @@ async def trueface_status():
         "today_departed": len([a for a in attendance if a.get("departure_time")]),
         "last_poller_contact": _last_poller_contact.get("at"),
         "last_poller_contact_source": _last_poller_contact.get("source"),
+        "poller_last_poll": dict(_poller_diag),
+        "poller_diagnosis": _poller_diagnosis(),
     }
