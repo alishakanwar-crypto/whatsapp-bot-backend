@@ -165,6 +165,23 @@ class TrueFacePollerWatchdogTests(unittest.IsolatedAsyncioTestCase):
         detail = template.await_args.kwargs["body_params"][3]
         self.assertIn("login to the TrueFace device failed", detail)
 
+    async def test_heartbeat_keeps_only_the_fields_the_poller_reports(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "device_password": "secret"})
+        )
+
+        self.assertIs(trueface._poller_diag["login_ok"], True)
+        self.assertNotIn("device_password", trueface._poller_diag)
+
+    async def test_a_bodyless_heartbeat_drops_a_stale_failure(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "table_found": False})
+        )
+        await trueface.trueface_heartbeat(FakeRequest(None))
+
+        self.assertEqual(trueface._poller_diag, {})
+        self.assertEqual(trueface._poller_diagnosis(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

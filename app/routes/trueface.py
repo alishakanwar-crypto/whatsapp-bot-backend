@@ -66,6 +66,16 @@ POLLER_ALERT_TEMPLATE = os.environ.get("TRUEFACE_ALERT_TEMPLATE", "ppis_gate_ale
 _last_poller_contact: dict[str, str] = {}
 # What the poller's last read of the device actually saw (from its heartbeat)
 _poller_diag: dict[str, object] = {}
+_POLLER_DIAG_FIELDS = frozenset({
+    "login_ok",
+    "records_page_ok",
+    "query_ok",
+    "table_found",
+    "rows_seen",
+    "polls_without_table",
+    "session_recycles",
+    "last_event_ist",
+})
 _poller_alert_sent_date = ""
 
 # Persons whose mood should be logged from TrueFace photos
@@ -1594,9 +1604,13 @@ async def trueface_heartbeat(request: Request):
         body = await request.json()
     except Exception:
         body = None
+    # Keep only the fields the poller is meant to report: this endpoint is
+    # public, and whatever lands here is served back from /status.
+    _poller_diag.clear()
     if isinstance(body, dict):
-        _poller_diag.clear()
-        _poller_diag.update(body)
+        _poller_diag.update(
+            {k: v for k, v in body.items() if k in _POLLER_DIAG_FIELDS}
+        )
     return {"status": "ok", "at": _last_poller_contact.get("at")}
 
 
