@@ -21,6 +21,7 @@ import asyncio
 import io
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone, timedelta
@@ -66,6 +67,56 @@ POLLER_ALERT_TEMPLATE = os.environ.get("TRUEFACE_ALERT_TEMPLATE", "ppis_gate_ale
 _last_poller_contact: dict[str, str] = {}
 # What the poller's last read of the device actually saw (from its heartbeat)
 _poller_diag: dict[str, object] = {}
+_POLLER_DIAG_FLAGS = frozenset({
+    "login_ok",
+    "records_page_ok",
+    "query_ok",
+    "table_found",
+})
+_POLLER_DIAG_COUNTS = frozenset({
+    "rows_seen",
+    "polls_without_table",
+    "session_recycles",
+})
+_POLLER_DIAG_FIELDS = (
+    _POLLER_DIAG_FLAGS | _POLLER_DIAG_COUNTS | frozenset({"last_event_ist"})
+)
+# Longest timestamp the poller sends: "03-11-2026 07:14:19 IST"
+_POLLER_DIAG_TIMESTAMP_CHARS = 32
+# No real count comes close; keeps a huge posted number out of /status
+_POLLER_DIAG_COUNT_MAX = 10 ** 9
+
+
+def _clean_poller_diag(body: object) -> dict[str, object]:
+    """Narrow a public heartbeat body to the poller's own diagnostic shape.
+
+    The endpoint is unauthenticated and /status serves whatever it stored, so
+    an allowed field name is not enough: each value is forced into the shape
+    the poller reports, which leaves nothing an outsider can park there.
+    """
+    if not isinstance(body, dict):
+        return {}
+    clean: dict[str, object] = {}
+    for key, value in body.items():
+        if key in _POLLER_DIAG_FLAGS:
+            clean[key] = None if value is None else bool(value)
+        elif key in _POLLER_DIAG_COUNTS:
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, float):
+                if not math.isfinite(value):
+                    continue
+                value = int(value)
+            elif not isinstance(value, int):
+                continue
+            clean[key] = min(max(0, value), _POLLER_DIAG_COUNT_MAX)
+        elif key == "last_event_ist":
+            if not isinstance(value, str):
+                continue
+            clean[key] = value.strip()[:_POLLER_DIAG_TIMESTAMP_CHARS]
+    return clean
+
+
 _poller_alert_sent_date = ""
 
 # Persons whose mood should be logged from TrueFace photos
@@ -1594,9 +1645,11 @@ async def trueface_heartbeat(request: Request):
         body = await request.json()
     except Exception:
         body = None
-    if isinstance(body, dict):
-        _poller_diag.clear()
-        _poller_diag.update(body)
+    # Keep only the fields the poller is meant to report, in the shape it
+    # reports them: this endpoint is public, and whatever lands here is
+    # served back from /status.
+    _poller_diag.clear()
+    _poller_diag.update(_clean_poller_diag(body))
     return {"status": "ok", "at": _last_poller_contact.get("at")}
 
 

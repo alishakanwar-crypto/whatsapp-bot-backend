@@ -165,6 +165,56 @@ class TrueFacePollerWatchdogTests(unittest.IsolatedAsyncioTestCase):
         detail = template.await_args.kwargs["body_params"][3]
         self.assertIn("login to the TrueFace device failed", detail)
 
+    async def test_heartbeat_keeps_only_the_fields_the_poller_reports(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "device_password": "secret"})
+        )
+
+        self.assertIs(trueface._poller_diag["login_ok"], True)
+        self.assertNotIn("device_password", trueface._poller_diag)
+
+    async def test_heartbeat_keeps_an_allowed_field_only_in_its_own_shape(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest(
+                {
+                    "login_ok": "PPIS admin password is hunter2",
+                    "rows_seen": "call 1800-000-000 to claim",
+                    "session_recycles": -7,
+                    "last_event_ist": "x" * 400,
+                }
+            )
+        )
+
+        self.assertIs(trueface._poller_diag["login_ok"], True)
+        self.assertNotIn("rows_seen", trueface._poller_diag)
+        self.assertEqual(trueface._poller_diag["session_recycles"], 0)
+        self.assertEqual(len(trueface._poller_diag["last_event_ist"]), 32)
+
+    async def test_heartbeat_survives_a_count_that_is_not_a_finite_number(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "rows_seen": float("inf")})
+        )
+
+        self.assertIs(trueface._poller_diag["login_ok"], True)
+        self.assertNotIn("rows_seen", trueface._poller_diag)
+
+    async def test_heartbeat_survives_a_count_too_large_for_a_float(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "rows_seen": 10 ** 400})
+        )
+
+        self.assertIs(trueface._poller_diag["login_ok"], True)
+        self.assertEqual(trueface._poller_diag["rows_seen"], 10 ** 9)
+
+    async def test_a_bodyless_heartbeat_drops_a_stale_failure(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "table_found": False})
+        )
+        await trueface.trueface_heartbeat(FakeRequest(None))
+
+        self.assertEqual(trueface._poller_diag, {})
+        self.assertEqual(trueface._poller_diagnosis(), "")
+
 
 if __name__ == "__main__":
     unittest.main()
