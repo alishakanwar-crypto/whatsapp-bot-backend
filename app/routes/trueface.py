@@ -21,6 +21,7 @@ import asyncio
 import io
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone, timedelta
@@ -99,6 +100,8 @@ def _clean_poller_diag(body: object) -> dict[str, object]:
             clean[key] = None if value is None else bool(value)
         elif key in _POLLER_DIAG_COUNTS:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not math.isfinite(value):
                 continue
             clean[key] = max(0, int(value))
         elif key == "last_event_ist":
