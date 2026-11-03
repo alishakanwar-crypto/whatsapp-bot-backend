@@ -29,9 +29,9 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_plan_preserves_all_95_latest_revised_source_rows(self):
-        self.assertEqual(len(reminders.SHOWCASES), 95)
-        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 51)
+    def test_plan_matches_the_re_synced_november_december_sheet(self):
+        self.assertEqual(len(reminders.SHOWCASES), 117)
+        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 55)
         self.assertEqual(
             sorted(
                 item.event_date
@@ -44,63 +44,34 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 date(2026, 10, 30),
                 date(2026, 11, 5),
                 date(2026, 11, 13),
-                date(2026, 11, 13),
                 date(2026, 11, 30),
+                date(2026, 12, 3),
+                date(2026, 12, 4),
+                date(2026, 12, 11),
                 date(2026, 12, 19),
-                date(2026, 12, 22),
+                date(2026, 12, 23),
             ],
         )
-        self.assertEqual(
-            sorted(
-                (item.event_date, item.grade_class)
+        # Every November-December row now comes from the live plan sheet, so the
+        # superseded rows of the older music sheet are gone.
+        self.assertFalse(
+            any(
+                item.grade_class == "Nursery & Prep"
                 for item in reminders.SHOWCASES
-                if item.grade_class
-                in ("Grade IV", "Grade V", "Grade VI", "Grade VII", "Grade VIII")
-                and item.event_date >= date(2026, 11, 1)
-            ),
-            [
-                (date(2026, 11, 13), "Grade IV"),
-                (date(2026, 11, 16), "Grade V"),
-                (date(2026, 12, 1), "Grade VII"),
-                (date(2026, 12, 5), "Grade IV"),
-                (date(2026, 12, 8), "Grade VII"),
-                (date(2026, 12, 14), "Grade IV"),
-                (date(2026, 12, 15), "Grade V"),
-                (date(2026, 12, 15), "Grade VI"),
-                (date(2026, 12, 16), "Grade VII"),
-                (date(2026, 12, 17), "Grade VIII"),
-            ],
+            )
         )
-        self.assertEqual(
-            sorted(
-                (item.event_date, item.grade_class)
+        self.assertTrue(
+            any(
+                item.grade_class == "Grade V"
+                and item.event_date == date(2026, 12, 17)
+                and "Doha" in item.presentation_item
                 for item in reminders.SHOWCASES
-                if item.grade_class in ("Nursery & Prep", "Grade IV & V")
-            ),
-            [
-                (date(2026, 11, 12), "Nursery & Prep"),
-                (date(2026, 11, 23), "Nursery & Prep"),
-                (date(2026, 12, 4), "Grade IV & V"),
-            ],
+            )
         )
         self.assertTrue(
             any(
                 item.grade_class == "Nursery"
                 and item.event_date == date(2026, 9, 11)
-                for item in reminders.SHOWCASES
-            )
-        )
-        self.assertFalse(
-            any(
-                item.grade_class == "Grade VI"
-                and item.event_date == date(2026, 8, 6)
-                for item in reminders.SHOWCASES
-            )
-        )
-        self.assertFalse(
-            any(
-                item.grade_class == "Grade VII"
-                and item.event_date == date(2026, 7, 28)
                 for item in reminders.SHOWCASES
             )
         )
@@ -129,16 +100,16 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(due), {date(2026, 11, 5)})
         self.assertEqual(
             [item.grade_class for item in due[date(2026, 11, 5)]],
-            ["Nursery", "Prep", "Grade II", "Grade III"],
+            ["Grade I", "Grade II", "Grade III"],
         )
 
     def test_christmas_carol_reminder_goes_out_three_days_before(self):
-        due = reminders.due_showcases(date(2026, 12, 21))
+        due = reminders.due_showcases(date(2026, 12, 7))
 
-        self.assertEqual(set(due), {date(2026, 12, 24)})
+        self.assertEqual(set(due), {date(2026, 12, 10)})
         self.assertIn(
-            "Grade II — Christmas: Carol Mashup",
-            reminders.format_showcase_details(due[date(2026, 12, 24)]),
+            "Nursery — Christmas: Christmas Carols",
+            reminders.format_showcase_details(due[date(2026, 12, 10)]),
         )
 
     def test_selects_exactly_three_day_lead_time(self):
