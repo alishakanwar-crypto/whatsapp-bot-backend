@@ -140,6 +140,13 @@ SHOWCASES = (
     Showcase(date(2026, 12, 19), "Grade III", "Christmas", "Charlie and the Chocolate Factory", "Ms. Harnoor"),
     Showcase(date(2026, 12, 22), "Grade IV to VIII", "Nav Varsh / New Year", "Hindi Bhashan Pratiyogita - Round 1", "Ms. Seema, Ms. Yamini, Ms. Shikha, Ms. Rashmi, Ms. Harjeet"),
     Showcase(date(2026, 12, 28), "Grade IV to VIII", "Nav Varsh / New Year", "Hindi Bhashan Pratiyogita - Round 2", "Ms. Seema, Ms. Yamini, Ms. Shikha, Ms. Rashmi, Ms. Harjeet"),
+    # The German rows of the same sheet, which do carry dates. Every remaining
+    # row there has no date at all (the Speaking Activity and Speaking
+    # Competition rows, Nursery/Prep's blank December slots), so there is no
+    # day to remind three days before.
+    Showcase(date(2026, 11, 13), "Grade IV", "Sports & Fitness", "German Musical Showcase - Sport Macht Uns Fit", "Mr. Tarun"),
+    Showcase(date(2026, 11, 16), "Grade V", "Sankt Martins Tag", "German Showcase", "Mr. Tarun"),
+    Showcase(date(2026, 12, 1), "Grade VII", "Christmas", "German Carol", "Respective CTs"),
 )
 
 
