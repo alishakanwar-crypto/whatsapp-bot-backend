@@ -173,6 +173,23 @@ class TrueFacePollerWatchdogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(trueface._poller_diag["login_ok"], True)
         self.assertNotIn("device_password", trueface._poller_diag)
 
+    async def test_heartbeat_keeps_an_allowed_field_only_in_its_own_shape(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest(
+                {
+                    "login_ok": "PPIS admin password is hunter2",
+                    "rows_seen": "call 1800-000-000 to claim",
+                    "session_recycles": -7,
+                    "last_event_ist": "x" * 400,
+                }
+            )
+        )
+
+        self.assertIs(trueface._poller_diag["login_ok"], True)
+        self.assertNotIn("rows_seen", trueface._poller_diag)
+        self.assertEqual(trueface._poller_diag["session_recycles"], 0)
+        self.assertEqual(len(trueface._poller_diag["last_event_ist"]), 32)
+
     async def test_a_bodyless_heartbeat_drops_a_stale_failure(self):
         await trueface.trueface_heartbeat(
             FakeRequest({"login_ok": True, "table_found": False})
