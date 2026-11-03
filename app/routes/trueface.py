@@ -83,6 +83,8 @@ _POLLER_DIAG_FIELDS = (
 )
 # Longest timestamp the poller sends: "03-11-2026 07:14:19 IST"
 _POLLER_DIAG_TIMESTAMP_CHARS = 32
+# No real count comes close; keeps a huge posted number out of /status
+_POLLER_DIAG_COUNT_MAX = 10 ** 9
 
 
 def _clean_poller_diag(body: object) -> dict[str, object]:
@@ -99,11 +101,15 @@ def _clean_poller_diag(body: object) -> dict[str, object]:
         if key in _POLLER_DIAG_FLAGS:
             clean[key] = None if value is None else bool(value)
         elif key in _POLLER_DIAG_COUNTS:
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if isinstance(value, bool):
                 continue
-            if not math.isfinite(value):
+            if isinstance(value, float):
+                if not math.isfinite(value):
+                    continue
+                value = int(value)
+            elif not isinstance(value, int):
                 continue
-            clean[key] = max(0, int(value))
+            clean[key] = min(max(0, value), _POLLER_DIAG_COUNT_MAX)
         elif key == "last_event_ist":
             if not isinstance(value, str):
                 continue

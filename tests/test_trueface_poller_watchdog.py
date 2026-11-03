@@ -198,6 +198,14 @@ class TrueFacePollerWatchdogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(trueface._poller_diag["login_ok"], True)
         self.assertNotIn("rows_seen", trueface._poller_diag)
 
+    async def test_heartbeat_survives_a_count_too_large_for_a_float(self):
+        await trueface.trueface_heartbeat(
+            FakeRequest({"login_ok": True, "rows_seen": 10 ** 400})
+        )
+
+        self.assertIs(trueface._poller_diag["login_ok"], True)
+        self.assertEqual(trueface._poller_diag["rows_seen"], 10 ** 9)
+
     async def test_a_bodyless_heartbeat_drops_a_stale_failure(self):
         await trueface.trueface_heartbeat(
             FakeRequest({"login_ok": True, "table_found": False})
