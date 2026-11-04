@@ -21,6 +21,9 @@ from app.services.showcase_reminder_service import (
     send_showcase_reminders_sync,
     send_showcase_slides_sync,
 )
+from app.services.showcase_slide_template_service import (
+    ensure_slide_template_sync,
+)
 from app.services.gk_olympiad_reminder_service import (
     IST as GK_OLYMPIAD_IST,
     send_gk_olympiad_reminders_sync,
@@ -871,6 +874,17 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled showcase slide previews at 9:05 AM IST")
+
+    # Register the image-header template the slide send needs (no-op once
+    # Meta has it).
+    scheduler.add_job(
+        ensure_slide_template_sync,
+        trigger=DateTrigger(
+            run_date=datetime.now(SHOWCASE_IST) + timedelta(seconds=20),
+        ),
+        id="showcase_slide_template_check",
+        replace_existing=True,
+    )
 
     # GK Olympiad reminders at 9:00 AM IST on 25 and 30 September and
     # 3 October 2026, ahead of the Olympiad on 6 October.
