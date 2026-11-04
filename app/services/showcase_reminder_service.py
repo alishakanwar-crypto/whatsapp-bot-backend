@@ -24,6 +24,14 @@ SHOWCASE_REMINDER_TEMPLATE = os.environ.get(
     "SHOWCASE_REMINDER_TEMPLATE", "ppis_musical_showcase_reminder",
 )
 SHOWCASE_REMINDER_LEAD_DAYS = 3
+SHOWCASE_SLIDE_LEAD_DAYS = 2
+SHOWCASE_SLIDE_TEMPLATE = os.environ.get(
+    "SHOWCASE_SLIDE_TEMPLATE", "ppis_showcase_slide_preview",
+)
+SHOWCASE_SLIDE_BASE_URL = os.environ.get(
+    "SHOWCASE_SLIDE_BASE_URL",
+    "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides",
+)
 
 
 class Showcase(NamedTuple):
@@ -35,126 +43,168 @@ class Showcase(NamedTuple):
 
 
 SHOWCASES = (
-    Showcase(date(2026, 7, 16), "Nursery", "Animals", "Old Mac Donald had a farm", "Respective CTs"),
-    Showcase(date(2026, 8, 3), "Nursery", "Friendship Day", "The more we get together", "Respective CTs"),
-    Showcase(date(2026, 8, 12), "Nursery", "World Elephant Day", "Elephant Rally", "Respective CTs"),
-    Showcase(date(2026, 8, 13), "Nursery", "Independence Day", "Patriotic Group Song - Nanha Munha Raahi Hu", "Respective CTs"),
-    Showcase(date(2026, 9, 3), "Nursery", "Janmashtami", "Shri Krishna Govind Hare Murari / Chanting - Hare Krishna Hare Rama", "Respective CTs"),
-    Showcase(date(2026, 9, 11), "Nursery", "Grandparents Day", "Daadu Daadi Nana Naani", "Respective CTs"),
-    Showcase(date(2026, 7, 16), "Prep", "Animals", "Old Mac Donald had a farm", "Respective CTs"),
-    Showcase(date(2026, 8, 3), "Prep", "Friendship Day", "The more we get together", "Respective CTs"),
-    Showcase(date(2026, 8, 12), "Prep", "World Elephant Day", "Elephant Rally", "Respective CTs"),
-    Showcase(date(2026, 8, 13), "Prep", "Independence Day", "National Symbols Rhyme / Saare jahan se acha", "Respective CTs"),
-    Showcase(date(2026, 9, 3), "Prep", "Janmashtami", "Shri Krishna Govind Hare Murari / Chanting - Hare Krishna Hare Rama", "Respective CTs"),
-    Showcase(date(2026, 9, 11), "Prep", "Grandparents Day", "S se Super", "Respective CTs"),
-    Showcase(date(2026, 7, 20), "Grade I", "Tiger Day", "Symphony of the Stripes", "Ms. Pallavi & Ms. Muskaan"),
-    Showcase(date(2026, 7, 31), "Grade I", "Friendship Day", "Harmony of Hearts", "Ms. Pallavi & Ms. Muskaan"),
-    Showcase(date(2026, 8, 11), "Grade I", "Independence Day", "Patriotic Group Song - Nanha Munha Raahi Hu", "Ms. Pallavi & Ms. Muskaan"),
-    Showcase(date(2026, 9, 2), "Grade I", "Janmashtami", "Prayer - Achutam keshavam", "Ms. Pallavi & Ms. Muskaan"),
-    Showcase(date(2026, 8, 27), "Grade I", "Raksha Bandhan", "Tie of Love - Musical Presentation", "Ms. Pallavi & Ms. Muskaan"),
-    Showcase(date(2026, 7, 31), "Grade II", "Theme of the Month", "We Are a Family Song", "Ms. Tanvi & Ms. Gargi"),
-    Showcase(date(2026, 8, 11), "Grade II", "Independence Day", "Patriotic Group Song - Nanha Munha Raahi Hu", "Ms. Tanvi & Ms. Gargi"),
-    Showcase(date(2026, 9, 2), "Grade II", "Janmashtami", "Prayer - Achutam keshavam", "Ms. Tanvi & Ms. Gargi"),
-    Showcase(date(2026, 8, 27), "Grade II", "Raksha Bandhan", "Tie of Love - Musical Presentation", "Ms. Tanvi & Ms. Gargi"),
-    Showcase(date(2026, 7, 17), "Grade III", "Nelson Mandela Day", "Oh Nelson Mandela", "Ms. Harnoor & Ms. Shreya"),
-    Showcase(date(2026, 7, 30), "Grade III", "Literary Presentation", "Doha Presentation", "Ms. Seema & Ms. Yamini"),
-    Showcase(date(2026, 8, 12), "Grade III", "Independence Day", "News Showcase", "Ms. Shreya & Ms. Harnoor"),
-    Showcase(date(2026, 9, 2), "Grade III", "Janmashtami", "Prayer - Itni shakti", "Music Team"),
-    Showcase(date(2026, 8, 7), "Grade III", "Independence Day", "Hum Bharat Ke Bacche Hain", "Ms. Seema & Ms. Yamini"),
-    Showcase(date(2026, 7, 24), "Grade IV", "Literary Presentation", "Doha Presentation", "Ms. Seema"),
-    Showcase(date(2026, 8, 11), "Grade IV", "Independence Day", "Hum Bharat Ke Bacche Hain", "Ms. Seema & Ms. Yamini"),
-    Showcase(date(2026, 8, 27), "Grade IV", "Janmashtami", "Prayer - Krishna Teri murli", "Music Team"),
-    Showcase(date(2026, 7, 23), "Grade V", "Poetry - Nature Theme", "All Things Bright and Beautiful", "Ms. Prabhjot"),
-    Showcase(date(2026, 7, 28), "Grade V", "Poetry", "Kavita Prastuti - Hum Bharat ke Bachhe hain", "Ms. Shikha"),
-    Showcase(date(2026, 8, 26), "Grade V", "Janmashtami", "Prayer - Krishna Teri murli", "Music Team"),
-    Showcase(date(2026, 8, 12), "Grade V", "Independence Day", "Khoob Ladi Mardani", "Ms. Shikha"),
-    Showcase(date(2026, 8, 3), "Grade VI", "Punjabi Folk", "Painti-Akhari Punjabi Song", "Ms. Jasleen"),
-    Showcase(date(2026, 8, 7), "Grade VI", "Independence Day", "Mera rang de basanti chola", "Ms. Shikha"),
-    Showcase(date(2026, 8, 12), "Grade VI", "Independence Day", "Freedom Fighters Tableau", "Ms. Poonam"),
-    Showcase(date(2026, 8, 7), "Grade VII", "Independence Day", "Freedom Fighters Tableau", "Ms. Poonam"),
-    Showcase(date(2026, 8, 13), "Grade VII", "Independence Day", "Patriotic Medley", "Ms. Rashmi"),
-    Showcase(date(2026, 7, 31), "Grade VIII", "Poetry", "Kavita Prastuti", "Ms. Rashmi"),
-    Showcase(date(2026, 8, 7), "Grade VIII", "Independence Day", "Freedom Fighters Tableau", "Ms. Mansi"),
-    Showcase(date(2026, 8, 13), "Grade VIII", "Independence Day", "Patriotic Medley", "Music Team"),
-    # Nursery to Grade II sheet, September to December 2026.
-    Showcase(date(2026, 9, 22), "Nursery", "Ganesh Chaturthi", "Oh! My Friend Ganesha", "Respective CTs"),
-    Showcase(date(2026, 9, 30), "Nursery", "Letterland", "Letter Y Song", "Respective CTs"),
-    Showcase(date(2026, 10, 1), "Nursery", "Gandhi Jayanti", "Raghupati Raghav", "Respective CTs"),
-    Showcase(date(2026, 10, 15), "Nursery", "Dusshehra", "RamKatha", "Respective CTs"),
-    Showcase(date(2026, 11, 5), "Nursery", "Diwali", "Diwali has come Song", "Respective CTs"),
-    Showcase(date(2026, 11, 19), "Nursery", "Guru Nanak Jayanti", "Mool Mantar", "Respective CTs"),
-    Showcase(date(2026, 9, 22), "Prep", "Ganesh Chaturthi", "Oh! My Friend Ganesha", "Respective CTs"),
-    Showcase(date(2026, 10, 1), "Prep", "Gandhi Jayanti", "Gandhi Ji k bache - Rhyme", "Respective CTs"),
-    Showcase(date(2026, 10, 10), "Prep", "Navratre", "Showcase for Parents - Theatre, Music & Dance", "Respective CTs"),
-    Showcase(date(2026, 10, 16), "Prep", "Dusshehra", "Ram Katha", "Respective CTs"),
-    Showcase(date(2026, 11, 5), "Prep", "Diwali", "Happy Diwali Song", "Respective CTs"),
-    Showcase(date(2026, 11, 20), "Prep", "Guru Nanak Jayanti", "Mool Mantar", "Respective CTs"),
-    Showcase(date(2026, 10, 1), "Grade I", "Swatch Bharat", "Cleanliness Drive", "Respective CTs"),
-    Showcase(date(2026, 10, 16), "Grade I", "Gandhi Jayanti", "Raghupati Raghav", "Respective CTs"),
-    Showcase(date(2026, 11, 6), "Grade I", "Diwali", "Lighting up the World tonight - Song", "Respective CTs"),
-    Showcase(date(2026, 11, 20), "Grade I", "Guru Nanak Jayanti", "Parbhat Pheri & Mool Mantar", "Respective CTs"),
-    Showcase(date(2026, 12, 18), "Grade I", "Christmas", "Joy to the World Song", "Respective CTs"),
-    Showcase(date(2026, 10, 1), "Grade II", "Gandhi Jayanti", "Special Assembly", "Respective CTs"),
-    Showcase(date(2026, 10, 15), "Grade II", "Dusshehra", "Hey Ram! Prayer", "Respective CTs"),
-    Showcase(date(2026, 11, 5), "Grade II", "Diwali", "Saja Do Ghar - Song", "Respective CTs"),
-    Showcase(date(2026, 11, 23), "Grade II", "Guru Nanak Jayanti", "Shabad - Je tu Beliya", "Respective CTs"),
-    Showcase(date(2026, 12, 24), "Grade II", "Christmas", "Carol Mashup", "Respective CTs"),
-    # Grade III rows of the same sheet, October to December 2026.
-    Showcase(date(2026, 10, 13), "Grade III", "Gandhi Jayanti", "Raghupati Raghav Raja Ram + Ram Aayenge", "Respective CTs"),
-    Showcase(date(2026, 12, 22), "Grade III", "Christmas", "Christmas Carols", "Respective CTs"),
-    # Alisha's revisions of 28 October 2026: Grade III's Guru Nanak showcase
-    # became a Diwali one on 30 October, and Grades I and III each gained a
-    # November showcase.
-    Showcase(date(2026, 10, 30), "Grade III", "Diwali", "Ram Aenge", "Respective CTs"),
-    Showcase(date(2026, 11, 13), "Grade III", "Children's Day", "Bachche Man Ke Sachche - song with percussion", "Respective CTs"),
-    Showcase(date(2026, 11, 16), "Grade I", "Gratitude", "Thank You Song - gratitude medley with bells and shakers", "Respective CTs"),
-    # Alisha's November-December 2026 plan, added on 31 October 2026. Only the
-    # rows whose dates she has fixed are here; the undated ones (Christmas
-    # carols, Hindi recitation, speaking activity, the German showcase and the
-    # Nursery/Prep December slots) get reminders once she picks dates.
-    Showcase(date(2026, 11, 5), "Grade III", "Showcase", "Musical Showcase", "Respective CTs"),
-    Showcase(date(2026, 11, 12), "Nursery & Prep", "Winter Fun", "Dance Showcase", "Respective CTs"),
-    Showcase(date(2026, 11, 13), "Grade III", "Children's Day", "Dance Showcase", "Respective CTs"),
-    Showcase(date(2026, 11, 23), "Nursery & Prep", "Guru Nanak Jayanti", "Musical Showcase - Ek Satnam Waheguru", "Respective CTs"),
-    Showcase(date(2026, 12, 4), "Grade IV & V", "Nature", "French Musical Showcase", "Respective CTs"),
-    Showcase(date(2026, 12, 5), "Grade IV", "Kindness", "Musical Showcase - Let's Be Kind", "Respective CTs"),
-    Showcase(date(2026, 12, 8), "Grade VII", "French Showcase", "Theme to be announced", "Respective CTs"),
-    # Rows Alisha added to the showcase sheet on 2 November 2026. The undated
-    # ones (German showcase, the Speaking Competitions, Grade III's January
-    # speaking activity and the blank Nursery/Prep December slots) are left
-    # out until she picks dates.
-    Showcase(date(2026, 11, 18), "Prep", "Speaking Activity", "Fancy Dress Competition - Community Helpers", "Respective CTs"),
-    Showcase(date(2026, 11, 25), "Nursery", "Speaking Activity", "Fancy Dress Competition - Community Helpers", "Respective CTs"),
-    Showcase(date(2026, 11, 30), "Grade III", "Guru Nanak Jayanti", "Musical Showcase - Guru Nanak Jayanti", "CTs of Class 3"),
-    Showcase(date(2026, 12, 10), "Nursery", "Christmas", "Christmas Carols", "Respective CTs"),
-    Showcase(date(2026, 12, 14), "Grade IV", "Christmas", "Theatre Play - Alice in Wonderland", "Ms. Prabhjot"),
-    Showcase(date(2026, 12, 15), "Nursery", "Christmas", "Dance Showcase", "Respective CTs"),
-    Showcase(date(2026, 12, 15), "Grade V", "Christmas", "Theatre Play - Adventures of Pinocchio", "Ms. Alisha"),
-    Showcase(date(2026, 12, 15), "Grade VI", "Christmas", "Theatre Play - Sherlock Holmes", "Ms. Poonam"),
-    Showcase(date(2026, 12, 16), "Grade VII", "Christmas", "Theatre Play - Matilda", "Ms. Twinkle / Ms. Riya"),
-    Showcase(date(2026, 12, 17), "Grade VIII", "Christmas", "Theatre Play - Robinhood", "Ms. Mansi"),
-    Showcase(date(2026, 12, 18), "Grade IX", "Christmas", "Theatre Play - The Merchant of Venice", "Ms. Avneet"),
-    Showcase(date(2026, 12, 19), "Prep", "Broadway", "Christmas Carols / Character Walk", "Respective CTs"),
-    Showcase(date(2026, 12, 19), "Grade I", "Christmas", "The Lion King", "Ms. Muskan"),
-    Showcase(date(2026, 12, 19), "Grade II", "Christmas", "The Wizard of Oz", "Ms. Gargi"),
-    Showcase(date(2026, 12, 19), "Grade III", "Christmas", "Charlie and the Chocolate Factory", "Ms. Harnoor"),
-    Showcase(date(2026, 12, 22), "Grade IV to VIII", "Nav Varsh / New Year", "Hindi Bhashan Pratiyogita - Round 1", "Ms. Seema, Ms. Yamini, Ms. Shikha, Ms. Rashmi, Ms. Harjeet"),
-    Showcase(date(2026, 12, 28), "Grade IV to VIII", "Nav Varsh / New Year", "Hindi Bhashan Pratiyogita - Round 2", "Ms. Seema, Ms. Yamini, Ms. Shikha, Ms. Rashmi, Ms. Harjeet"),
-    # The German rows of the same sheet, which do carry dates. Every remaining
-    # row there has no date at all (the Speaking Activity and Speaking
-    # Competition rows, Nursery/Prep's blank December slots), so there is no
-    # day to remind three days before.
-    Showcase(date(2026, 11, 13), "Grade IV", "Sports & Fitness", "German Musical Showcase - Sport Macht Uns Fit", "Mr. Tarun"),
-    Showcase(date(2026, 11, 16), "Grade V", "Sankt Martins Tag", "German Showcase", "Mr. Tarun"),
-    Showcase(date(2026, 12, 1), "Grade VII", "Christmas", "German Carol", "Respective CTs"),
+    # Alisha's final November-December 2026 plan sheet (4 November 2026) is
+    # the only source of reminders now: she asked for the earlier sheets'
+    # rows to stop being synced, so they are no longer carried here.
+    # The two undated Grade VIII speaking rows get reminders once dated.
+    Showcase(date(2026, 11, 12), 'Nursery', "Children's Day", 'Dance Showcase', 'Mr. Akshay'),
+    Showcase(date(2026, 11, 23), 'Nursery', 'Guru Nanak Jayanti', 'Musical Showcase: Ek Satnam Waheguru', 'Respective CTs'),
+    Showcase(date(2026, 11, 25), 'Nursery', 'Speaking Activity', 'Speaking Activity - Fancy Dress Competition (Community Helpers)', 'Respective CTs'),
+    Showcase(date(2026, 12, 10), 'Nursery', 'Christmas', 'Christmas Carols', 'Respective CTs'),
+    Showcase(date(2026, 12, 22), 'Nursery', 'Little Promises - Big Changes', 'Speaking Competition', 'Respective CTs'),
+    Showcase(date(2026, 11, 12), 'Prep', "Children's Day", 'Dance Showcase', 'Mr. Akshay'),
+    Showcase(date(2026, 11, 18), 'Prep', 'Speaking Activity', 'Speaking Activity - Fancy Dress Competition (Community Helpers)', 'Respective CTs'),
+    Showcase(date(2026, 11, 23), 'Prep', 'Guru Nanak Jayanti', 'Musical Showcase: Ek Satnam Waheguru', 'Respective CTs'),
+    Showcase(date(2026, 12, 19), 'Prep', 'Broadway', 'Christmas Carols/Characterwalk', 'Respective CTs'),
+    Showcase(date(2026, 12, 19), 'Prep', 'A World Without Water & Air', 'Speaking Competition', 'Respective CTs'),
+    Showcase(date(2026, 11, 5), 'Grade I', 'Diwali', 'Musical Showcase: Lighting Up the World', 'Respective CTs'),
+    Showcase(date(2026, 11, 13), 'Grade I', "Children's Day", 'Dance Showcase', 'Mr. Akshay'),
+    Showcase(date(2026, 11, 16), 'Grade I', 'Hindi Speaking Competition', 'Hindi Poem Recitation Competition (Round 2)', 'Respective CTs'),
+    Showcase(date(2026, 11, 19), 'Grade I', 'Guru Nanak Jayanti', 'Parbhat pheri - A walk of Faith', 'Respective CTs'),
+    Showcase(date(2026, 11, 20), 'Grade I', 'Guru Nanak Jayanti', 'Visit to Gurudwara', 'Respective CTs'),
+    Showcase(date(2026, 12, 19), 'Grade I', 'Broadway', 'The Lion King', 'Ms. Muskan'),
+    Showcase(date(2026, 12, 24), 'Grade I', 'My favourite character from Lion King', 'English Speaking Competition Round 1', 'Respective CTs'),
+    Showcase(date(2026, 12, 30), 'Grade I', 'My favourite character from Lion King', 'English Speaking Competition Round 2', 'Respective CTs'),
+    Showcase(date(2026, 11, 5), 'Grade II', 'Diwali', 'Special Assembly', 'Respective CTs'),
+    Showcase(date(2026, 11, 19), 'Grade II', 'Guru Nanak Jayanti', 'Parbhat Feri', 'Respective CTs'),
+    Showcase(date(2026, 11, 20), 'Grade II', 'Guru Nanak Jayanti', 'Gurdwara Visit', 'Respective CTs'),
+    Showcase(date(2026, 11, 23), 'Grade II', 'Guru Nanak Jayanti', 'Musical Showcase - Shabad Sagar', 'Respective CTs'),
+    Showcase(date(2026, 12, 7), 'Grade II', 'Speaking Competition', 'Intra Class Speaking Competition: My Favourite Book Character (Round 1)', 'Respective CTs'),
+    Showcase(date(2026, 12, 11), 'Grade II', 'Speaking Competition', 'Intra Class Speaking Competition: My Favourite Book Character (Round 2)', 'Respective CTs'),
+    Showcase(date(2026, 12, 19), 'Grade II', 'Broadway', 'The Wizard of Oz', 'Ms. Gargi'),
+    Showcase(date(2026, 11, 5), 'Grade III', 'Diwali', 'Musical Showcase - Diwali Mashup Songs', 'CTs of Class 3'),
+    Showcase(date(2026, 11, 13), 'Grade III', "Children's Day", 'Dance Showcase', 'Mr. Akshay'),
+    Showcase(date(2026, 11, 30), 'Grade III', 'Guru Nanak Jayanti', 'Musical Showcase - Guru Nanak Jayanti', 'CTs of Class 3'),
+    Showcase(date(2026, 12, 3), 'Grade III', 'Christmas', 'Christmas Carols', 'Ms. Harnoor'),
+    Showcase(date(2026, 12, 4), 'Grade III', 'Speaking Activity - Round 1 - Hindi', 'आशु भाषण प्रतियोगिता', 'Ms. Seema'),
+    Showcase(date(2026, 12, 11), 'Grade III', 'Speaking Activity - Round 2 - Hindi', 'आशु भाषण प्रतियोगिता', 'Ms. Seema'),
+    Showcase(date(2026, 12, 19), 'Grade III', 'Broadway', 'Charlie and the Chocolate Factory', 'Ms. Harnoor'),
+    Showcase(date(2026, 12, 23), 'Grade III', 'Quiz', 'GK Quiz', 'Ms. Jasleen'),
+    Showcase(date(2026, 11, 13), 'Grade IV', 'Sports & Fitness', 'German Musical Showcase: Sport Macht Uns Fit (Sport Makes Us Fit)', 'Mr. Tarun'),
+    Showcase(date(2026, 12, 8), 'Grade IV', 'Christmas', 'Hindi Poem Presentation - त्योहारों का देश', 'Ms. Seema'),
+    Showcase(date(2026, 12, 14), 'Grade IV', 'Speaking Activity - English Round 1', 'Puppet-Powered Tales - Story Narration Using Puppets', 'Ms. Prabhjot'),
+    Showcase(date(2026, 12, 21), 'Grade IV', 'Speaking Activity - English Finale', 'Puppet-Powered Tales - Story Narration Using Puppets', 'Ms. Prabhjot'),
+    Showcase(date(2026, 12, 23), 'Grade IV', 'Christmas - French', 'Musical Showcase', 'Ms. Twinkle'),
+    Showcase(date(2026, 12, 23), 'Grade IV', 'Quiz', 'GK Quiz', 'Ms. Jasleen'),
+    Showcase(date(2026, 11, 16), 'Grade V', 'Saint Martin’s Day', 'German - Sankt Martinstag', 'Mr. Tarun'),
+    Showcase(date(2026, 12, 6), 'Grade V', 'Christmas', "Let's Be Kind", 'Ms. Prabhjot'),
+    Showcase(date(2026, 12, 15), 'Grade V', 'Christmas - French', 'Musical Showcase', 'Ms. Twinkle'),
+    Showcase(date(2026, 12, 23), 'Grade V', 'Quiz', 'GK Quiz', 'Ms. Twinkle'),
+    Showcase(date(2026, 12, 17), 'Grade V', 'Speaking Activity Hindi - Round 1', 'Doha Vachan', 'Ms. Shikha'),
+    Showcase(date(2026, 12, 22), 'Grade V', 'Speaking Activity Hindi - Round 2', 'Doha Vachan', 'Ms. Shikha'),
+    Showcase(date(2026, 12, 8), 'Grade VI', 'Christmas - French', 'Musical Showcase - Christmas French Carol', 'Ms. Twinkle'),
+    Showcase(date(2026, 12, 10), 'Grade VI', 'Speaking Activity - Round 1 - English', "Debate (Books Offer Knowledge that Digital Entertainment Can't Replace)", 'Ms. Poonam'),
+    Showcase(date(2026, 12, 16), 'Grade VI', 'Speaking Activity - Round 2 - English', "Debate (Books Offer Knowledge that Digital Entertainment Can't Replace)", 'Ms. Poonam'),
+    Showcase(date(2026, 12, 23), 'Grade VI', 'Quiz', 'GK Quiz', 'Ms. Twinkle'),
+    Showcase(date(2026, 12, 16), 'Grade VI', 'Poem Presentation - Hindi', '', 'Ms. Shikha'),
+    Showcase(date(2026, 12, 1), 'Grade VII', 'Christmas - German', 'Musical Showcase - Christmas German Carol', 'Mr. Tarun'),
+    Showcase(date(2026, 12, 7), 'Grade VII', 'Christmas - French', 'Musical Showcase - Christmas French Carol', 'Ms. Twinkle'),
+    Showcase(date(2026, 12, 14), 'Grade VII', 'Speaking Activity - Round 1 - Hindi', 'विद्यालयों में नैतिक शिक्षा (Moral Education) अनिवार्य होनी चाहिए या नहीं', 'Ms. Rashmi'),
+    Showcase(date(2026, 12, 16), 'Grade VII', 'Poem Presentation - English', "English Poem Presentation - 'Women: Empowered to Inspire'", 'Ms. Poonam'),
+    Showcase(date(2026, 12, 21), 'Grade VII', 'Speaking Activity - Round 2 - Hindi', 'विद्यालयों में नैतिक शिक्षा (Moral Education) अनिवार्य होनी चाहिए या नहीं', 'Ms. Rashmi'),
+    Showcase(date(2026, 12, 23), 'Grade VII', 'Quiz', 'GK Quiz', 'Ms. Alisha'),
+    Showcase(date(2026, 12, 9), 'Grade VIII', 'Poem Presentation - Hindi', 'कोशिश करने वालों की हार नहीं होती', 'Ms. Rashmi'),
+    Showcase(date(2026, 12, 17), 'Grade VIII', 'Christmas', 'Musical Showcase - French Carol', 'Ms. Riya'),
+    Showcase(date(2026, 12, 23), 'Grade VIII', 'Quiz', 'GK Quiz', 'Ms. Alisha'),
+    Showcase(date(2026, 12, 11), 'Grade IX', 'Christmas', 'Dance Showcase (Dance to be repeated on 24 Dec Special Assembly)', 'Mr. Akshay'),
+    Showcase(date(2026, 11, 13), 'Grade X', "Children's Day", 'Special Assembly', 'Ms. Riya'),
+    Showcase(date(2026, 12, 24), 'Grade 1 - Grade 8', 'Christmas',
+             'Special Assembly — Repeat (Presenting grade to be decided in '
+             'line with the musical showcase and Broadway allocations)',
+             'Ms. Avneet & Ms. Riya'),
 )
+
+
+# The reference slide each non-musical showcase projects on the day, hosted
+# under /static/showcase_slides. Keyed by date + class + theme because a class
+# can present twice on one day (Prep's 19 December carols and speaking round).
+# Musical showcases are deliberately absent: Alisha wants slides only for the
+# items teachers have to prepare a slide for.
+SHOWCASE_SLIDES: dict[tuple[date, str, str], str] = {
+    (date(2026, 11, 12), 'Nursery', "Children's Day"): 'slide_r02',
+    (date(2026, 11, 25), 'Nursery', 'Speaking Activity'): 'slide_r04',
+    (date(2026, 12, 10), 'Nursery', 'Christmas'): 'slide_r05',
+    (date(2026, 12, 22), 'Nursery', 'Little Promises - Big Changes'): 'slide_r06',
+    (date(2026, 11, 12), 'Prep', "Children's Day"): 'slide_r08',
+    (date(2026, 11, 18), 'Prep', 'Speaking Activity'): 'slide_r09',
+    (date(2026, 12, 19), 'Prep', 'Broadway'): 'slide_r11',
+    (date(2026, 12, 19), 'Prep', 'A World Without Water & Air'): 'slide_r12',
+    (date(2026, 11, 13), 'Grade I', "Children's Day"): 'slide_g1_dance',
+    (date(2026, 11, 16), 'Grade I', 'Hindi Speaking Competition'): 'slide_r15',
+    (date(2026, 12, 19), 'Grade I', 'Broadway'): 'slide_r16',
+    (date(2026, 12, 24), 'Grade I', 'My favourite character from Lion King'): 'slide_r17',
+    (date(2026, 12, 30), 'Grade I', 'My favourite character from Lion King'): 'slide_r17',
+    (date(2026, 11, 5), 'Grade II', 'Diwali'): 'slide_r19',
+    (date(2026, 11, 19), 'Grade II', 'Guru Nanak Jayanti'): 'slide_r20',
+    (date(2026, 11, 20), 'Grade II', 'Guru Nanak Jayanti'): 'slide_r21',
+    (date(2026, 12, 7), 'Grade II', 'Speaking Competition'): 'slide_r23',
+    (date(2026, 12, 11), 'Grade II', 'Speaking Competition'): 'slide_r24',
+    (date(2026, 12, 19), 'Grade II', 'Broadway'): 'slide_r25',
+    (date(2026, 11, 13), 'Grade III', "Children's Day"): 'slide_r28',
+    (date(2026, 12, 3), 'Grade III', 'Christmas'): 'slide_r30',
+    (date(2026, 12, 4), 'Grade III', 'Speaking Activity - Round 1 - Hindi'): 'slide_r31',
+    (date(2026, 12, 11), 'Grade III', 'Speaking Activity - Round 2 - Hindi'): 'slide_r32',
+    (date(2026, 12, 19), 'Grade III', 'Broadway'): 'slide_r33',
+    (date(2026, 12, 23), 'Grade III', 'Quiz'): 'slide_r34',
+    (date(2026, 12, 8), 'Grade IV', 'Christmas'): 'slide_r37',
+    (date(2026, 12, 14), 'Grade IV', 'Speaking Activity - English Round 1'): 'slide_r38',
+    (date(2026, 12, 21), 'Grade IV', 'Speaking Activity - English Finale'): 'slide_r39',
+    (date(2026, 12, 23), 'Grade IV', 'Quiz'): 'slide_r41',
+    (date(2026, 11, 16), 'Grade V', 'Saint Martin’s Day'): 'slide_r43',
+    (date(2026, 12, 6), 'Grade V', 'Christmas'): 'slide_r44',
+    (date(2026, 12, 23), 'Grade V', 'Quiz'): 'slide_r46',
+    (date(2026, 12, 17), 'Grade V', 'Speaking Activity Hindi - Round 1'): 'slide_r47',
+    (date(2026, 12, 22), 'Grade V', 'Speaking Activity Hindi - Round 2'): 'slide_r48',
+    (date(2026, 12, 10), 'Grade VI', 'Speaking Activity - Round 1 - English'): 'slide_r51',
+    (date(2026, 12, 16), 'Grade VI', 'Speaking Activity - Round 2 - English'): 'slide_r52',
+    (date(2026, 12, 23), 'Grade VI', 'Quiz'): 'slide_r53',
+    (date(2026, 12, 16), 'Grade VI', 'Poem Presentation - Hindi'): 'slide_r54',
+    (date(2026, 12, 14), 'Grade VII', 'Speaking Activity - Round 1 - Hindi'): 'slide_r58',
+    (date(2026, 12, 16), 'Grade VII', 'Poem Presentation - English'): 'slide_r61',
+    (date(2026, 12, 21), 'Grade VII', 'Speaking Activity - Round 2 - Hindi'): 'slide_r59',
+    (date(2026, 12, 23), 'Grade VII', 'Quiz'): 'slide_r60',
+    (date(2026, 12, 9), 'Grade VIII', 'Poem Presentation - Hindi'): 'slide_r63',
+    (date(2026, 12, 23), 'Grade VIII', 'Quiz'): 'slide_r65',
+    (date(2026, 12, 11), 'Grade IX', 'Christmas'): 'slide_r69',
+    (date(2026, 11, 13), 'Grade X', "Children's Day"): 'slide_r71',
+}
+
+
+def slide_for(showcase: Showcase) -> str:
+    """Public URL of a showcase's reference slide thumbnail, if it has one."""
+    name = SHOWCASE_SLIDES.get(
+        (showcase.event_date, showcase.grade_class, showcase.theme_occasion)
+    )
+    if not name:
+        return ""
+    return f"{SHOWCASE_SLIDE_BASE_URL}/{name}_thumb.jpg"
+
+
+def due_showcase_slides(today: date) -> list[Showcase]:
+    """Showcases whose slide goes out, from two days before the event.
+
+    The window stays open until the event day so a slide whose send failed —
+    the template not approved yet, or Meta refusing the message — is tried
+    again the next day instead of being lost. The delivery claim, not the
+    date, is what stops a second copy.
+    """
+    return [
+        showcase
+        for showcase in SHOWCASES
+        if 0 <= (showcase.event_date - today).days <= SHOWCASE_SLIDE_LEAD_DAYS
+        and slide_for(showcase)
+    ]
 
 
 def due_showcases(today: date) -> dict[date, list[Showcase]]:
     due: dict[date, list[Showcase]] = defaultdict(list)
     for showcase in SHOWCASES:
         days_until = (showcase.event_date - today).days
-        if days_until == SHOWCASE_REMINDER_LEAD_DAYS:
+        # Up to the lead time, not exactly on it: when the sheet changes, an
+        # event closer than three days still gets its one reminder instead of
+        # being skipped because its window has passed. Repeats are prevented by
+        # the delivery claim, not by the date.
+        if 0 <= days_until <= SHOWCASE_REMINDER_LEAD_DAYS:
             due[showcase.event_date].append(showcase)
     return dict(due)
 
@@ -270,6 +320,95 @@ async def send_showcase_reminders(now: datetime | None = None) -> int:
     return sent_count
 
 
+def _claim_slide(slide_key: str, recipient: str, now: datetime) -> bool:
+    with sqlite3.connect(DB_PATH) as db:
+        cursor = db.execute(
+            "INSERT INTO showcase_slide_deliveries "
+            "(slide_key, recipient, status, claimed_at) "
+            "VALUES (?, ?, 'generated', ?) "
+            "ON CONFLICT(slide_key, recipient) DO UPDATE SET "
+            "status = 'generated', claimed_at = excluded.claimed_at "
+            # A claim left 'generated' belongs to a send that died before it
+            # could finish, so it is retried rather than skipped forever.
+            "WHERE showcase_slide_deliveries.status IN ('failed', 'generated')",
+            (slide_key, recipient, now.strftime("%d-%m-%Y %H:%M:%S IST")),
+        )
+        db.commit()
+        return cursor.rowcount == 1
+
+
+def _finish_slide(
+    slide_key: str, recipient: str, sent: bool, now: datetime,
+) -> None:
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            "UPDATE showcase_slide_deliveries SET "
+            "status = ?, status_updated_at = ? "
+            "WHERE slide_key = ? AND recipient = ?",
+            (
+                "accepted" if sent else "failed",
+                now.strftime("%d-%m-%Y %H:%M:%S IST"),
+                slide_key,
+                recipient,
+            ),
+        )
+        db.commit()
+
+
+async def send_showcase_slides(now: datetime | None = None) -> int:
+    """Send each non-musical showcase's reference slide two days ahead.
+
+    The teachers need the slide in hand before the day, so this is a separate
+    send from the three-day text reminder: one message per showcase, carrying
+    that showcase's own slide as the template's image header.
+    """
+    current = now or datetime.now(IST)
+    sent_count = 0
+    for showcase in due_showcase_slides(current.date()):
+        slide_key = (
+            f"{showcase.event_date.isoformat()}|{showcase.grade_class}"
+            f"|{showcase.theme_occasion}"
+        )
+        item = showcase.presentation_item or showcase.theme_occasion
+        for recipient in SHOWCASE_REMINDER_PHONES:
+            if not _claim_slide(slide_key, recipient, current):
+                continue
+            try:
+                sent = await whatsapp_service.send_cloud_template_message(
+                    to=recipient,
+                    template_name=SHOWCASE_SLIDE_TEMPLATE,
+                    language_code="en",
+                    body_params=[
+                        showcase.grade_class,
+                        item,
+                        showcase.event_date.strftime("%d %B %Y"),
+                    ],
+                    header_image_url=slide_for(showcase),
+                )
+            except Exception:
+                logger.exception(
+                    "Showcase slide errored for %s, recipient ending %s",
+                    slide_key,
+                    recipient[-4:],
+                )
+                sent = False
+            _finish_slide(slide_key, recipient, sent, datetime.now(IST))
+            if sent:
+                sent_count += 1
+                logger.info(
+                    "Showcase slide accepted for %s, recipient ending %s",
+                    slide_key,
+                    recipient[-4:],
+                )
+            else:
+                logger.error(
+                    "Showcase slide failed for %s, recipient ending %s",
+                    slide_key,
+                    recipient[-4:],
+                )
+    return sent_count
+
+
 async def record_showcase_delivery_status(
     wa_message_id: str,
     status: str,
@@ -298,5 +437,13 @@ def send_showcase_reminders_sync() -> None:
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(send_showcase_reminders())
+    finally:
+        loop.close()
+
+
+def send_showcase_slides_sync() -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(send_showcase_slides())
     finally:
         loop.close()

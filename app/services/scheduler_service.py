@@ -19,6 +19,10 @@ from app.services.email_polling_service import poll_homework_emails_sync
 from app.services.showcase_reminder_service import (
     IST as SHOWCASE_IST,
     send_showcase_reminders_sync,
+    send_showcase_slides_sync,
+)
+from app.services.showcase_slide_template_service import (
+    ensure_slide_template_sync,
 )
 from app.services.gk_olympiad_reminder_service import (
     IST as GK_OLYMPIAD_IST,
@@ -850,6 +854,37 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info("Scheduled musical showcase reminders at 9:00 AM IST")
+
+    # Reference slides at 9:05 AM IST, two days before each non-musical event,
+    # so the teachers can prepare their slide before the day.
+    scheduler.add_job(
+        send_showcase_slides_sync,
+        trigger=CronTrigger(
+            hour=9, minute=5, second=0, timezone=SHOWCASE_IST,
+        ),
+        id="showcase_slide_previews",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        send_showcase_slides_sync,
+        trigger=DateTrigger(
+            run_date=datetime.now(SHOWCASE_IST) + timedelta(seconds=75),
+        ),
+        id="showcase_slide_previews_initial",
+        replace_existing=True,
+    )
+    logger.info("Scheduled showcase slide previews at 9:05 AM IST")
+
+    # Register the image-header template the slide send needs (no-op once
+    # Meta has it).
+    scheduler.add_job(
+        ensure_slide_template_sync,
+        trigger=DateTrigger(
+            run_date=datetime.now(SHOWCASE_IST) + timedelta(seconds=20),
+        ),
+        id="showcase_slide_template_check",
+        replace_existing=True,
+    )
 
     # GK Olympiad reminders at 9:00 AM IST on 25 and 30 September and
     # 3 October 2026, ahead of the Olympiad on 6 October.
