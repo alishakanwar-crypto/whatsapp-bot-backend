@@ -71,7 +71,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_guru_nanak_reminder_names_both_classes_presenting(self):
-        due = reminders.due_showcases(date(2026, 11, 20))
+        due = reminders.due_showcases(date(2026, 11, 21))
 
         self.assertIn(date(2026, 11, 23), due)
         self.assertEqual(
@@ -80,7 +80,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_diwali_reminder_names_every_class_presenting_that_day(self):
-        due = reminders.due_showcases(date(2026, 11, 2))
+        due = reminders.due_showcases(date(2026, 11, 3))
 
         self.assertEqual(set(due), {date(2026, 11, 5)})
         self.assertEqual(
@@ -88,8 +88,8 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
             ["Grade I", "Grade II", "Grade III"],
         )
 
-    def test_christmas_carol_reminder_goes_out_three_days_before(self):
-        due = reminders.due_showcases(date(2026, 12, 7))
+    def test_christmas_carol_reminder_goes_out_two_days_before(self):
+        due = reminders.due_showcases(date(2026, 12, 8))
 
         self.assertIn(date(2026, 12, 10), due)
         self.assertIn(
@@ -98,17 +98,17 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_reminds_up_to_the_lead_time_so_a_revised_sheet_still_lands(self):
-        due = reminders.due_showcases(date(2026, 11, 13))
+        due = reminders.due_showcases(date(2026, 11, 14))
 
         self.assertEqual(len(due[date(2026, 11, 16)]), 2)
-        # An event only one day away still gets its reminder once.
-        self.assertIn(date(2026, 11, 13), due)
-        # Nothing beyond the three-day window, and nothing in the past.
+        # Nothing beyond the two-day window, and nothing in the past.
         self.assertEqual(max(due), date(2026, 11, 16))
-        self.assertEqual(min(due), date(2026, 11, 13))
+        self.assertEqual(min(due), date(2026, 11, 16))
+        # An event only one day away still gets its reminder once.
+        self.assertIn(date(2026, 12, 9), reminders.due_showcases(date(2026, 12, 8)))
 
     def test_formats_all_same_day_showcases_in_one_message(self):
-        due = reminders.due_showcases(date(2026, 12, 20))
+        due = reminders.due_showcases(date(2026, 12, 21))
 
         details = reminders.format_showcase_details(due[date(2026, 12, 23)])
 
@@ -242,7 +242,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sends_one_template_and_deduplicates_event_date(self):
         send = AsyncMock(return_value=True)
-        now = datetime(2026, 11, 2, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 11, 3, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
@@ -276,13 +276,13 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     async def test_sends_only_missing_recipient_for_claimed_event_date(self):
         first_recipient = "919999995224"
         second_recipient = "919999998106"
-        now = datetime(2026, 11, 2, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 11, 3, 9, 0, tzinfo=reminders.IST)
         with sqlite3.connect(self.db_path) as db:
             db.execute(
                 "INSERT INTO showcase_reminder_deliveries "
                 "(event_date, recipient, status, claimed_at) "
                 "VALUES ('2026-11-05', ?, 'delivered', "
-                "'02-11-2026 09:00:00 IST')",
+                "'03-11-2026 09:00:00 IST')",
                 (first_recipient,),
             )
         send = AsyncMock(return_value=True)
@@ -359,7 +359,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_send_is_released_for_retry(self):
         send = AsyncMock(side_effect=[False, True])
-        now = datetime(2026, 11, 2, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 11, 3, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
