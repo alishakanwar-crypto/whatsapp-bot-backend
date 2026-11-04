@@ -181,11 +181,17 @@ def slide_for(showcase: Showcase) -> str:
 
 
 def due_showcase_slides(today: date) -> list[Showcase]:
-    """Showcases whose slide goes out, two days before the event."""
+    """Showcases whose slide goes out, from two days before the event.
+
+    The window stays open until the event day so a slide whose send failed —
+    the template not approved yet, or Meta refusing the message — is tried
+    again the next day instead of being lost. The delivery claim, not the
+    date, is what stops a second copy.
+    """
     return [
         showcase
         for showcase in SHOWCASES
-        if (showcase.event_date - today).days == SHOWCASE_SLIDE_LEAD_DAYS
+        if 0 <= (showcase.event_date - today).days <= SHOWCASE_SLIDE_LEAD_DAYS
         and slide_for(showcase)
     ]
 
@@ -322,7 +328,9 @@ def _claim_slide(slide_key: str, recipient: str, now: datetime) -> bool:
             "VALUES (?, ?, 'generated', ?) "
             "ON CONFLICT(slide_key, recipient) DO UPDATE SET "
             "status = 'generated', claimed_at = excluded.claimed_at "
-            "WHERE showcase_slide_deliveries.status = 'failed'",
+            # A claim left 'generated' belongs to a send that died before it
+            # could finish, so it is retried rather than skipped forever.
+            "WHERE showcase_slide_deliveries.status IN ('failed', 'generated')",
             (slide_key, recipient, now.strftime("%d-%m-%Y %H:%M:%S IST")),
         )
         db.commit()

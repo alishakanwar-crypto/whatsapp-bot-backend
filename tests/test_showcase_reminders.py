@@ -137,20 +137,20 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         due = reminders.due_showcase_slides(date(2026, 12, 21))
 
         self.assertEqual(
-            {item.grade_class for item in due},
-            {
-                "Grade III", "Grade IV", "Grade V",
-                "Grade VI", "Grade VII", "Grade VIII",
-            },
+            {item.event_date for item in due},
+            {date(2026, 12, 21), date(2026, 12, 22), date(2026, 12, 23)},
         )
+        self.assertEqual(reminders.due_showcase_slides(date(2026, 12, 25)), [])
         self.assertEqual(
             [
-                (item.grade_class, item.presentation_item)
+                (item.grade_class, item.event_date)
                 for item in reminders.due_showcase_slides(date(2026, 12, 20))
             ],
             [
-                ("Nursery", "Speaking Competition"),
-                ("Grade V", "Doha Vachan"),
+                ("Nursery", date(2026, 12, 22)),
+                ("Grade IV", date(2026, 12, 21)),
+                ("Grade V", date(2026, 12, 22)),
+                ("Grade VII", date(2026, 12, 21)),
             ],
         )
 
@@ -168,17 +168,77 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
             first = await reminders.send_showcase_slides(now)
             second = await reminders.send_showcase_slides(now)
 
-        self.assertEqual((first, second), (2, 0))
-        call = send.await_args.kwargs
-        self.assertEqual(call["template_name"], "ppis_showcase_slide_preview")
+        self.assertEqual((first, second), (4, 0))
+        calls = [call.kwargs for call in send.await_args_list[:first]]
         self.assertEqual(
-            call["header_image_url"],
+            {call["template_name"] for call in calls},
+            {"ppis_showcase_slide_preview"},
+        )
+        doha = next(
+            call for call in calls
+            if call["body_params"][1] == "Doha Vachan"
+        )
+        self.assertEqual(
+            doha["header_image_url"],
             "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides/"
             "slide_r48_thumb.jpg",
         )
         self.assertEqual(
-            call["body_params"], ["Grade V", "Doha Vachan", "22 December 2026"],
+            doha["body_params"],
+            ["Grade V", "Doha Vachan", "22 December 2026"],
         )
+
+    async def test_retries_a_slide_whose_send_failed_the_day_before(self):
+        send = AsyncMock(return_value=False)
+
+        with (
+            patch.object(reminders, "DB_PATH", str(self.db_path)),
+            patch.object(reminders, "SHOWCASE_REMINDER_PHONES", ("919999995224",)),
+            patch.object(
+                reminders.whatsapp_service, "send_cloud_template_message", send,
+            ),
+        ):
+            # Template not approved yet on the first attempt.
+            failed = await reminders.send_showcase_slides(
+                datetime(2026, 12, 15, 9, 5, tzinfo=reminders.IST)
+            )
+            send.side_effect = None
+            send.return_value = True
+            # Still due the next day, and it goes out.
+            retried = await reminders.send_showcase_slides(
+                datetime(2026, 12, 16, 9, 5, tzinfo=reminders.IST)
+            )
+
+        self.assertEqual(failed, 0)
+        self.assertGreater(retried, 0)
+        self.assertIn(
+            "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides/"
+            "slide_r52_thumb.jpg",
+            [call.kwargs["header_image_url"] for call in send.await_args_list],
+        )
+
+    async def test_reclaims_a_slide_left_mid_send_by_a_restart(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT INTO showcase_slide_deliveries "
+                "(slide_key, recipient, status, claimed_at) VALUES "
+                "('2026-12-22|Grade V|Speaking Activity Hindi - Round 2', "
+                "'919999995224', 'generated', 'x')"
+            )
+        send = AsyncMock(return_value=True)
+
+        with (
+            patch.object(reminders, "DB_PATH", str(self.db_path)),
+            patch.object(reminders, "SHOWCASE_REMINDER_PHONES", ("919999995224",)),
+            patch.object(
+                reminders.whatsapp_service, "send_cloud_template_message", send,
+            ),
+        ):
+            sent = await reminders.send_showcase_slides(
+                datetime(2026, 12, 20, 9, 5, tzinfo=reminders.IST)
+            )
+
+        self.assertEqual(sent, 4)
 
     async def test_sends_one_template_and_deduplicates_event_date(self):
         send = AsyncMock(return_value=True)
