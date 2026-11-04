@@ -29,19 +29,15 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_plan_matches_the_re_synced_november_december_sheet(self):
-        self.assertEqual(len(reminders.SHOWCASES), 117)
-        self.assertEqual(len({item.event_date for item in reminders.SHOWCASES}), 55)
+    def test_plan_holds_only_the_final_november_december_sheet(self):
+        self.assertEqual(len(reminders.SHOWCASES), 62)
         self.assertEqual(
             sorted(
                 item.event_date
                 for item in reminders.SHOWCASES
                 if item.grade_class == "Grade III"
-                and item.event_date >= date(2026, 10, 1)
             ),
             [
-                date(2026, 10, 13),
-                date(2026, 10, 30),
                 date(2026, 11, 5),
                 date(2026, 11, 13),
                 date(2026, 11, 30),
@@ -52,13 +48,11 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 date(2026, 12, 23),
             ],
         )
-        # Every November-December row now comes from the live plan sheet, so the
-        # superseded rows of the older music sheet are gone.
-        self.assertFalse(
-            any(
-                item.grade_class == "Nursery & Prep"
-                for item in reminders.SHOWCASES
-            )
+        # Alisha asked for the earlier sheets to stop being synced, so nothing
+        # before this plan's first date can raise a reminder any more.
+        self.assertEqual(
+            min(item.event_date for item in reminders.SHOWCASES),
+            date(2026, 11, 5),
         )
         self.assertTrue(
             any(
@@ -68,30 +62,14 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 for item in reminders.SHOWCASES
             )
         )
-        self.assertTrue(
-            any(
-                item.grade_class == "Nursery"
-                and item.event_date == date(2026, 9, 11)
-                for item in reminders.SHOWCASES
-            )
-        )
 
-    def test_latest_july_28_reminder_contains_only_grade_v(self):
-        due = reminders.due_showcases(date(2026, 7, 25))
+    def test_guru_nanak_reminder_names_both_classes_presenting(self):
+        due = reminders.due_showcases(date(2026, 11, 20))
 
-        self.assertEqual(set(due), {date(2026, 7, 28)})
+        self.assertEqual(set(due), {date(2026, 11, 23)})
         self.assertEqual(
-            [item.grade_class for item in due[date(2026, 7, 28)]],
-            ["Grade V"],
-        )
-
-    def test_latest_august_3_reminder_has_nursery_prep_and_grade_vi(self):
-        due = reminders.due_showcases(date(2026, 7, 31))
-
-        self.assertEqual(set(due), {date(2026, 8, 3)})
-        self.assertEqual(
-            [item.grade_class for item in due[date(2026, 8, 3)]],
-            ["Nursery", "Prep", "Grade VI"],
+            [item.grade_class for item in due[date(2026, 11, 23)]],
+            ["Nursery", "Prep", "Grade II"],
         )
 
     def test_diwali_reminder_names_every_class_presenting_that_day(self):
@@ -113,25 +91,25 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_selects_exactly_three_day_lead_time(self):
-        due = reminders.due_showcases(date(2026, 7, 27))
+        due = reminders.due_showcases(date(2026, 11, 13))
 
-        self.assertEqual(set(due), {date(2026, 7, 30)})
-        self.assertEqual(len(due[date(2026, 7, 30)]), 1)
+        self.assertEqual(set(due), {date(2026, 11, 16)})
+        self.assertEqual(len(due[date(2026, 11, 16)]), 2)
 
     def test_formats_all_same_day_showcases_in_one_message(self):
-        due = reminders.due_showcases(date(2026, 7, 28))
+        due = reminders.due_showcases(date(2026, 12, 20))
 
-        details = reminders.format_showcase_details(due[date(2026, 7, 31)])
+        details = reminders.format_showcase_details(due[date(2026, 12, 23)])
 
-        self.assertIn("Grade I — Friendship Day: Harmony of Hearts", details)
-        self.assertIn("Grade II — Theme of the Month: We Are a Family Song", details)
-        self.assertIn("Grade VIII — Poetry: Kavita Prastuti", details)
+        self.assertIn("Grade III — Quiz: GK Quiz", details)
+        self.assertIn("Grade IV — Christmas - French: Musical Showcase", details)
+        self.assertIn("Grade VIII — Quiz: GK Quiz", details)
         self.assertNotIn("\n", details)
         self.assertNotIn("\t", details)
 
     async def test_sends_one_template_and_deduplicates_event_date(self):
         send = AsyncMock(return_value=True)
-        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 11, 2, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
@@ -154,8 +132,8 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         call = send.await_args.kwargs
         self.assertEqual(call["to"], "919999995224")
         self.assertEqual(call["template_name"], "ppis_musical_showcase_reminder")
-        self.assertEqual(call["body_params"][0], "23 July 2026")
-        self.assertIn("Grade V", call["body_params"][1])
+        self.assertEqual(call["body_params"][0], "05 November 2026")
+        self.assertIn("Grade I", call["body_params"][1])
         with sqlite3.connect(self.db_path) as db:
             row = db.execute(
                 "SELECT status, wa_message_id FROM showcase_reminder_deliveries"
@@ -165,13 +143,13 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     async def test_sends_only_missing_recipient_for_claimed_event_date(self):
         first_recipient = "919999995224"
         second_recipient = "919999998106"
-        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 11, 2, 9, 0, tzinfo=reminders.IST)
         with sqlite3.connect(self.db_path) as db:
             db.execute(
                 "INSERT INTO showcase_reminder_deliveries "
                 "(event_date, recipient, status, claimed_at) "
-                "VALUES ('2026-07-23', ?, 'delivered', "
-                "'21-07-2026 09:00:00 IST')",
+                "VALUES ('2026-11-05', ?, 'delivered', "
+                "'02-11-2026 09:00:00 IST')",
                 (first_recipient,),
             )
         send = AsyncMock(return_value=True)
@@ -248,7 +226,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_send_is_released_for_retry(self):
         send = AsyncMock(side_effect=[False, True])
-        now = datetime(2026, 7, 20, 9, 0, tzinfo=reminders.IST)
+        now = datetime(2026, 11, 2, 9, 0, tzinfo=reminders.IST)
 
         with (
             patch.object(reminders, "DB_PATH", str(self.db_path)),
