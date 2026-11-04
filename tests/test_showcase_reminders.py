@@ -25,6 +25,13 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 "wa_message_id TEXT NOT NULL DEFAULT '', "
                 "PRIMARY KEY (event_date, recipient))"
             )
+            db.execute(
+                "CREATE TABLE showcase_slide_deliveries ("
+                "slide_key TEXT NOT NULL, recipient TEXT NOT NULL, "
+                "status TEXT NOT NULL, claimed_at TEXT NOT NULL, "
+                "status_updated_at TEXT NOT NULL DEFAULT '', "
+                "PRIMARY KEY (slide_key, recipient))"
+            )
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -66,7 +73,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def test_guru_nanak_reminder_names_both_classes_presenting(self):
         due = reminders.due_showcases(date(2026, 11, 20))
 
-        self.assertEqual(set(due), {date(2026, 11, 23)})
+        self.assertIn(date(2026, 11, 23), due)
         self.assertEqual(
             [item.grade_class for item in due[date(2026, 11, 23)]],
             ["Nursery", "Prep", "Grade II"],
@@ -84,17 +91,21 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
     def test_christmas_carol_reminder_goes_out_three_days_before(self):
         due = reminders.due_showcases(date(2026, 12, 7))
 
-        self.assertEqual(set(due), {date(2026, 12, 10)})
+        self.assertIn(date(2026, 12, 10), due)
         self.assertIn(
             "Nursery — Christmas: Christmas Carols",
             reminders.format_showcase_details(due[date(2026, 12, 10)]),
         )
 
-    def test_selects_exactly_three_day_lead_time(self):
+    def test_reminds_up_to_the_lead_time_so_a_revised_sheet_still_lands(self):
         due = reminders.due_showcases(date(2026, 11, 13))
 
-        self.assertEqual(set(due), {date(2026, 11, 16)})
         self.assertEqual(len(due[date(2026, 11, 16)]), 2)
+        # An event only one day away still gets its reminder once.
+        self.assertIn(date(2026, 11, 13), due)
+        # Nothing beyond the three-day window, and nothing in the past.
+        self.assertEqual(max(due), date(2026, 11, 16))
+        self.assertEqual(min(due), date(2026, 11, 13))
 
     def test_formats_all_same_day_showcases_in_one_message(self):
         due = reminders.due_showcases(date(2026, 12, 20))
@@ -106,6 +117,68 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Grade VIII — Quiz: GK Quiz", details)
         self.assertNotIn("\n", details)
         self.assertNotIn("\t", details)
+
+    def test_slides_cover_every_non_musical_showcase_with_a_prepared_slide(self):
+        for showcase in reminders.SHOWCASES:
+            if "musical showcase" in (
+                showcase.theme_occasion + " " + showcase.presentation_item
+            ).lower():
+                self.assertEqual(reminders.slide_for(showcase), "")
+
+        slides_dir = (
+            Path(reminders.__file__).resolve().parents[1]
+            / "static"
+            / "showcase_slides"
+        )
+        for name in set(reminders.SHOWCASE_SLIDES.values()):
+            self.assertTrue((slides_dir / f"{name}_thumb.jpg").is_file(), name)
+
+    def test_slide_goes_out_two_days_before_the_event(self):
+        due = reminders.due_showcase_slides(date(2026, 12, 21))
+
+        self.assertEqual(
+            {item.grade_class for item in due},
+            {
+                "Grade III", "Grade IV", "Grade V",
+                "Grade VI", "Grade VII", "Grade VIII",
+            },
+        )
+        self.assertEqual(
+            [
+                (item.grade_class, item.presentation_item)
+                for item in reminders.due_showcase_slides(date(2026, 12, 20))
+            ],
+            [
+                ("Nursery", "Speaking Competition"),
+                ("Grade V", "Doha Vachan"),
+            ],
+        )
+
+    async def test_sends_one_slide_message_per_showcase_and_deduplicates(self):
+        send = AsyncMock(return_value=True)
+        now = datetime(2026, 12, 20, 9, 5, tzinfo=reminders.IST)
+
+        with (
+            patch.object(reminders, "DB_PATH", str(self.db_path)),
+            patch.object(reminders, "SHOWCASE_REMINDER_PHONES", ("919999995224",)),
+            patch.object(
+                reminders.whatsapp_service, "send_cloud_template_message", send,
+            ),
+        ):
+            first = await reminders.send_showcase_slides(now)
+            second = await reminders.send_showcase_slides(now)
+
+        self.assertEqual((first, second), (2, 0))
+        call = send.await_args.kwargs
+        self.assertEqual(call["template_name"], "ppis_showcase_slide_preview")
+        self.assertEqual(
+            call["header_image_url"],
+            "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides/"
+            "slide_r48_thumb.jpg",
+        )
+        self.assertEqual(
+            call["body_params"], ["Grade V", "Doha Vachan", "22 December 2026"],
+        )
 
     async def test_sends_one_template_and_deduplicates_event_date(self):
         send = AsyncMock(return_value=True)

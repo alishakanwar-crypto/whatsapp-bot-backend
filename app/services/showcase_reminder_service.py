@@ -24,6 +24,14 @@ SHOWCASE_REMINDER_TEMPLATE = os.environ.get(
     "SHOWCASE_REMINDER_TEMPLATE", "ppis_musical_showcase_reminder",
 )
 SHOWCASE_REMINDER_LEAD_DAYS = 3
+SHOWCASE_SLIDE_LEAD_DAYS = 2
+SHOWCASE_SLIDE_TEMPLATE = os.environ.get(
+    "SHOWCASE_SLIDE_TEMPLATE", "ppis_showcase_slide_preview",
+)
+SHOWCASE_SLIDE_BASE_URL = os.environ.get(
+    "SHOWCASE_SLIDE_BASE_URL",
+    "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides",
+)
 
 
 class Showcase(NamedTuple):
@@ -100,15 +108,97 @@ SHOWCASES = (
     Showcase(date(2026, 12, 23), 'Grade VIII', 'Quiz', 'GK Quiz', 'Ms. Alisha'),
     Showcase(date(2026, 12, 11), 'Grade IX', 'Christmas', 'Dance Showcase (Dance to be repeated on 24 Dec Special Assembly)', 'Mr. Akshay'),
     Showcase(date(2026, 11, 13), 'Grade X', "Children's Day", 'Special Assembly', 'Ms. Riya'),
-    Showcase(date(2026, 12, 24), 'Grade 1 - Grade 8', 'Christmas', 'Special Assembly — Repeat (Presenting grade to be decided in line with the musical showcase and Broadway allocations)', 'Ms. Avneet & Ms. Riya'),
+    Showcase(date(2026, 12, 24), 'Grade 1 - Grade 8', 'Christmas',
+             'Special Assembly — Repeat (Presenting grade to be decided in '
+             'line with the musical showcase and Broadway allocations)',
+             'Ms. Avneet & Ms. Riya'),
 )
+
+
+# The reference slide each non-musical showcase projects on the day, hosted
+# under /static/showcase_slides. Keyed by date + class + theme because a class
+# can present twice on one day (Prep's 19 December carols and speaking round).
+# Musical showcases are deliberately absent: Alisha wants slides only for the
+# items teachers have to prepare a slide for.
+SHOWCASE_SLIDES: dict[tuple[date, str, str], str] = {
+    (date(2026, 11, 12), 'Nursery', "Children's Day"): 'slide_r02',
+    (date(2026, 11, 25), 'Nursery', 'Speaking Activity'): 'slide_r04',
+    (date(2026, 12, 10), 'Nursery', 'Christmas'): 'slide_r05',
+    (date(2026, 12, 22), 'Nursery', 'Little Promises - Big Changes'): 'slide_r06',
+    (date(2026, 11, 12), 'Prep', "Children's Day"): 'slide_r08',
+    (date(2026, 11, 18), 'Prep', 'Speaking Activity'): 'slide_r09',
+    (date(2026, 12, 19), 'Prep', 'Broadway'): 'slide_r11',
+    (date(2026, 12, 19), 'Prep', 'A World Without Water & Air'): 'slide_r12',
+    (date(2026, 11, 13), 'Grade I', "Children's Day"): 'slide_g1_dance',
+    (date(2026, 11, 16), 'Grade I', 'Hindi Speaking Competition'): 'slide_r15',
+    (date(2026, 12, 19), 'Grade I', 'Broadway'): 'slide_r16',
+    (date(2026, 12, 24), 'Grade I', 'My favourite character from Lion King'): 'slide_r17',
+    (date(2026, 12, 30), 'Grade I', 'My favourite character from Lion King'): 'slide_r17',
+    (date(2026, 11, 5), 'Grade II', 'Diwali'): 'slide_r19',
+    (date(2026, 11, 19), 'Grade II', 'Guru Nanak Jayanti'): 'slide_r20',
+    (date(2026, 11, 20), 'Grade II', 'Guru Nanak Jayanti'): 'slide_r21',
+    (date(2026, 12, 7), 'Grade II', 'Speaking Competition'): 'slide_r23',
+    (date(2026, 12, 11), 'Grade II', 'Speaking Competition'): 'slide_r24',
+    (date(2026, 12, 19), 'Grade II', 'Broadway'): 'slide_r25',
+    (date(2026, 11, 13), 'Grade III', "Children's Day"): 'slide_r28',
+    (date(2026, 12, 3), 'Grade III', 'Christmas'): 'slide_r30',
+    (date(2026, 12, 4), 'Grade III', 'Speaking Activity - Round 1 - Hindi'): 'slide_r31',
+    (date(2026, 12, 11), 'Grade III', 'Speaking Activity - Round 2 - Hindi'): 'slide_r32',
+    (date(2026, 12, 19), 'Grade III', 'Broadway'): 'slide_r33',
+    (date(2026, 12, 23), 'Grade III', 'Quiz'): 'slide_r34',
+    (date(2026, 12, 8), 'Grade IV', 'Christmas'): 'slide_r37',
+    (date(2026, 12, 14), 'Grade IV', 'Speaking Activity - English Round 1'): 'slide_r38',
+    (date(2026, 12, 21), 'Grade IV', 'Speaking Activity - English Finale'): 'slide_r39',
+    (date(2026, 12, 23), 'Grade IV', 'Quiz'): 'slide_r41',
+    (date(2026, 11, 16), 'Grade V', 'Saint Martin’s Day'): 'slide_r43',
+    (date(2026, 12, 6), 'Grade V', 'Christmas'): 'slide_r44',
+    (date(2026, 12, 23), 'Grade V', 'Quiz'): 'slide_r46',
+    (date(2026, 12, 17), 'Grade V', 'Speaking Activity Hindi - Round 1'): 'slide_r47',
+    (date(2026, 12, 22), 'Grade V', 'Speaking Activity Hindi - Round 2'): 'slide_r48',
+    (date(2026, 12, 10), 'Grade VI', 'Speaking Activity - Round 1 - English'): 'slide_r51',
+    (date(2026, 12, 16), 'Grade VI', 'Speaking Activity - Round 2 - English'): 'slide_r52',
+    (date(2026, 12, 23), 'Grade VI', 'Quiz'): 'slide_r53',
+    (date(2026, 12, 16), 'Grade VI', 'Poem Presentation - Hindi'): 'slide_r54',
+    (date(2026, 12, 14), 'Grade VII', 'Speaking Activity - Round 1 - Hindi'): 'slide_r58',
+    (date(2026, 12, 16), 'Grade VII', 'Poem Presentation - English'): 'slide_r61',
+    (date(2026, 12, 21), 'Grade VII', 'Speaking Activity - Round 2 - Hindi'): 'slide_r59',
+    (date(2026, 12, 23), 'Grade VII', 'Quiz'): 'slide_r60',
+    (date(2026, 12, 9), 'Grade VIII', 'Poem Presentation - Hindi'): 'slide_r63',
+    (date(2026, 12, 23), 'Grade VIII', 'Quiz'): 'slide_r65',
+    (date(2026, 12, 11), 'Grade IX', 'Christmas'): 'slide_r69',
+    (date(2026, 11, 13), 'Grade X', "Children's Day"): 'slide_r71',
+}
+
+
+def slide_for(showcase: Showcase) -> str:
+    """Public URL of a showcase's reference slide thumbnail, if it has one."""
+    name = SHOWCASE_SLIDES.get(
+        (showcase.event_date, showcase.grade_class, showcase.theme_occasion)
+    )
+    if not name:
+        return ""
+    return f"{SHOWCASE_SLIDE_BASE_URL}/{name}_thumb.jpg"
+
+
+def due_showcase_slides(today: date) -> list[Showcase]:
+    """Showcases whose slide goes out, two days before the event."""
+    return [
+        showcase
+        for showcase in SHOWCASES
+        if (showcase.event_date - today).days == SHOWCASE_SLIDE_LEAD_DAYS
+        and slide_for(showcase)
+    ]
 
 
 def due_showcases(today: date) -> dict[date, list[Showcase]]:
     due: dict[date, list[Showcase]] = defaultdict(list)
     for showcase in SHOWCASES:
         days_until = (showcase.event_date - today).days
-        if days_until == SHOWCASE_REMINDER_LEAD_DAYS:
+        # Up to the lead time, not exactly on it: when the sheet changes, an
+        # event closer than three days still gets its one reminder instead of
+        # being skipped because its window has passed. Repeats are prevented by
+        # the delivery claim, not by the date.
+        if 0 <= days_until <= SHOWCASE_REMINDER_LEAD_DAYS:
             due[showcase.event_date].append(showcase)
     return dict(due)
 
@@ -224,6 +314,93 @@ async def send_showcase_reminders(now: datetime | None = None) -> int:
     return sent_count
 
 
+def _claim_slide(slide_key: str, recipient: str, now: datetime) -> bool:
+    with sqlite3.connect(DB_PATH) as db:
+        cursor = db.execute(
+            "INSERT INTO showcase_slide_deliveries "
+            "(slide_key, recipient, status, claimed_at) "
+            "VALUES (?, ?, 'generated', ?) "
+            "ON CONFLICT(slide_key, recipient) DO UPDATE SET "
+            "status = 'generated', claimed_at = excluded.claimed_at "
+            "WHERE showcase_slide_deliveries.status = 'failed'",
+            (slide_key, recipient, now.strftime("%d-%m-%Y %H:%M:%S IST")),
+        )
+        db.commit()
+        return cursor.rowcount == 1
+
+
+def _finish_slide(
+    slide_key: str, recipient: str, sent: bool, now: datetime,
+) -> None:
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            "UPDATE showcase_slide_deliveries SET "
+            "status = ?, status_updated_at = ? "
+            "WHERE slide_key = ? AND recipient = ?",
+            (
+                "accepted" if sent else "failed",
+                now.strftime("%d-%m-%Y %H:%M:%S IST"),
+                slide_key,
+                recipient,
+            ),
+        )
+        db.commit()
+
+
+async def send_showcase_slides(now: datetime | None = None) -> int:
+    """Send each non-musical showcase's reference slide two days ahead.
+
+    The teachers need the slide in hand before the day, so this is a separate
+    send from the three-day text reminder: one message per showcase, carrying
+    that showcase's own slide as the template's image header.
+    """
+    current = now or datetime.now(IST)
+    sent_count = 0
+    for showcase in due_showcase_slides(current.date()):
+        slide_key = (
+            f"{showcase.event_date.isoformat()}|{showcase.grade_class}"
+            f"|{showcase.theme_occasion}"
+        )
+        item = showcase.presentation_item or showcase.theme_occasion
+        for recipient in SHOWCASE_REMINDER_PHONES:
+            if not _claim_slide(slide_key, recipient, current):
+                continue
+            try:
+                sent = await whatsapp_service.send_cloud_template_message(
+                    to=recipient,
+                    template_name=SHOWCASE_SLIDE_TEMPLATE,
+                    language_code="en",
+                    body_params=[
+                        showcase.grade_class,
+                        item,
+                        showcase.event_date.strftime("%d %B %Y"),
+                    ],
+                    header_image_url=slide_for(showcase),
+                )
+            except Exception:
+                logger.exception(
+                    "Showcase slide errored for %s, recipient ending %s",
+                    slide_key,
+                    recipient[-4:],
+                )
+                sent = False
+            _finish_slide(slide_key, recipient, sent, datetime.now(IST))
+            if sent:
+                sent_count += 1
+                logger.info(
+                    "Showcase slide accepted for %s, recipient ending %s",
+                    slide_key,
+                    recipient[-4:],
+                )
+            else:
+                logger.error(
+                    "Showcase slide failed for %s, recipient ending %s",
+                    slide_key,
+                    recipient[-4:],
+                )
+    return sent_count
+
+
 async def record_showcase_delivery_status(
     wa_message_id: str,
     status: str,
@@ -252,5 +429,13 @@ def send_showcase_reminders_sync() -> None:
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(send_showcase_reminders())
+    finally:
+        loop.close()
+
+
+def send_showcase_slides_sync() -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(send_showcase_slides())
     finally:
         loop.close()
