@@ -23,7 +23,7 @@ SHOWCASE_REMINDER_PHONES = tuple(
 SHOWCASE_REMINDER_TEMPLATE = os.environ.get(
     "SHOWCASE_REMINDER_TEMPLATE", "ppis_musical_showcase_reminder",
 )
-SHOWCASE_REMINDER_LEAD_DAYS = 3
+SHOWCASE_REMINDER_LEAD_DAYS = 2
 SHOWCASE_SLIDE_LEAD_DAYS = 2
 SHOWCASE_SLIDE_TEMPLATE = os.environ.get(
     "SHOWCASE_SLIDE_TEMPLATE", "ppis_showcase_slide_preview",
@@ -201,7 +201,7 @@ def due_showcases(today: date) -> dict[date, list[Showcase]]:
     for showcase in SHOWCASES:
         days_until = (showcase.event_date - today).days
         # Up to the lead time, not exactly on it: when the sheet changes, an
-        # event closer than three days still gets its one reminder instead of
+        # event closer than the lead time still gets its one reminder instead of
         # being skipped because its window has passed. Repeats are prevented by
         # the delivery claim, not by the date.
         if 0 <= days_until <= SHOWCASE_REMINDER_LEAD_DAYS:
@@ -359,7 +359,8 @@ async def send_showcase_slides(now: datetime | None = None) -> int:
     """Send each non-musical showcase's reference slide two days ahead.
 
     The teachers need the slide in hand before the day, so this is a separate
-    send from the three-day text reminder: one message per showcase, carrying
+    send from the text reminder, which goes out the same day: one message per
+    showcase, carrying
     that showcase's own slide as the template's image header.
     """
     current = now or datetime.now(IST)
