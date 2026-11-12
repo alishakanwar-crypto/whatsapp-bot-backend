@@ -24,9 +24,11 @@ router = APIRouter()
 MAX_BODY = 200_000
 MAX_PARAS = 900
 RATE = 20  # requests per IP per minute
+DAY_CAP = 1500  # ChatGPT calls per day for the whole service
 ALLOWED_ORIGIN = "https://alishakanwar-crypto.github.io"
 LOCAL_ORIGIN = re.compile(r"^http://(?:localhost|127\.0\.0\.1)(?::\d+)?$")
 _hits: dict[str, deque] = defaultdict(deque)
+_day: deque = deque()
 
 SYSTEM = """You fix school question papers for P.P. International School. A teacher types a
 plain-English (or Hindi/Hinglish) instruction; you return the exact edits as JSON.
@@ -77,7 +79,7 @@ you assumed in "message"."""
 
 def _origin_ok(request: Request) -> bool:
     o = request.headers.get("origin", "")
-    return not o or o == ALLOWED_ORIGIN or bool(LOCAL_ORIGIN.match(o))
+    return o == ALLOWED_ORIGIN or bool(LOCAL_ORIGIN.match(o))
 
 
 def _rate_ok(ip: str) -> bool:
@@ -85,9 +87,12 @@ def _rate_ok(ip: str) -> bool:
     q = _hits[ip]
     while q and now - q[0] > 60:
         q.popleft()
-    if len(q) >= RATE:
+    while _day and now - _day[0] > 86400:
+        _day.popleft()
+    if len(q) >= RATE or len(_day) >= DAY_CAP:
         return False
     q.append(now)
+    _day.append(now)
     return True
 
 
