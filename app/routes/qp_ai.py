@@ -57,13 +57,13 @@ Allowed ops (use the fewest that do the job; never touch anything the teacher di
 - Word mode only (i = paragraph index from "paragraphs"; "is" = list of indexes):
   {"op":"align","is":[..],"how":"left|center|right|justify"}
   {"op":"bold","is":[..],"on":true|false,"text":"optional"}   {"op":"italic","is":[..],"on":true|false,"text":"optional"}
-  {"op":"underline","is":[..],"on":true|false,"text":"optional"}   {"op":"size","is":[..],"pt":12,"text":"optional"}
+  {"op":"underline","is":[..],"on":true|false,"text":"optional"}   {"op":"size","is":[..],"pt":12,"text":"optional"} (pt = the printed size the teacher wants)
   "text" limits the style to that exact text inside the paragraphs (e.g. a heading such as
   "Situation Vacant:" that starts a longer paragraph, or one word); omit it to style whole paragraphs.   {"op":"indent","is":[..],"mm":5}  (left indent; 0 removes it)
   {"op":"space","is":[..],"before_mm":2,"after_mm":2}
   {"op":"replace","find":"exact text","with":"new text","is":[..] (optional, limits where)}
   {"op":"set_text","i":3,"text":"whole new paragraph text"}  (never on a paragraph with "pic")
-  {"op":"insert_after","i":3,"text":"new paragraph text","lines":0}  (lines = blank answer lines to add after it)
+  {"op":"insert_after","i":3,"text":"new paragraph text","lines":0}  (lines = blank answer lines to add after it; for answer lines only, omit "text" and just set "lines")
   {"op":"delete","is":[..]}   {"op":"page_break_before","i":12}
 - Maker mode only: {"op":"set_body","text":"the whole corrected body"} keeping the syntax,
   every question, part, mark, picture marker and table line exactly unless asked to change it.
