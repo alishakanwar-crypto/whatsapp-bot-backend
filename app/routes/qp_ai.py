@@ -94,7 +94,7 @@ def _rate_ok(ip: str) -> bool:
 def _clean(payload: dict) -> dict:
     paras = payload.get("paragraphs") or []
     paras = [
-        {k: p.get(k) for k in ("i", "t", "a", "b", "tbl", "pic") if p.get(k) not in (None, False, "")}
+        {k: p.get(k) for k in ("i", "t", "a", "b", "tbl", "pic") if p.get(k) is not None and p.get(k) is not False and p.get(k) != ""}
         for p in paras[:MAX_PARAS] if isinstance(p, dict)
     ]
     for p in paras:
