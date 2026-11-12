@@ -87,11 +87,18 @@ def _rate_ok(ip: str) -> bool:
     q = _hits[ip]
     while q and now - q[0] > 60:
         q.popleft()
-    while _day and now - _day[0] > 86400:
-        _day.popleft()
-    if len(q) >= RATE or len(_day) >= DAY_CAP:
+    if len(q) >= RATE:
         return False
     q.append(now)
+    return True
+
+
+def _day_ok() -> bool:
+    now = time.time()
+    while _day and now - _day[0] > 86400:
+        _day.popleft()
+    if len(_day) >= DAY_CAP:
+        return False
     _day.append(now)
     return True
 
@@ -136,6 +143,8 @@ async def qp_ai_fix(request: Request):
     client = get_client()
     if client is None:
         return JSONResponse({"error": "ChatGPT is not set up on the school server."}, status_code=503)
+    if not _day_ok():
+        return JSONResponse({"error": "ChatGPT has done all its paper fixes for today. Please try again tomorrow."}, status_code=429)
     try:
         resp = await client.chat.completions.create(
             model="gpt-4o",
