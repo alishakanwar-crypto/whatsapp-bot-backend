@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections import defaultdict, deque
 
@@ -23,7 +24,8 @@ router = APIRouter()
 MAX_BODY = 200_000
 MAX_PARAS = 900
 RATE = 20  # requests per IP per minute
-ALLOWED_ORIGINS = ("https://alishakanwar-crypto.github.io", "http://localhost", "http://127.0.0.1")
+ALLOWED_ORIGIN = "https://alishakanwar-crypto.github.io"
+LOCAL_ORIGIN = re.compile(r"^http://(?:localhost|127\.0\.0\.1)(?::\d+)?$")
 _hits: dict[str, deque] = defaultdict(deque)
 
 SYSTEM = """You fix school question papers for P.P. International School. A teacher types a
@@ -41,7 +43,8 @@ You receive JSON with:
 - "settings": current font, size, line spacing, indent, whether question lines are bold.
 - "meta": title, grade, subject, duration, max marks, session, general instructions.
 
-Return ONLY a JSON object: {"ops": [...], "message": "one short sentence telling the teacher
+Return ONLY a JSON object: {"plan": ["each separate change the teacher asked for, and the exact
+lines/words it applies to"], "ops": [...], "message": "one short sentence telling the teacher
 what you changed", "cannot": "" or a short reason if part of the command is impossible}.
 Allowed ops (use the fewest that do the job; never touch anything the teacher did not ask about):
 - {"op":"run","command":"<built-in command>"} for settings, metadata and simple fixes. Built-in
@@ -53,9 +56,10 @@ Allowed ops (use the fewest that do the job; never touch anything the teacher di
   "fix errors", "check", "pdf".
 - Word mode only (i = paragraph index from "paragraphs"; "is" = list of indexes):
   {"op":"align","is":[..],"how":"left|center|right|justify"}
-  {"op":"bold","is":[..],"on":true|false}   {"op":"italic","is":[..],"on":true|false}
-  {"op":"underline","is":[..],"on":true|false}
-  {"op":"size","is":[..],"pt":12}   {"op":"indent","is":[..],"mm":5}  (left indent; 0 removes it)
+  {"op":"bold","is":[..],"on":true|false,"text":"optional"}   {"op":"italic","is":[..],"on":true|false,"text":"optional"}
+  {"op":"underline","is":[..],"on":true|false,"text":"optional"}   {"op":"size","is":[..],"pt":12,"text":"optional"}
+  "text" limits the style to that exact text inside the paragraphs (e.g. a heading such as
+  "Situation Vacant:" that starts a longer paragraph, or one word); omit it to style whole paragraphs.   {"op":"indent","is":[..],"mm":5}  (left indent; 0 removes it)
   {"op":"space","is":[..],"before_mm":2,"after_mm":2}
   {"op":"replace","find":"exact text","with":"new text","is":[..] (optional, limits where)}
   {"op":"set_text","i":3,"text":"whole new paragraph text"}  (never on a paragraph with "pic")
@@ -63,7 +67,9 @@ Allowed ops (use the fewest that do the job; never touch anything the teacher di
   {"op":"delete","is":[..]}   {"op":"page_break_before","i":12}
 - Maker mode only: {"op":"set_body","text":"the whole corrected body"} keeping the syntax,
   every question, part, mark, picture marker and table line exactly unless asked to change it.
-Rules: change ONLY what the command names (e.g. "underline the heading" must not also touch other lines); never invent or delete questions, marks or content unless asked; keep spelling as the
+Rules: each style applies ONLY to the target named with it. "make the Or lines italic and underline
+the heading" = italic on the Or lines, underline on the heading text only, nothing else; a heading,
+word or label inside a longer paragraph is styled with "text", not the whole paragraph; never invent or delete questions, marks or content unless asked; keep spelling as the
 teacher wrote it unless asked to correct it; "or"/"OR"/"अथवा" choice lines are centred; marks
 stay at the right. If the command is unclear, make the most likely sensible edit and say what
 you assumed in "message"."""
@@ -71,7 +77,7 @@ you assumed in "message"."""
 
 def _origin_ok(request: Request) -> bool:
     o = request.headers.get("origin", "")
-    return not o or o.startswith(ALLOWED_ORIGINS)
+    return not o or o == ALLOWED_ORIGIN or bool(LOCAL_ORIGIN.match(o))
 
 
 def _rate_ok(ip: str) -> bool:
