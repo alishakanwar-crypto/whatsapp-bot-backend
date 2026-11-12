@@ -24,9 +24,11 @@ router = APIRouter()
 MAX_BODY = 200_000
 MAX_PARAS = 900
 RATE = 20  # requests per IP per minute
+DAY_CAP = 1500  # ChatGPT calls per day for the whole service
 ALLOWED_ORIGIN = "https://alishakanwar-crypto.github.io"
 LOCAL_ORIGIN = re.compile(r"^http://(?:localhost|127\.0\.0\.1)(?::\d+)?$")
 _hits: dict[str, deque] = defaultdict(deque)
+_day: deque = deque()
 
 SYSTEM = """You fix school question papers for P.P. International School. A teacher types a
 plain-English (or Hindi/Hinglish) instruction; you return the exact edits as JSON.
@@ -57,13 +59,13 @@ Allowed ops (use the fewest that do the job; never touch anything the teacher di
 - Word mode only (i = paragraph index from "paragraphs"; "is" = list of indexes):
   {"op":"align","is":[..],"how":"left|center|right|justify"}
   {"op":"bold","is":[..],"on":true|false,"text":"optional"}   {"op":"italic","is":[..],"on":true|false,"text":"optional"}
-  {"op":"underline","is":[..],"on":true|false,"text":"optional"}   {"op":"size","is":[..],"pt":12,"text":"optional"}
+  {"op":"underline","is":[..],"on":true|false,"text":"optional"}   {"op":"size","is":[..],"pt":12,"text":"optional"} (pt = the printed size the teacher wants)
   "text" limits the style to that exact text inside the paragraphs (e.g. a heading such as
   "Situation Vacant:" that starts a longer paragraph, or one word); omit it to style whole paragraphs.   {"op":"indent","is":[..],"mm":5}  (left indent; 0 removes it)
   {"op":"space","is":[..],"before_mm":2,"after_mm":2}
   {"op":"replace","find":"exact text","with":"new text","is":[..] (optional, limits where)}
   {"op":"set_text","i":3,"text":"whole new paragraph text"}  (never on a paragraph with "pic")
-  {"op":"insert_after","i":3,"text":"new paragraph text","lines":0}  (lines = blank answer lines to add after it)
+  {"op":"insert_after","i":3,"text":"new paragraph text","lines":0}  (lines = blank answer lines to add after it; for answer lines only, omit "text" and just set "lines")
   {"op":"delete","is":[..]}   {"op":"page_break_before","i":12}
 - Maker mode only: {"op":"set_body","text":"the whole corrected body"} keeping the syntax,
   every question, part, mark, picture marker and table line exactly unless asked to change it.
@@ -77,7 +79,7 @@ you assumed in "message"."""
 
 def _origin_ok(request: Request) -> bool:
     o = request.headers.get("origin", "")
-    return not o or o == ALLOWED_ORIGIN or bool(LOCAL_ORIGIN.match(o))
+    return o == ALLOWED_ORIGIN or bool(LOCAL_ORIGIN.match(o))
 
 
 def _rate_ok(ip: str) -> bool:
@@ -91,10 +93,20 @@ def _rate_ok(ip: str) -> bool:
     return True
 
 
+def _day_ok() -> bool:
+    now = time.time()
+    while _day and now - _day[0] > 86400:
+        _day.popleft()
+    if len(_day) >= DAY_CAP:
+        return False
+    _day.append(now)
+    return True
+
+
 def _clean(payload: dict) -> dict:
     paras = payload.get("paragraphs") or []
     paras = [
-        {k: p.get(k) for k in ("i", "t", "a", "b", "tbl", "pic") if p.get(k) not in (None, False, "")}
+        {k: p.get(k) for k in ("i", "t", "a", "b", "tbl", "pic") if p.get(k) is not None and p.get(k) is not False and p.get(k) != ""}
         for p in paras[:MAX_PARAS] if isinstance(p, dict)
     ]
     for p in paras:
@@ -131,6 +143,8 @@ async def qp_ai_fix(request: Request):
     client = get_client()
     if client is None:
         return JSONResponse({"error": "ChatGPT is not set up on the school server."}, status_code=503)
+    if not _day_ok():
+        return JSONResponse({"error": "ChatGPT has done all its paper fixes for today. Please try again tomorrow."}, status_code=429)
     try:
         resp = await client.chat.completions.create(
             model="gpt-4o",
