@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import init_db
-from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face, dashboard, trueface, gate, chairman_mood, staff_birthday, snapshot_audit, voice_agent
+from app.routes import webhook, allowlist, messages, settings, bulk, agent_ws, agent_config, face, dashboard, trueface, gate, chairman_mood, staff_birthday, snapshot_audit, voice_agent, qp_ai
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -111,6 +111,7 @@ app.include_router(chairman_mood.router)
 app.include_router(staff_birthday.router)
 app.include_router(snapshot_audit.router)
 app.include_router(voice_agent.router)
+app.include_router(qp_ai.router)
 
 
 # Serve static files (school images)
