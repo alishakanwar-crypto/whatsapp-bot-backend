@@ -20,8 +20,15 @@ SHOWCASE_REMINDER_PHONES = tuple(
     ).split(",")
     if phone.strip()
 )
+# Most rows are speaking competitions, quizzes, carols and assemblies, so the
+# reminder goes out under a neutral showcase heading. The old musical-only
+# template stays as the fallback for as long as Meta has not approved the
+# neutral one, so reminders are never lost waiting on approval.
 SHOWCASE_REMINDER_TEMPLATE = os.environ.get(
-    "SHOWCASE_REMINDER_TEMPLATE", "ppis_musical_showcase_reminder",
+    "SHOWCASE_REMINDER_TEMPLATE", "ppis_showcase_reminder",
+)
+SHOWCASE_REMINDER_FALLBACK_TEMPLATE = os.environ.get(
+    "SHOWCASE_REMINDER_FALLBACK_TEMPLATE", "ppis_musical_showcase_reminder",
 )
 SHOWCASE_REMINDER_LEAD_DAYS = 2
 SHOWCASE_SLIDE_LEAD_DAYS = 2
@@ -177,13 +184,18 @@ SHOWCASE_SLIDES: dict[tuple[date, str, str], str] = {
 
 
 def slide_for(showcase: Showcase) -> str:
-    """Public URL of a showcase's reference slide thumbnail, if it has one."""
+    """Public URL of a showcase's reference slide, if it has one.
+
+    The full 1600x900 slide, not the 320x180 thumbnail: WhatsApp scales the
+    header image up to the chat width, which left the thumbnail looking hazy
+    and unreadable.
+    """
     name = SHOWCASE_SLIDES.get(
         (showcase.event_date, showcase.grade_class, showcase.theme_occasion)
     )
     if not name:
         return ""
-    return f"{SHOWCASE_SLIDE_BASE_URL}/{name}_thumb.jpg"
+    return f"{SHOWCASE_SLIDE_BASE_URL}/{name}.jpg"
 
 
 def due_showcase_slides(today: date) -> list[Showcase]:
@@ -287,20 +299,33 @@ async def send_showcase_reminders(now: datetime | None = None) -> int:
         for recipient in SHOWCASE_REMINDER_PHONES:
             if not _claim_reminder(event_date, recipient, current):
                 continue
-            try:
-                sent = await whatsapp_service.send_cloud_template_message(
-                    to=recipient,
-                    template_name=SHOWCASE_REMINDER_TEMPLATE,
-                    language_code="en",
-                    body_params=[event_date.strftime("%d %B %Y"), details],
-                )
-            except Exception:
-                logger.exception(
-                    "Musical showcase reminder errored for %s, recipient ending %s",
-                    event_date.isoformat(),
-                    recipient[-4:],
-                )
-                sent = False
+            sent = False
+            for template in (
+                SHOWCASE_REMINDER_TEMPLATE,
+                SHOWCASE_REMINDER_FALLBACK_TEMPLATE,
+            ):
+                if not template:
+                    continue
+                try:
+                    sent = await whatsapp_service.send_cloud_template_message(
+                        to=recipient,
+                        template_name=template,
+                        language_code="en",
+                        body_params=[
+                            event_date.strftime("%d %B %Y"), details,
+                        ],
+                    )
+                except Exception:
+                    logger.exception(
+                        "Showcase reminder errored for %s via %s, recipient "
+                        "ending %s",
+                        event_date.isoformat(),
+                        template,
+                        recipient[-4:],
+                    )
+                    sent = False
+                if sent:
+                    break
             _finish_reminder(
                 event_date,
                 recipient,
@@ -311,7 +336,7 @@ async def send_showcase_reminders(now: datetime | None = None) -> int:
             if sent:
                 sent_count += 1
                 logger.info(
-                    "Musical showcase reminder accepted for %s, recipient ending "
+                    "Showcase reminder accepted for %s, recipient ending "
                     "%s (%d item(s))",
                     event_date.isoformat(),
                     recipient[-4:],
@@ -319,7 +344,7 @@ async def send_showcase_reminders(now: datetime | None = None) -> int:
                 )
             else:
                 logger.error(
-                    "Musical showcase reminder failed for %s, recipient ending %s",
+                    "Showcase reminder failed for %s, recipient ending %s",
                     event_date.isoformat(),
                     recipient[-4:],
                 )

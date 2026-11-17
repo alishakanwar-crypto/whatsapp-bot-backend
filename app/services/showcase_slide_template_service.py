@@ -14,6 +14,7 @@ import httpx
 
 from app.services import whatsapp_service
 from app.services.showcase_reminder_service import (
+    SHOWCASE_REMINDER_TEMPLATE,
     SHOWCASE_SLIDE_TEMPLATE,
 )
 
@@ -23,7 +24,13 @@ GRAPH = "https://graph.facebook.com/v25.0"
 WABA_ID = os.environ.get("WHATSAPP_WABA_ID", "2417647228700804")
 EXAMPLE_SLIDE_URL = (
     "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides/"
-    "slide_r02_thumb.jpg"
+    "slide_r02.jpg"
+)
+REMINDER_TEMPLATE_BODY = (
+    "Dear Ma'am,\n\n"
+    "Reminder for the showcase / activity scheduled on {{1}}.\n\n"
+    "Details: {{2}}\n\n"
+    "Kindly ensure the preparations are on track."
 )
 TEMPLATE_BODY = (
     "Dear Teacher,\n\n"
@@ -36,15 +43,17 @@ TEMPLATE_BODY = (
 )
 
 
-async def _template_exists(client: httpx.AsyncClient, token: str) -> bool:
+async def _template_exists(
+    client: httpx.AsyncClient, token: str, name: str,
+) -> bool:
     response = await client.get(
         f"{GRAPH}/{WABA_ID}/message_templates",
-        params={"name": SHOWCASE_SLIDE_TEMPLATE, "limit": 50},
+        params={"name": name, "limit": 50},
         headers={"Authorization": f"Bearer {token}"},
     )
     response.raise_for_status()
     return any(
-        item.get("name") == SHOWCASE_SLIDE_TEMPLATE
+        item.get("name") == name
         for item in response.json().get("data", [])
     )
 
@@ -94,7 +103,9 @@ async def ensure_slide_template() -> str:
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            if await _template_exists(client, token):
+            if await _template_exists(
+                client, token, SHOWCASE_SLIDE_TEMPLATE,
+            ):
                 logger.info(
                     "Showcase slide template %s already registered",
                     SHOWCASE_SLIDE_TEMPLATE,
@@ -151,11 +162,84 @@ async def ensure_slide_template() -> str:
         return "failed"
 
 
+async def ensure_reminder_template() -> str:
+    """Create the neutral text reminder template if Meta does not have it.
+
+    The original template is headed "Musical Showcase", which read wrong on
+    speaking competitions, quizzes and assemblies, so reminders now go out
+    under this neutral one. Returns 'exists', 'submitted' or 'failed'.
+    """
+    token = whatsapp_service.get_cloud_token()
+    if not token:
+        logger.warning(
+            "No WhatsApp cloud token — reminder template not checked"
+        )
+        return "failed"
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            if await _template_exists(
+                client, token, SHOWCASE_REMINDER_TEMPLATE,
+            ):
+                logger.info(
+                    "Showcase reminder template %s already registered",
+                    SHOWCASE_REMINDER_TEMPLATE,
+                )
+                return "exists"
+
+            response = await client.post(
+                f"{GRAPH}/{WABA_ID}/message_templates",
+                json={
+                    "name": SHOWCASE_REMINDER_TEMPLATE,
+                    "language": "en",
+                    "category": "UTILITY",
+                    "components": [
+                        {
+                            "type": "BODY",
+                            "text": REMINDER_TEMPLATE_BODY,
+                            "example": {
+                                "body_text": [
+                                    [
+                                        "23 December 2026",
+                                        "Grade V — Quiz: GK Quiz "
+                                        "(Incharges: Ms. Twinkle)",
+                                    ]
+                                ]
+                            },
+                        },
+                        {
+                            "type": "FOOTER",
+                            "text": "PP International School",
+                        },
+                    ],
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.status_code >= 400:
+                logger.error(
+                    "Showcase reminder template rejected (%s): %s",
+                    response.status_code,
+                    response.text[:500],
+                )
+                return "failed"
+            logger.info(
+                "Showcase reminder template submitted: %s", response.json()
+            )
+            return "submitted"
+    except Exception:
+        logger.exception("Could not register the showcase reminder template")
+        return "failed"
+
+
 def ensure_slide_template_sync() -> None:
     import asyncio
 
+    async def both() -> None:
+        await ensure_slide_template()
+        await ensure_reminder_template()
+
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(ensure_slide_template())
+        loop.run_until_complete(both())
     finally:
         loop.close()
