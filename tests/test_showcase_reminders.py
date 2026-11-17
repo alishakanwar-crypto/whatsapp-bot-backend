@@ -37,7 +37,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.temp_dir.cleanup()
 
     def test_plan_holds_only_the_final_november_december_sheet(self):
-        self.assertEqual(len(reminders.SHOWCASES), 62)
+        self.assertEqual(len(reminders.SHOWCASES), 68)
         self.assertEqual(
             sorted(
                 item.event_date
@@ -51,6 +51,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 date(2026, 12, 3),
                 date(2026, 12, 4),
                 date(2026, 12, 11),
+                date(2026, 12, 16),
                 date(2026, 12, 19),
                 date(2026, 12, 23),
             ],
@@ -131,7 +132,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
             / "showcase_slides"
         )
         for name in set(reminders.SHOWCASE_SLIDES.values()):
-            self.assertTrue((slides_dir / f"{name}_thumb.jpg").is_file(), name)
+            self.assertTrue((slides_dir / f"{name}.jpg").is_file(), name)
 
     def test_slide_goes_out_two_days_before_the_event(self):
         due = reminders.due_showcase_slides(date(2026, 12, 21))
@@ -181,7 +182,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             doha["header_image_url"],
             "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides/"
-            "slide_r48_thumb.jpg",
+            "slide_r48.jpg",
         )
         self.assertEqual(
             doha["body_params"],
@@ -213,7 +214,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(retried, 0)
         self.assertIn(
             "https://ppis-whatsapp-bot.fly.dev/static/showcase_slides/"
-            "slide_r52_thumb.jpg",
+            "slide_r52.jpg",
             [call.kwargs["header_image_url"] for call in send.await_args_list],
         )
 
@@ -264,7 +265,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         send.assert_awaited_once()
         call = send.await_args.kwargs
         self.assertEqual(call["to"], "919999995224")
-        self.assertEqual(call["template_name"], "ppis_musical_showcase_reminder")
+        self.assertEqual(call["template_name"], "ppis_showcase_reminder")
         self.assertEqual(call["body_params"][0], "05 November 2026")
         self.assertIn("Grade I", call["body_params"][1])
         with sqlite3.connect(self.db_path) as db:
@@ -358,7 +359,9 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row, ("2026-07-23", "919999995224", "delivered"))
 
     async def test_failed_send_is_released_for_retry(self):
-        send = AsyncMock(side_effect=[False, True])
+        # Both the neutral template and the musical fallback refuse the
+        # first attempt, so the reminder is released for the next run.
+        send = AsyncMock(side_effect=[False, False, True])
         now = datetime(2026, 11, 3, 9, 0, tzinfo=reminders.IST)
 
         with (
@@ -378,7 +381,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first, 0)
         self.assertEqual(second, 1)
-        self.assertEqual(send.await_count, 2)
+        self.assertEqual(send.await_count, 3)
 
     async def test_webhook_forwards_meta_delivery_status(self):
         record = AsyncMock(return_value=True)
