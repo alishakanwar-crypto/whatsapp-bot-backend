@@ -208,7 +208,7 @@ def place_errors(raw: dict, boxes, W: int, H: int) -> list[dict]:
         })
     seen, uniq = set(), []
     for e in out:
-        k = (tuple(e["box"] or ()), _norm(e["correct"]))
+        k = (tuple(e["box"] or ()), e["correct"].strip().lower())
         if k not in seen:
             seen.add(k)
             uniq.append(e)
