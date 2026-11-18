@@ -170,7 +170,7 @@ def _jpeg(im: np.ndarray) -> str:
 STYLE_WHY = re.compile(
     r"\b(?:is|sounds|would be|reads|works|fits|introduced)\s+better\b|\bbetter (?:here|word|choice|phrase|way)\b"
     r"|\bmore (?:formal|natural|appropriate|precise)\b|\b(?:preferred|preferable|smoother|clearer)\b",
-    re.I,
+    re.IGNORECASE,
 )
 
 
