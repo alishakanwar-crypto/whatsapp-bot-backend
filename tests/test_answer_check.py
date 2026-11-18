@@ -67,3 +67,11 @@ def test_decode_image_rejects_huge_dimensions():
     b = io.BytesIO()
     Image.new("RGB", (3000, 1000), "white").save(b, "JPEG")
     assert decode_image(base64.b64encode(b.getvalue()).decode()).shape[:2] == (667, 2000)
+
+
+def test_place_errors_drops_style_tips_and_marks_already_present():
+    boxes = [(10, 10, 40, 20), (60, 10, 40, 20)]
+    raw = {"words": [[1, "parents."], [2, "like"]], "errors": [
+        {"ids": [1], "wrong": "", "correct": ".", "type": "Punctuation", "why": "Sentence needs a full stop."},
+        {"ids": [2], "wrong": "like", "correct": "such as", "type": "Usage", "why": "Examples are introduced better here."}]}
+    assert place_errors(raw, boxes, 200, 40) == []

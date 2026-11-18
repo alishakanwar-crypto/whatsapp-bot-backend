@@ -167,6 +167,9 @@ def _jpeg(im: np.ndarray) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
+STYLE_WHY = re.compile(r"\b(better|clearer|more (?:formal|natural|appropriate|precise)|preferred|preferable|sounds|smoother|improves?)\b", re.I)
+
+
 def _norm(s: str) -> str:
     return re.sub(r"[^\w']", "", str(s).replace("\u2019", "'")).lower()
 
@@ -193,6 +196,13 @@ def place_errors(raw: dict, boxes, W: int, H: int) -> list[dict]:
             if 1 <= i <= len(boxes):
                 ids.append(i)
         wrong = str(e.get("wrong", "") or "")[:200]
+        correct = str(e.get("correct", "") or "")[:200]
+        why = str(e.get("why", "") or "")[:120]
+        if STYLE_WHY.search(why):
+            continue
+        if not wrong.strip() and ids and correct.strip() and not correct.strip()[0].isalnum():
+            if words.get(ids[-1], "").rstrip().endswith(correct.strip()[-1]):
+                continue
         first = _norm(wrong.split()[0]) if wrong.split() else ""
         if first and ids and _norm((words.get(ids[0], "").split() or [""])[0]) != first:
             cands = [i for i, t in words.items() if 1 <= i <= len(boxes) and _norm(t) == first]
@@ -212,9 +222,9 @@ def place_errors(raw: dict, boxes, W: int, H: int) -> list[dict]:
         out.append({
             "box": box,
             "wrong": wrong,
-            "correct": str(e.get("correct", "") or "")[:200],
+            "correct": correct,
             "type": t if t in TYPES else "Grammar",
-            "why": str(e.get("why", "") or "")[:120],
+            "why": why,
         })
     seen, uniq = set(), []
     for e in out:
