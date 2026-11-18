@@ -75,3 +75,10 @@ def test_place_errors_drops_style_tips_and_marks_already_present():
         {"ids": [1], "wrong": "", "correct": ".", "type": "Punctuation", "why": "Sentence needs a full stop."},
         {"ids": [2], "wrong": "like", "correct": "such as", "type": "Usage", "why": "Examples are introduced better here."}]}
     assert place_errors(raw, boxes, 200, 40) == []
+
+
+def test_place_errors_keeps_real_errors_explained_with_better():
+    boxes = [(10, 10, 40, 20), (60, 10, 40, 20)]
+    raw = {"words": [[1, "more"], [2, "better"]], "errors": [
+        {"ids": [1, 2], "wrong": "more better", "correct": "better", "type": "Grammar", "why": "Better is already comparative."}]}
+    assert len(place_errors(raw, boxes, 200, 40)) == 1

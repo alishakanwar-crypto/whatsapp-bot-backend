@@ -167,7 +167,11 @@ def _jpeg(im: np.ndarray) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
-STYLE_WHY = re.compile(r"\b(better|clearer|more (?:formal|natural|appropriate|precise)|preferred|preferable|sounds|smoother|improves?)\b", re.IGNORECASE)
+STYLE_WHY = re.compile(
+    r"\b(?:is|sounds|would be|reads|works|fits|introduced)\s+better\b|\bbetter (?:here|word|choice|phrase|way)\b"
+    r"|\bmore (?:formal|natural|appropriate|precise)\b|\b(?:preferred|preferable|smoother|clearer)\b",
+    re.I,
+)
 
 
 def _norm(s: str) -> str:
