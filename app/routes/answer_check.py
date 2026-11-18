@@ -205,7 +205,7 @@ def place_errors(raw: dict, boxes, W: int, H: int) -> list[dict]:
         if STYLE_WHY.search(why):
             continue
         mark = correct.strip()
-        if not wrong.strip() and ids and mark in (".", ",", "?", "!") and words.get(ids[-1], "").rstrip().endswith(mark):
+        if not wrong.strip() and ids and mark in (".", ",", "?", "!", ":", ";") and words.get(ids[-1], "").rstrip().endswith(mark):
             continue
         first = _norm(wrong.split()[0]) if wrong.split() else ""
         if first and ids and _norm((words.get(ids[0], "").split() or [""])[0]) != first:
