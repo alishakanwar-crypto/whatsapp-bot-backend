@@ -184,7 +184,7 @@ def place_errors(raw: dict, boxes, W: int, H: int) -> list[dict]:
                 ids.append(i)
         wrong = str(e.get("wrong", "") or "")[:200]
         first = _norm(wrong.split()[0]) if wrong.split() else ""
-        if first and ids and _norm(words.get(ids[0], "")) != first:
+        if first and ids and _norm((words.get(ids[0], "").split() or [""])[0]) != first:
             cands = [i for i, t in words.items() if 1 <= i <= len(boxes) and _norm(t) == first]
             if cands:
                 best = min(cands, key=lambda i: abs(i - ids[0]))
