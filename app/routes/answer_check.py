@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import re
@@ -21,6 +22,7 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from PIL import Image
 
 logger = logging.getLogger("answer_check")
 router = APIRouter()
@@ -28,6 +30,7 @@ router = APIRouter()
 MAX_BODY = 9_000_000
 MAX_SIDE = 2000
 MAX_BOXES = 450
+MAX_PIXELS = 40_000_000
 RATE = 30
 DAY_CAP = 1500
 MODELS = ("gpt-5.4", "gpt-4.1")
@@ -95,6 +98,13 @@ def decode_image(data_url: str) -> np.ndarray | None:
     try:
         buf = np.frombuffer(base64.b64decode(b64, validate=False), np.uint8)
     except (ValueError, TypeError):
+        return None
+    try:
+        with Image.open(io.BytesIO(buf.tobytes())) as head:
+            w, h = head.size
+    except Exception:  # noqa: BLE001
+        return None
+    if w * h > MAX_PIXELS:
         return None
     im = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if im is None:
@@ -251,7 +261,17 @@ async def answer_check(request: Request):
     ip = (request.headers.get("fly-client-ip") or (request.client.host if request.client else "")) or "?"
     if not _rate_ok(ip):
         return JSONResponse({"error": "Too many pages in a minute. Please wait a moment."}, status_code=429)
-    raw = await request.body()
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > MAX_BODY:
+        return JSONResponse({"error": "The photo is too large."}, status_code=413)
+    raw = b""
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > MAX_BODY:
+            return JSONResponse({"error": "The photo is too large."}, status_code=413)
     if len(raw) > MAX_BODY:
         return JSONResponse({"error": "The photo is too large."}, status_code=413)
     try:

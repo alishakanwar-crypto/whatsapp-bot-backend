@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from app.routes.answer_check import find_words, place_errors
+from app.routes.answer_check import decode_image, find_words, place_errors
 
 
 def _page():
@@ -39,3 +39,31 @@ def test_place_errors_moves_a_wrong_id_to_the_matching_word():
     assert by["school"]["type"] == "Spelling"
     assert by["go"]["type"] == "Grammar"
     assert by["."]["box"] is None and by["."]["type"] == "Grammar"
+
+
+def test_place_errors_keeps_a_phrase_on_a_box_holding_the_whole_phrase():
+    boxes = [(10, 10, 20, 20), (40, 10, 80, 20), (130, 10, 30, 20)]
+    raw = {"words": [[1, "I"], [2, "have enjoyed"], [3, "have"]],
+           "errors": [{"ids": [2], "wrong": "have enjoyed", "correct": "enjoyed", "type": "Grammar", "why": "x"}]}
+    assert place_errors(raw, boxes, 200, 40)[0]["box"][0] == 0.2
+
+
+def test_place_errors_keeps_two_punctuation_fixes_on_one_word():
+    boxes = [(10, 10, 40, 20)]
+    raw = {"words": [[1, "Why"]], "errors": [
+        {"ids": [1], "wrong": "", "correct": "?", "type": "Punctuation", "why": "q"},
+        {"ids": [1], "wrong": "", "correct": '"', "type": "Punctuation", "why": "quote"}]}
+    assert len(place_errors(raw, boxes, 200, 40)) == 2
+
+
+def test_decode_image_rejects_huge_dimensions():
+    import base64
+    import io
+
+    from PIL import Image
+    b = io.BytesIO()
+    Image.new("L", (9000, 9000), 255).save(b, "PNG")
+    assert decode_image(base64.b64encode(b.getvalue()).decode()) is None
+    b = io.BytesIO()
+    Image.new("RGB", (3000, 1000), "white").save(b, "JPEG")
+    assert decode_image(base64.b64encode(b.getvalue()).decode()).shape[:2] == (667, 2000)
