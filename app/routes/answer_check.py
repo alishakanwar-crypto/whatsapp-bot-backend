@@ -234,7 +234,10 @@ async def _ask(client, prompt: str, clean: str, marked: str) -> dict:
             kw["temperature"] = 0
         try:
             resp = await client.chat.completions.create(**kw)
-            return json.loads(resp.choices[0].message.content or "{}")
+            content = resp.choices[0].message.content
+            if not content:
+                raise ValueError("empty reply")
+            return json.loads(content)
         except Exception as e:  # noqa: BLE001
             last = e
             logger.warning("answer-check %s failed: %s", model, e)
