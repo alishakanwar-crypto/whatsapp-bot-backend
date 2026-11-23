@@ -37,7 +37,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.temp_dir.cleanup()
 
     def test_plan_holds_only_the_final_november_december_sheet(self):
-        self.assertEqual(len(reminders.SHOWCASES), 68)
+        self.assertEqual(len(reminders.SHOWCASES), 70)
         self.assertEqual(
             sorted(
                 item.event_date
