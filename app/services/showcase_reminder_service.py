@@ -117,6 +117,8 @@ SHOWCASES = (
     Showcase(date(2026, 12, 23), 'Grade VII', 'Quiz', 'GK Quiz', 'Ms. Alisha'),
     Showcase(date(2026, 12, 9), 'Grade VIII', 'Poem Presentation - Hindi', 'कोशिश करने वालों की हार नहीं होती', 'Ms. Rashmi'),
     Showcase(date(2026, 12, 17), 'Grade VIII', 'Christmas', 'Musical Showcase - French Carol', 'Ms. Riya'),
+    Showcase(date(2026, 12, 17), 'Grade VIII', 'Speaking Activity - Round 1', 'Speaking Activity - Round 1 (Class presentations)', 'Ms. Mansi'),
+    Showcase(date(2026, 12, 26), 'Grade VIII', 'Speaking Activity - Round 2', 'Speaking Activity - Round 2 (Showcase presentations)', 'Ms. Mansi'),
     Showcase(date(2026, 12, 16), 'Grade VIII', 'Quiz - Prelim Round', 'GK Quiz - Prelim Round', 'Ms. Alisha'),
     Showcase(date(2026, 12, 23), 'Grade VIII', 'Quiz', 'GK Quiz', 'Ms. Alisha'),
     Showcase(date(2026, 12, 11), 'Grade IX', 'Christmas', 'Dance Showcase (Dance to be repeated on 24 Dec Special Assembly)', 'Mr. Akshay'),
