@@ -79,8 +79,13 @@ _POLLER_DIAG_COUNTS = frozenset({
     "session_recycles",
 })
 _POLLER_DIAG_FIELDS = (
-    _POLLER_DIAG_FLAGS | _POLLER_DIAG_COUNTS | frozenset({"last_event_ist"})
+    _POLLER_DIAG_FLAGS
+    | _POLLER_DIAG_COUNTS
+    | frozenset({"last_event_ist", "browser_error"})
 )
+# Longest browser failure the poller reports; enough for the driver mismatch
+# line Chrome returns, short enough to stay a diagnostic and not a payload
+_POLLER_DIAG_ERROR_CHARS = 300
 # Longest timestamp the poller sends: "03-11-2026 07:14:19 IST"
 _POLLER_DIAG_TIMESTAMP_CHARS = 32
 # No real count comes close; keeps a huge posted number out of /status
@@ -114,6 +119,10 @@ def _clean_poller_diag(body: object) -> dict[str, object]:
             if not isinstance(value, str):
                 continue
             clean[key] = value.strip()[:_POLLER_DIAG_TIMESTAMP_CHARS]
+        elif key == "browser_error":
+            if not isinstance(value, str):
+                continue
+            clean[key] = value.strip()[:_POLLER_DIAG_ERROR_CHARS]
     return clean
 
 
@@ -415,6 +424,12 @@ def _poller_diagnosis() -> str:
     """
     if not _poller_diag:
         return ""
+    browser_error = _poller_diag.get("browser_error")
+    if isinstance(browser_error, str) and browser_error.strip():
+        return (
+            "Its headless browser will not start, so it never reaches the "
+            f"device: {browser_error.strip()}"
+        )
     if _poller_diag.get("login_ok") is False:
         return "Its last login to the TrueFace device failed."
     if _poller_diag.get("table_found") is False:
