@@ -37,7 +37,7 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
         self.temp_dir.cleanup()
 
     def test_plan_holds_only_the_final_november_december_sheet(self):
-        self.assertEqual(len(reminders.SHOWCASES), 70)
+        self.assertEqual(len(reminders.SHOWCASES), 66)
         self.assertEqual(
             sorted(
                 item.event_date
@@ -48,12 +48,10 @@ class ShowcaseReminderTests(unittest.IsolatedAsyncioTestCase):
                 date(2026, 11, 5),
                 date(2026, 11, 13),
                 date(2026, 11, 30),
-                date(2026, 12, 3),
-                date(2026, 12, 4),
-                date(2026, 12, 11),
                 date(2026, 12, 16),
                 date(2026, 12, 19),
                 date(2026, 12, 23),
+                date(2026, 12, 24),
             ],
         )
         # Alisha asked for the earlier sheets to stop being synced, so nothing
